@@ -127,11 +127,11 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
     }, timeout)
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString()
+      stdout = appendCapped(stdout, chunk)
     })
 
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString()
+      stderr = appendCapped(stderr, chunk)
     })
 
     child.stdin.on("error", () => {})
