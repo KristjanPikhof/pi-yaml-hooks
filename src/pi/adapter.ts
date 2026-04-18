@@ -61,7 +61,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   if (process.platform === "win32") {
     // eslint-disable-next-line no-console
     console.warn(
-      "[pi-hooks] atomic-commit-snapshot is not supported on Windows; extension is a no-op.",
+      "[pi-hooks] bash hooks require a POSIX bash on PATH; Windows is unsupported. Extension is a no-op.",
     );
     return;
   }
