@@ -10,6 +10,12 @@ import type { HookAction, HookConfig, HookEvent, HookMap } from "../core/types.j
 export interface UnsupportedDiagnostics {
   readonly errors: string[]
   readonly advisories: string[]
+  /**
+   * Hooks that produced load-blocking errors. The loader must remove these
+   * from the active hook map so unsupported configs do not execute (P1 #2:
+   * "diagnostic-only" was the prior bug).
+   */
+  readonly invalidHooks: ReadonlySet<HookConfig>
 }
 
 const COMMAND_ACTION_ERROR =
