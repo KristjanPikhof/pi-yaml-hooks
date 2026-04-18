@@ -195,85 +195,25 @@ PI built-ins are: `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`. Hooks o
 
 ---
 
-## Atomic-commit-snapshot-worker
+## Examples
 
-### How it works
-
-1. A PI `tool_result` event fires after every `write` or `edit` tool call.
-2. The adapter synthesizes a `file.changed` payload and spawns `snapshot-hook.py` with the payload on stdin.
-3. `snapshot-hook.py` hashes the changed file contents into git blob objects and writes an event into a per-worktree SQLite queue (`<git-dir>/ai-snapshotd/snapshotd.db`).
-4. `snapshot-worker.py` drains the queue after a configurable quiet window, builds commits using a temporary git index, and publishes them with `git update-ref`.
-5. On session shutdown and session switch, the adapter flushes the queue synchronously.
-
-State is isolated per worktree. Five projects with three worktrees each produce fifteen independent queues and fifteen independent workers.
-
-### Environment variables
-
-| Variable | Default | What it controls |
-|----------|---------|-----------------|
-| `SNAPSHOTD_QUIET_SECONDS` | `1.0` | Wait after last enqueue before replay starts |
-| `SNAPSHOTD_IDLE_SECONDS` | `30.0` | Worker lifetime with no work on current branch |
-| `SNAPSHOTD_POLL_SECONDS` | `0.35` | Poll interval while waiting |
-| `SNAPSHOTD_HEARTBEAT_STALE` | `15.0` | Age after which a worker heartbeat is treated as dead |
-| `SNAPSHOTD_AI_ENABLE` | off | Enable built-in AI commit messages |
-| `SNAPSHOTD_AI_MAX_QUEUE_DEPTH` | `2` | Backlog depth above which AI batching is skipped |
-| `SNAPSHOTD_AI_CHUNK_SIZE` | `20` | Max events per AI request (clamped 1–100) |
-| `SNAPSHOTD_COMMIT_MESSAGE_CMD` | unset | Custom argv-style message command, run per event |
-| `SNAPSHOTD_SENSITIVE_GLOBS` | `.env,*.pem,*.key,…` | Paths whose diffs are redacted before any network call |
-| `SNAPSHOTD_RETENTION_SECONDS` | `604800` | How long settled rows are kept before pruning |
-| `SNAPSHOTD_LOG_MAX_BYTES` / `_KEEP` | `2 MiB` / `3` | Log rotation threshold and retained file count |
-| `SNAPSHOTD_DEBUG` | off | Write debug logs to `<git-dir>/ai-snapshotd/logs/` |
-| `SNAPSHOTD_WORKER_PATH` | sibling file | Override the worker script path |
-| `OPENAI_API_KEY` | unset | Required for built-in AI mode |
-| `OPENAI_BASE_URL` | OpenAI default | Must be `https://` |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | Model used for built-in AI mode |
-| `OPENAI_API_TIMEOUT` | `15` | Network timeout in seconds |
-
-If neither `SNAPSHOTD_COMMIT_MESSAGE_CMD` nor `SNAPSHOTD_AI_ENABLE=1` is set, the worker writes deterministic commit messages.
-
-### CLI commands inside PI
-
-| Command | What it does |
-|---------|-------------|
-| `/snapshot-status` | Show current queue counts as a UI notification |
-| `/snapshot-flush` | Drain the pending queue synchronously; shows result as notification |
-
-A status widget also polls every 5 seconds and displays queue depth in the PI sidebar when a UI surface is available.
+- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — Python-based atomic-commit pipeline. Wire it up via `hooks.yaml`; see the example's README for setup, env vars, and verification.
 
 ---
 
 ## Troubleshooting
 
-**Windows:** Unsupported. The extension logs one warning and registers no handlers. The snapshot worker uses POSIX signals and `fcntl` locks.
+**Windows:** Unsupported. The extension logs one warning and registers no handlers (bash actions require a POSIX bash on PATH).
 
 **TypeScript-side debug logging:**
 ```bash
 PI_HOOKS_DEBUG=1 pi -e ./src/index.ts
 ```
-Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, snapshot-hook failures, and UI surface warnings.
-
-**Python-side debug logging:**
-```bash
-SNAPSHOTD_DEBUG=1
-```
-Writes debug logs to `<git-dir>/ai-snapshotd/logs/hook.log` and `worker.log`.
-
-**Override the Python executable:**
-```bash
-PI_HOOKS_PYTHON=/usr/local/bin/python3.12
-```
+Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, and UI surface warnings.
 
 **Override the bash executable:**
 ```bash
 PI_HOOKS_BASH_EXECUTABLE=/opt/homebrew/bin/bash
-```
-
-**Inspect the queue directly:**
-```bash
-GIT_DIR=$(git rev-parse --absolute-git-dir)
-sqlite3 "$GIT_DIR/ai-snapshotd/snapshotd.db" \
-  "SELECT seq, state, branch_ref, tool_name, substr(commit_oid,1,8), error FROM events ORDER BY seq DESC LIMIT 20;"
-tail -n 200 "$GIT_DIR/ai-snapshotd/logs/worker.log"
 ```
 
 **No UI surface:** If `notify`, `confirm`, or `setStatus` actions are silently skipped, PI is running in print/RPC mode where `ctx.hasUI` is false. These actions are no-ops in that mode (one warning per process lifetime is logged). Bash actions still run.
