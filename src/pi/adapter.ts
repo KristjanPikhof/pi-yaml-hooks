@@ -196,6 +196,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // ---- agent_end ----
   // Fire session.idle once the agent loop ends AND no messages are queued.
   pi.on("agent_end", async (_event, ctx: ExtensionContext): Promise<void> => {
+    rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
     if (!ctx.isIdle || !ctx.isIdle()) return;
