@@ -2,43 +2,62 @@
 
 Port of https://github.com/KristjanPikhof/OpenCode-Hooks to PI.
 
-**Status:** Stable. Phases 1–3 complete and verified.
+YAML-driven hooks for the [PI coding agent](https://www.npmjs.com/package/@mariozechner/pi-coding-agent). Run bash scripts on tool calls and session lifecycle events; block dangerous commands; surface notifications, confirmations, and status-bar entries from your hook config.
 
 ---
 
-## What it does
+## Requirements
 
-pi-hooks loads a YAML hooks file and dispatches PI tool and session events through a host-agnostic runtime that runs bash scripts, sends prompts, shows notifications, blocks tool calls, and updates status-bar entries.
-
-Examples (opt-in via `hooks.yaml`):
-- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — auto-commit every `write`/`edit` through a Python snapshot pipeline.
+- **macOS or Linux.** Windows is unsupported (the bash executor expects a POSIX `bash` on `$PATH`).
+- **Node.js ≥ 22.0.0.** Path conditions (`matchesAnyPath`, `matchesAllPaths`) use `node:path.matchesGlob`, which exists from Node 22.
+- **`bash` on `$PATH`** (override with `PI_HOOKS_BASH_EXECUTABLE`).
+- **`@mariozechner/pi-coding-agent ^0.67.0`** (peer dependency — installed alongside PI itself).
 
 ---
 
-## Installation
-
-PI discovers extensions from two locations automatically:
-
-- **Global:** `~/.pi/agent/extensions/`
-- **Project-local:** `.pi/extensions/`
-
-Extensions placed in either location are loaded automatically and can be hot-reloaded with `/reload`.
-
-This package currently lives in the monorepo and is loaded by pointing PI at the source entry point:
+## Quick start
 
 ```bash
-pi -e /path/to/pi-hooks/src/index.ts
+git clone https://github.com/KristjanPikhof/pi-hooks
+cd pi-hooks
+bun install      # or: npm install
+
+# Make pi auto-discover the extension globally
+ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
+
+# Drop a minimal hooks.yaml so something happens
+mkdir -p ~/.pi/agent
+cat > ~/.pi/agent/hooks.yaml <<'YAML'
+hooks:
+  - event: session.idle
+    actions:
+      - notify: "Agent is idle"
+YAML
+
+# Run pi as usual; on session idle a notification fires.
+pi
 ```
 
-To install it globally for auto-discovery, symlink or copy the package into the global extensions directory:
+To verify it loaded, run pi with debug logging:
 
 ```bash
-ln -s /path/to/pi-hooks/src/index.ts ~/.pi/agent/extensions/pi-hooks.ts
+PI_HOOKS_DEBUG=1 pi
+# expect lines starting with "[pi-hooks]" on stderr
 ```
 
-**Peer dependency:** `@mariozechner/pi-coding-agent ^0.67.0`
+### Alternative installation paths
 
-**Note:** Windows is not supported. The extension warns once on startup and registers nothing.
+| Method | When to use |
+|--------|-------------|
+| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | **Recommended.** PI auto-discovers, hot-reloadable via `/reload`. |
+| `pi -e /path/to/pi-hooks/src/index.ts` | One-off / testing without touching the global extensions dir. |
+| Drop in `<project>/.pi/extensions/pi-hooks.ts` | Project-local install. |
+
+---
+
+## Examples (opt-in via `hooks.yaml`)
+
+- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — auto-commit every `write`/`edit` through a Python snapshot pipeline. Includes a ready-to-paste `hooks.yaml`.
 
 ---
 
