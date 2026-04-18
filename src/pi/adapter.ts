@@ -231,12 +231,17 @@ export function registerAdapter(pi: ExtensionAPI): void {
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
 
+    // P2 #14 fix: include parentID so the runtime's session-state can
+    // classify scope:main|child correctly for forked sessions. Without this
+    // the runtime treats every session as its own root.
+    const parentID = safeGetParentSessionPath(ctx.sessionManager);
+
     try {
       const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: {
           type: "session.created",
-          properties: { info: { id: sessionId } },
+          properties: { info: { id: sessionId, parentID } },
         },
       });
     } catch (error) {
