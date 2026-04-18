@@ -63,6 +63,7 @@ export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}
     if (candidate) {
       if (isProjectTrusted(projectDir, homeDir)) {
         projectPath = candidate
+        warnLegacyPathOnce(candidate, "project")
       } else {
         warnUntrustedProjectOnce(projectDir, candidate)
       }
@@ -70,6 +71,23 @@ export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}
   }
 
   return [globalPath, projectPath].filter((filePath): filePath is string => Boolean(filePath))
+}
+
+const warnedLegacyPaths = new Set<string>()
+
+function warnLegacyPathOnce(filePath: string, scope: "global" | "project"): void {
+  // P2 #21: notify the operator they are still using legacy OpenCode hook
+  // discovery paths. The PI-native locations are preferred; legacy paths
+  // continue to load for backwards compatibility.
+  const isLegacy = filePath.includes(`${path.sep}.opencode${path.sep}hook${path.sep}`) || filePath.includes(`${path.sep}opencode${path.sep}hook${path.sep}`)
+  if (!isLegacy) return
+  if (warnedLegacyPaths.has(filePath)) return
+  warnedLegacyPaths.add(filePath)
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[pi-hooks] Loading ${scope} hooks from legacy OpenCode path ${filePath}. ` +
+      `Migrate to ${scope === "global" ? "~/.pi/agent/hooks.yaml" : "<project>/.pi/hooks.yaml"} when convenient.`,
+  )
 }
 
 const warnedUntrustedProjects = new Set<string>()
