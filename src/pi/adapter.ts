@@ -41,9 +41,7 @@ import {
   type ToolExecuteBeforeOutput,
 } from "../core/runtime.js";
 import type { HookNotifyLevel, HostAdapter } from "../core/types.js";
-import { runPythonSnapshotHook, runSnapshotWorkerFlush } from "./python-bridge.js";
 import { getRootSessionId } from "./session-lineage.js";
-import { synthesizeFileChangedFromToolResult } from "./synthesize-file-changed.js";
 
 /**
  * Register the PI adapter on the given extension API.
