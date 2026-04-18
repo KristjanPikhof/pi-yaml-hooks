@@ -169,18 +169,42 @@ export function loadDiscoveredHooks(options: HookLoadOptions = {}): HookDiscover
   return loadDiscoveredHooksFromFiles(files, options)
 }
 
+// P1 #10 fix: cache the last parsed snapshot keyed on a cheap stat-based
+// fingerprint so the hot-path dispatcher does not re-read + re-parse every
+// hooks.yaml on every tool call. Cache is bounded to one entry per (file
+// list + fingerprint) tuple — typically just one entry in practice.
+interface CachedSnapshot {
+  signature: string
+  result: HookDiscoveryResult
+}
+const snapshotCache = new Map<string, CachedSnapshot>()
+
 export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): HookLoadSnapshot {
   const files = discoverHookConfigPaths(options)
-  const snapshots = snapshotDiscoveredHookFiles(files, options.readFile ?? defaultReadFile)
-
-  return {
-    ...loadDiscoveredHooksFromSnapshots(snapshots),
-    signature: JSON.stringify(
-      snapshots.map((snapshot) =>
-        "content" in snapshot ? [snapshot.filePath, snapshot.content] : [snapshot.filePath, `__read_error__:${snapshot.readError}`],
-      ),
-    ),
+  const fingerprintSignature = computeFingerprintSignature(files)
+  const cacheKey = files.join("\0")
+  const cached = snapshotCache.get(cacheKey)
+  if (cached && cached.signature === fingerprintSignature) {
+    return { ...cached.result, signature: cached.signature }
   }
+
+  const snapshots = snapshotDiscoveredHookFiles(files, options.readFile ?? defaultReadFile)
+  const result = loadDiscoveredHooksFromSnapshots(snapshots)
+  snapshotCache.set(cacheKey, { signature: fingerprintSignature, result })
+  return { ...result, signature: fingerprintSignature }
+}
+
+function computeFingerprintSignature(files: readonly string[]): string {
+  const parts: string[] = []
+  for (const filePath of files) {
+    try {
+      const stat = statSync(filePath)
+      parts.push(`${filePath}|${stat.mtimeMs}|${stat.size}`)
+    } catch {
+      parts.push(`${filePath}|missing`)
+    }
+  }
+  return parts.join("\n")
 }
 
 function loadDiscoveredHooksFromFiles(files: string[], options: HookLoadOptions): HookDiscoveryResult {
