@@ -16,8 +16,14 @@
  * root, everything else resolves to itself.
  */
 
-import type { ReadonlySessionManager, SessionHeader } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, SessionHeader } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "node:fs";
+
+/**
+ * ReadonlySessionManager is exposed via ExtensionContext.sessionManager but
+ * is not re-exported as a named type from the package root. Derive it.
+ */
+type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
 /**
  * Return the root session id reachable from `currentSessionId`.
