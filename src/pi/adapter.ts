@@ -95,11 +95,16 @@ export function registerAdapter(pi: ExtensionAPI): void {
     latestContexts.set(cwd, ctx);
   }
 
-  function getRuntimeFor(cwd: string, sessionManager: ReadonlySessionManager | undefined): HooksRuntime {
+  function getRuntimeFor(cwd: string): HooksRuntime {
     const existing = runtimes.get(cwd);
     if (existing) return existing;
 
-    const host = createHostAdapter(pi, cwd, sessionManager, () => latestContexts.get(cwd));
+    // P1 #3 fix: do not close over a particular sessionManager. Read the
+    // current one from the latest ctx on every host call so /new, /resume,
+    // /fork get the correct lineage.
+    const getLiveSessionManager = (): ReadonlySessionManager | undefined =>
+      latestContexts.get(cwd)?.sessionManager;
+    const host = createHostAdapter(pi, cwd, getLiveSessionManager, () => latestContexts.get(cwd));
     const loaded = loadDiscoveredHooks({ projectDir: cwd });
     if (loaded.errors.length > 0) {
       // eslint-disable-next-line no-console
