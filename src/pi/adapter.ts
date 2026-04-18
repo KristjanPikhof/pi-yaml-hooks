@@ -112,6 +112,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // execution before the tool runs (see dist/core/extensions/types.d.ts:
   // ToolCallEventResult). The core runtime throws on block; we translate.
   pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
+    rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
 
