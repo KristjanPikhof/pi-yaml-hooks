@@ -17,7 +17,12 @@
  */
 
 import type { ExtensionContext, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
+
+// P2 #19: bound the lineage walk + per-file read so a pathological session
+// chain or oversized session header line cannot block the event loop.
+const MAX_LINEAGE_DEPTH = 64;
+const MAX_HEADER_BYTES = 64 * 1024;
 
 /**
  * ReadonlySessionManager is exposed via ExtensionContext.sessionManager but
