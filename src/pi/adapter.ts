@@ -309,7 +309,7 @@ function createHostAdapter(
       // canonical way to stop a tool call on PI. For non-tool abort paths
       // we rely on PI surfacing the error and the host tearing down.
     },
-    getRootSessionId: (sessionId: string): string => getRootSessionId(sessionId, sessionManager),
+    getRootSessionId: (sessionId: string): string => getRootSessionId(sessionId, getSessionManager()),
     runBash: (request: BashExecutionRequest): Promise<BashHookResult> =>
       executeBashHook({ ...request, projectDir: request.projectDir || projectDir }),
     sendPrompt: (_sessionId: string, text: string): void => {
