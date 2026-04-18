@@ -298,7 +298,16 @@ function createHostAdapter(
   pi: ExtensionAPI,
   projectDir: string,
   sessionManager: ReadonlySessionManager | undefined,
+  getContext: () => ExtensionContext | undefined,
 ): HostAdapter {
+  // Once-per-missing-capability warning flags. We log a single warning per
+  // process lifetime instead of spamming on every hook invocation when the
+  // host's UI surface is absent (e.g. print/RPC mode where ctx.hasUI is
+  // false, or ctx not yet captured before the first event).
+  let warnedNoNotify = false;
+  let warnedNoConfirm = false;
+  let warnedNoSetStatus = false;
+
   return {
     // PI only exposes abort on the current ExtensionContext; we do not have
     // a cross-session abort channel. When the runtime asks us to abort a
@@ -326,6 +335,77 @@ function createHostAdapter(
         debugLog(
           `sendUserMessage failed: ${error instanceof Error ? error.message : String(error)}`,
         );
+      }
+    },
+    notify: (text: string, level?: HookNotifyLevel): void => {
+      // PI's ctx.ui.notify only supports "info" | "warning" | "error".
+      // We collapse our "success" level into "info" so the YAML schema
+      // stays aligned with common notification systems; if PI adds a
+      // native success level in the future we'll forward it verbatim.
+      const ctx = getContext();
+      if (!ctx?.hasUI || typeof ctx.ui?.notify !== "function") {
+        if (!warnedNoNotify) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[pi-hooks] notify action skipped: PI UI surface unavailable (likely print/RPC mode).",
+          );
+          warnedNoNotify = true;
+        }
+        return;
+      }
+      const piLevel: "info" | "warning" | "error" =
+        level === "warning" || level === "error" ? level : "info";
+      try {
+        ctx.ui.notify(text, piLevel);
+      } catch (error) {
+        debugLog(`ui.notify failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    confirm: async (options: { title?: string; message: string }): Promise<boolean> => {
+      const ctx = getContext();
+      if (!ctx?.hasUI || typeof ctx.ui?.confirm !== "function") {
+        if (!warnedNoConfirm) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[pi-hooks] confirm action skipped (auto-approving): PI UI surface unavailable (likely print/RPC mode).",
+          );
+          warnedNoConfirm = true;
+        }
+        // No UI to ask — don't block the agent. Treat as approval.
+        return true;
+      }
+      try {
+        // PI's confirm takes (title, message) as positional args; title is
+        // required on the PI side, so we synthesize a neutral default when
+        // the YAML omits it.
+        return await ctx.ui.confirm(options.title ?? "Confirm", options.message);
+      } catch (error) {
+        debugLog(`ui.confirm failed: ${error instanceof Error ? error.message : String(error)}`);
+        // Errors from the UI surface (dismissed, aborted) fall through as
+        // "not approved" so the runtime's block semantics still fire when
+        // the hook is pre-tool.
+        return false;
+      }
+    },
+    setStatus: (hookId: string, text: string): void => {
+      const ctx = getContext();
+      if (!ctx?.hasUI || typeof ctx.ui?.setStatus !== "function") {
+        if (!warnedNoSetStatus) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[pi-hooks] setStatus action skipped: PI UI surface unavailable (likely print/RPC mode).",
+          );
+          warnedNoSetStatus = true;
+        }
+        return;
+      }
+      try {
+        // PI clears a status slot when text is undefined. We expose a plain
+        // string-only API at the hook layer and collapse empty strings to
+        // "clear" so YAML authors can write `setStatus: ""` to reset.
+        ctx.ui.setStatus(hookId, text.length > 0 ? text : undefined);
+      } catch (error) {
+        debugLog(`ui.setStatus failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   };
