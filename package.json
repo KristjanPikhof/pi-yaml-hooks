@@ -22,7 +22,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "tsx --test src/pi/*.test.ts"
+    "test": "bun test src/pi/unsupported.test.ts src/pi/ux-actions.test.ts"
   },
   "repository": {
     "type": "git",
