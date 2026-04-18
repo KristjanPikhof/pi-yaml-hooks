@@ -78,12 +78,21 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // process (should PI ever support that) pick up the right project config.
   const runtimes = new Map<string, HooksRuntime>();
   const callIdsToSessionIds = new Map<string, string>();
+  // Track the most recently observed ExtensionContext per cwd so that the
+  // HostAdapter UI methods (notify/confirm/setStatus) can reach ctx.ui even
+  // though they live outside the event handler scope. The ctx is replayed
+  // for each PI event, so "last seen" is the right handle to use.
+  const latestContexts = new Map<string, ExtensionContext>();
+
+  function rememberContext(cwd: string, ctx: ExtensionContext): void {
+    latestContexts.set(cwd, ctx);
+  }
 
   function getRuntimeFor(cwd: string, sessionManager: ReadonlySessionManager | undefined): HooksRuntime {
     const existing = runtimes.get(cwd);
     if (existing) return existing;
 
-    const host = createHostAdapter(pi, cwd, sessionManager);
+    const host = createHostAdapter(pi, cwd, sessionManager, () => latestContexts.get(cwd));
     const loaded = loadDiscoveredHooks({ projectDir: cwd });
     if (loaded.errors.length > 0) {
       // eslint-disable-next-line no-console
