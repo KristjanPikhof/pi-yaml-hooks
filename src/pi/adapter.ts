@@ -128,7 +128,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
 
-    const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+    const runtime = getRuntimeFor(ctx.cwd);
     callIdsToSessionIds.set(event.toolCallId, sessionId);
 
     const input: ToolExecuteBeforeInput = {
@@ -162,7 +162,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
 
     if (sessionId) {
       try {
-        const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+        const runtime = getRuntimeFor(ctx.cwd);
         const input: ToolExecuteAfterInput = {
           tool: event.toolName,
           sessionID: sessionId,
@@ -192,7 +192,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (ctx.hasPendingMessages && ctx.hasPendingMessages()) return;
 
     try {
-      const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+      const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: { type: "session.idle", properties: { sessionID: sessionId } },
       });
@@ -214,7 +214,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (!sessionId) return;
 
     try {
-      const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+      const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: {
           type: "session.created",
@@ -239,7 +239,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (!markSessionDeleted(sessionId)) return; // already fired via before_switch
 
     try {
-      const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+      const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: {
           type: "session.deleted",
@@ -264,7 +264,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (!markSessionDeleted(sessionId)) return; // session_shutdown already fired
 
     try {
-      const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
+      const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: {
           type: "session.deleted",
@@ -285,7 +285,7 @@ export const registerPhase1Adapter = registerAdapter;
 function createHostAdapter(
   pi: ExtensionAPI,
   projectDir: string,
-  sessionManager: ReadonlySessionManager | undefined,
+  getSessionManager: () => ReadonlySessionManager | undefined,
   getContext: () => ExtensionContext | undefined,
 ): HostAdapter {
   // Once-per-missing-capability warning flags. We log a single warning per
