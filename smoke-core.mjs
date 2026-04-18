@@ -49,7 +49,21 @@ try {
     ].join("\n"),
   )
 
-  const mod = await import(path.join(tmp, "core", "load-hooks.js"))
+  // tsc places outputs mirroring the common rootDir structure; since all inputs
+  // are under src/core/, outputs end up in <tmp>/src/core/*.js (or <tmp>/core/*.js
+  // depending on tsc's inferred rootDir). Probe both.
+  const candidates = [
+    path.join(tmp, "src", "core", "load-hooks.js"),
+    path.join(tmp, "core", "load-hooks.js"),
+    path.join(tmp, "load-hooks.js"),
+  ]
+  const { existsSync } = await import("node:fs")
+  const loadHooksJs = candidates.find((p) => existsSync(p))
+  if (!loadHooksJs) {
+    console.error("SMOKE FAIL: could not find compiled load-hooks.js in", candidates)
+    process.exit(1)
+  }
+  const mod = await import(loadHooksJs)
   const { loadHooksFile } = mod
 
   const result = loadHooksFile(hooksYamlPath)
