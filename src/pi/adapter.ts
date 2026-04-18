@@ -379,22 +379,6 @@ function createHostAdapter(
   };
 }
 
-async function flushQuietly(cwd: string): Promise<void> {
-  try {
-    const result = await runSnapshotWorkerFlush(cwd);
-    if (result.exitCode !== 0) {
-      debugLog(
-        `snapshot-worker --flush exited ${result.exitCode}` +
-          (result.stderr ? `: ${truncate(result.stderr)}` : ""),
-      );
-    }
-  } catch (error) {
-    debugLog(
-      `snapshot-worker --flush spawn failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
 function safeGetSessionId(sessionManager: ReadonlySessionManager | undefined): string | undefined {
   if (!sessionManager) return undefined;
   try {
