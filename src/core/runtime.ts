@@ -772,6 +772,62 @@ async function executeAction(
     return { blocked: false }
   }
 
+  if ("notify" in action) {
+    try {
+      const config = typeof action.notify === "string" ? { text: action.notify } : action.notify
+      const level = config.level ?? "info"
+      if (typeof host.notify === "function") {
+        await host.notify(config.text, level)
+      } else {
+        // Graceful fallback for hosts without a UI surface (tests, RPC).
+        console.warn(`[pi-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
+      }
+    } catch (error) {
+      logHookFailure(event, sourceFilePath, error)
+    }
+    return { blocked: false }
+  }
+
+  if ("confirm" in action) {
+    try {
+      if (typeof host.confirm === "function") {
+        const approved = await host.confirm({
+          ...(action.confirm.title !== undefined ? { title: action.confirm.title } : {}),
+          message: action.confirm.message,
+        })
+        if (!approved) {
+          // User rejection is exit-2 / blocking semantics. Only pre-tool hooks
+          // can actually block; on non-blocking events the dispatch ignores
+          // the blocked flag (same rule as bash `exit 2`).
+          return { blocked: true, blockReason: "Blocked by user via confirm action" }
+        }
+      } else {
+        console.warn(`[pi-hooks] confirm action skipped (host.confirm not implemented): ${action.confirm.message}`)
+      }
+    } catch (error) {
+      logHookFailure(event, sourceFilePath, error)
+    }
+    return { blocked: false }
+  }
+
+  if ("setStatus" in action) {
+    try {
+      const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
+      if (typeof host.setStatus === "function") {
+        // Key the status by the hook's source file + index so concurrent hooks
+        // don't clobber each other's status slot. This is the closest thing
+        // pi-hooks has to a stable "hookId" when the YAML author omits one.
+        const hookId = `${sourceFilePath}#${event}`
+        await host.setStatus(hookId, config.text)
+      } else {
+        console.warn(`[pi-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
+      }
+    } catch (error) {
+      logHookFailure(event, sourceFilePath, error)
+    }
+    return { blocked: false }
+  }
+
   const config = typeof action.bash === "string" ? { command: action.bash } : action.bash
   const result = await runBashHook({
     command: config.command,
