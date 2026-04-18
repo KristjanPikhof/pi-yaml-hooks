@@ -17,9 +17,14 @@ interface SessionRecord {
 
 export type SessionScope = "all" | "main" | "child"
 
+const MAX_DELETED_TOMBSTONES = 256
+
 export class SessionStateStore {
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly pendingToolCalls = new Map<string, PendingToolCall>()
+  // Bounded LRU-ish set of recently-deleted session ids so isDeleted() still
+  // returns true after the SessionRecord has been removed (P1 #11).
+  private readonly deletedTombstones = new Set<string>()
 
   rememberSession(sessionID: string, parentID?: string | null): void {
     const record = this.getOrCreateSession(sessionID)
