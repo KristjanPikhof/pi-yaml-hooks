@@ -8,7 +8,10 @@ Port of https://github.com/KristjanPikhof/OpenCode-Hooks to PI.
 
 ## What it does
 
-pi-hooks loads a YAML hooks file and dispatches PI tool and session events through a host-agnostic runtime that runs bash scripts, sends prompts, shows notifications, blocks tool calls, and updates status-bar entries. It also runs an atomic-commit-snapshot-worker pipeline that intercepts every `write`/`edit` tool result and queues it for automatic git snapshot commits.
+pi-hooks loads a YAML hooks file and dispatches PI tool and session events through a host-agnostic runtime that runs bash scripts, sends prompts, shows notifications, blocks tool calls, and updates status-bar entries.
+
+Examples (opt-in via `hooks.yaml`):
+- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — auto-commit every `write`/`edit` through a Python snapshot pipeline.
 
 ---
 
