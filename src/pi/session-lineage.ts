@@ -56,11 +56,14 @@ export function getRootSessionId(
   // files. Return the input unchanged.
   if (header.id !== currentSessionId) return currentSessionId;
 
-  // Walk up via parentSession file paths. We read just the header line of
-  // each parent file to pick up the id/parentSession for the next hop.
+  // Walk up via parentSession file paths. We read just the header prefix of
+  // each parent file (capped at MAX_HEADER_BYTES) to pick up the
+  // id/parentSession for the next hop.
   const visited = new Set<string>([header.id]);
   let cursor: SessionHeader | null = header;
+  let depth = 0;
   while (cursor?.parentSession) {
+    if (++depth > MAX_LINEAGE_DEPTH) break;
     const parent = readSessionHeaderFromFile(cursor.parentSession);
     if (!parent) break;
     if (visited.has(parent.id)) break;
@@ -72,10 +75,17 @@ export function getRootSessionId(
 }
 
 function readSessionHeaderFromFile(filePath: string): SessionHeader | null {
+  // Read at most MAX_HEADER_BYTES from the start of the file. This is
+  // enough to recover the JSON header line on any sane session file and
+  // bounded if a file is unexpectedly huge.
+  let fd: number | undefined;
   try {
-    const content = readFileSync(filePath, "utf8");
-    const newlineIndex = content.indexOf("\n");
-    const firstLine = newlineIndex === -1 ? content : content.slice(0, newlineIndex);
+    fd = openSync(filePath, "r");
+    const buffer = Buffer.allocUnsafe(MAX_HEADER_BYTES);
+    const read = readSync(fd, buffer, 0, MAX_HEADER_BYTES, 0);
+    const text = buffer.toString("utf8", 0, read);
+    const newlineIndex = text.indexOf("\n");
+    const firstLine = newlineIndex === -1 ? text : text.slice(0, newlineIndex);
     if (!firstLine.trim()) return null;
     const parsed = JSON.parse(firstLine) as { type?: string; id?: string; parentSession?: string; timestamp?: string; cwd?: string };
     if (parsed?.type !== "session" || typeof parsed.id !== "string") return null;
@@ -88,5 +98,9 @@ function readSessionHeaderFromFile(filePath: string): SessionHeader | null {
     };
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
   }
 }
