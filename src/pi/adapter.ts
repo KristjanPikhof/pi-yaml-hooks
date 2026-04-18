@@ -30,6 +30,7 @@ import type {
  */
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
+import path from "node:path";
 import { executeBashHook } from "../core/bash-executor.js";
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
 import { loadDiscoveredHooks } from "../core/load-hooks.js";
