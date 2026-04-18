@@ -326,11 +326,14 @@ function createHostAdapter(
     // The runtime's `stop` behaviour triggers this from inside a handler,
     // at which point the current ctx IS the right session, so the common
     // case works.
-    abort: (_sessionId: string) => {
-      // No stored ctx here; the tool_call handler intercepts the runtime's
-      // thrown Error and converts it to a PI `block` response, which is the
-      // canonical way to stop a tool call on PI. For non-tool abort paths
-      // we rely on PI surfacing the error and the host tearing down.
+    abort: (sessionId: string) => {
+      // P2 #20: surface a debug line so operators relying on `behavior: stop`
+      // for tool.after.* / session.idle hooks can see why the session
+      // wasn't aborted (PI has no extension-side abort outside tool_call).
+      debugLog(
+        `abort requested for session ${sessionId}: handled via tool_call block result for pre-tool hooks; ` +
+          `behavior:stop on tool.after.* or session.idle is a no-op on PI.`,
+      );
     },
     getRootSessionId: (sessionId: string): string => getRootSessionId(sessionId, getSessionManager()),
     runBash: (request: BashExecutionRequest): Promise<BashHookResult> =>
