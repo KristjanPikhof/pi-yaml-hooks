@@ -53,21 +53,37 @@ export class SessionStateStore {
   }
 
   isDeleted(sessionID: string): boolean {
-    return this.sessions.get(sessionID)?.deleted ?? false
+    // P1 #11: After deleteSession() removes the entry, lookups should still
+    // report the session as deleted (best-effort). The tombstone set keeps a
+    // small bounded record of recently-deleted ids without retaining full
+    // SessionRecord objects.
+    if (this.sessions.has(sessionID)) {
+      return this.sessions.get(sessionID)?.deleted ?? false
+    }
+    return this.deletedTombstones.has(sessionID)
   }
 
   deleteSession(sessionID: string): void {
-    const record = this.getOrCreateSession(sessionID)
-    record.deleted = true
-    record.changes = []
-    record.changeKeys.clear()
-    record.activeIdleDispatchKeys = undefined
-    record.replayedDuringIdleKeys.clear()
-
+    // Drop pending tool calls owned by this session before removing the record.
     for (const [callID, pending] of this.pendingToolCalls) {
       if (pending.sessionID === sessionID) {
         this.pendingToolCalls.delete(callID)
       }
+    }
+
+    // P1 #11 fix: remove the SessionRecord entirely instead of leaving a
+    // tombstone in the Map. A long-running PI process that creates many
+    // sessions previously accumulated one record per historical session.
+    this.sessions.delete(sessionID)
+    this.recordTombstone(sessionID)
+  }
+
+  private recordTombstone(sessionID: string): void {
+    this.deletedTombstones.add(sessionID)
+    if (this.deletedTombstones.size > MAX_DELETED_TOMBSTONES) {
+      // Evict the oldest entry. Set iteration order is insertion order in v8.
+      const oldest = this.deletedTombstones.values().next().value
+      if (oldest !== undefined) this.deletedTombstones.delete(oldest)
     }
   }
 
