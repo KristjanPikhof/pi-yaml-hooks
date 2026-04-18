@@ -197,12 +197,12 @@ scope: all     # default — fires in all sessions
 
 ## Unsupported / compatibility notes
 
-### `command:` actions — hard load error
+### `command:` actions — rejected at load time
 
-PI exposes no API to invoke slash commands from event handlers. Any hook that contains a `command:` action fails at load time with an error. Replace with `bash:` or `tool:`.
+PI exposes no API to invoke slash commands from event handlers. Hooks that contain a `command:` action are **dropped from the active hook map at load time** with a clear error logged to stderr — they will not execute. Replace with `bash:` or `tool:`.
 
 ```yaml
-# This will fail to load on PI:
+# This hook is dropped at load time with an error:
 actions:
   - command: /my-command
 
