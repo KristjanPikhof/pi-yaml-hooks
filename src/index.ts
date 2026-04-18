@@ -1,15 +1,15 @@
 /**
  * pi-hooks — PI extension entry point.
  *
- * Phase 1 MVP: wires PI `tool_result` / `session_shutdown` /
- * `session_before_switch` into the Python atomic-commit-snapshot worker via
- * the adapter in `./pi/adapter.ts`.
+ * Registers the YAML-driven hooks adapter that wires PI events into the core
+ * runtime (`src/core/runtime.ts`) and preserves the Phase 1 atomic-commit
+ * snapshot pipeline.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { registerPhase1Adapter } from "./pi/adapter.js";
+import { registerAdapter } from "./pi/adapter.js";
 
 export default function piHooksExtension(pi: ExtensionAPI): void {
-  registerPhase1Adapter(pi);
+  registerAdapter(pi);
 }
