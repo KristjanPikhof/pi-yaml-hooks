@@ -251,20 +251,36 @@ If PI is running without a UI surface (print/RPC mode), `confirm:` actions retur
 
 ## Troubleshooting
 
-**Windows:** Unsupported. The extension logs one warning and registers no handlers (bash actions require a POSIX bash on PATH).
+**First failure — work through this list:**
 
-**TypeScript-side debug logging:**
+1. Confirm Node version: `node --version` → must be ≥ 22.0.0. Older Node disables path-conditioned hooks silently (now hard-fails at startup with an error in the latest version).
+2. Confirm `bash` is on `$PATH`: `which bash`. Override with `PI_HOOKS_BASH_EXECUTABLE=/path/to/bash`.
+3. Run with debug logging: `PI_HOOKS_DEBUG=1 pi`. Look for `[pi-hooks]` lines on stderr.
+4. Confirm the extension is loaded: a debug build shows `[pi-hooks] registered …` on startup.
+5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the project path is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
+6. If a `notify:` / `confirm:` / `setStatus:` action does nothing, PI is in headless mode (`ctx.hasUI === false`). Bash actions still run.
+
+**Windows:** Unsupported. The extension logs one warning and registers no handlers (the bash executor requires a POSIX `bash`).
+
+**Debug logging:**
 ```bash
-PI_HOOKS_DEBUG=1 pi -e ./src/index.ts
+PI_HOOKS_DEBUG=1 pi
 ```
-Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, and UI surface warnings.
+Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, abort no-ops, UI surface warnings, and Python-bridge failures (when an example pipes into Python).
 
 **Override the bash executable:**
 ```bash
 PI_HOOKS_BASH_EXECUTABLE=/opt/homebrew/bin/bash
 ```
 
-**No UI surface:** If `notify`, `confirm`, or `setStatus` actions are silently skipped, PI is running in print/RPC mode where `ctx.hasUI` is false. These actions are no-ops in that mode (one warning per process lifetime is logged). Bash actions still run.
+**Override the bash output cap (default 1 MiB per hook):**
+```bash
+PI_HOOKS_MAX_OUTPUT_BYTES=4194304
+```
+
+**GUI-launched PI inherits a different environment.** When you launch PI from a terminal, hooks see your shell's `$PATH`, `OPENAI_API_KEY`, etc. When PI launches from Spotlight / the Dock / an IDE extension on macOS, it inherits `launchd`'s environment instead — your `~/.zshrc` exports do **not** reach hooks. Either launch PI from a terminal, wrap the hook command in `/bin/zsh -ilc "..."`, or `launchctl setenv KEY value` for system-wide propagation.
+
+**No UI surface:** If `notify`, `confirm`, or `setStatus` actions are silently skipped, PI is running in print/RPC mode where `ctx.hasUI` is false. `notify` and `setStatus` no-op (one warning per process lifetime). `confirm` fails *closed* (returns `false`) — set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to keep the old auto-approve behavior. Bash actions always run.
 
 ---
 
