@@ -3,6 +3,7 @@
 
 # Build output
 /dist/
+*.tsbuildinfo
 
 # Dependencies
 /node_modules/
@@ -17,3 +18,8 @@ __pycache__/
 
 # Agents
 .claude/*
+
+# Local secrets / env
+.env
+.env.local
+.env.*.local
