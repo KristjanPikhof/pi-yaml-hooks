@@ -225,13 +225,21 @@ The following tool names from OpenCode have no PI equivalent and will never matc
 
 PI built-ins are: `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`. Hooks on `tool.before.multiedit` etc. are loaded with an advisory warning, not a hard error.
 
-### `runIn: main` on non-bash actions — hard load error
+### `runIn: main` on non-bash actions — rejected at load time
 
-`runIn: main` is only supported for `bash:` actions on PI. Using it with `tool:`, `notify:`, `confirm:`, or `setStatus:` on PI is a hard load error.
+`runIn: main` is only supported for `bash:` actions on PI. Hooks with `runIn: main` paired with a `tool:`, `notify:`, `confirm:`, or `setStatus:` action are dropped at load with an error.
 
 ### `tool:` action — advisory only
 
-`tool:` actions run as current-session prompts. Cross-session targeting is not supported. The action works but always targets the current session.
+`tool:` actions run as current-session prompts via `pi.sendUserMessage`. Cross-session targeting is not supported. The action works but always targets the current session, regardless of `runIn`.
+
+### `behavior: stop` — only for pre-tool hooks
+
+PI does not expose an extension-side abort outside `tool_call`. `action: stop` on a `tool.before.*` hook reaches PI as a `block: true` response (the tool does not run). On `tool.after.*` or `session.idle`, abort is a no-op (logged when `PI_HOOKS_DEBUG=1`).
+
+### `confirm:` fails closed in headless mode
+
+If PI is running without a UI surface (print/RPC mode), `confirm:` actions return `false` (deny) instead of silently approving. This protects destructive operations behind a confirm gate from auto-running where no human can answer. Set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to opt into the previous fail-open behavior.
 
 ---
 
