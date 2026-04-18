@@ -601,9 +601,18 @@ function parseAction(
     return { errors: [createError(filePath, "invalid_action", `${path} must be an object.`, path)] }
   }
 
-  const keys = ["command", "tool", "bash"].filter((key) => key in action)
+  const keys = ["command", "tool", "bash", "notify", "confirm", "setStatus"].filter((key) => key in action)
   if (keys.length !== 1) {
-    return { errors: [createError(filePath, "invalid_action", `${path} must define exactly one of command, tool, or bash.`, path)] }
+    return {
+      errors: [
+        createError(
+          filePath,
+          "invalid_action",
+          `${path} must define exactly one of command, tool, bash, notify, confirm, or setStatus.`,
+          path,
+        ),
+      ],
+    }
   }
 
   if ("command" in action) {
@@ -620,10 +629,106 @@ function parseAction(
       : { errors: [createError(filePath, "invalid_action", `${path}.tool must be { name, args? }.`, `${path}.tool`)] }
   }
 
+  if ("notify" in action) {
+    const notify = parseNotifyAction(action.notify)
+    return notify
+      ? { action: { notify }, errors: [] }
+      : {
+          errors: [
+            createError(
+              filePath,
+              "invalid_action",
+              `${path}.notify must be a non-empty string or { text, level? } where level is one of info, success, warning, error.`,
+              `${path}.notify`,
+            ),
+          ],
+        }
+  }
+
+  if ("confirm" in action) {
+    const confirm = parseConfirmAction(action.confirm)
+    return confirm
+      ? { action: { confirm }, errors: [] }
+      : {
+          errors: [
+            createError(
+              filePath,
+              "invalid_action",
+              `${path}.confirm must be { message, title? } with non-empty message.`,
+              `${path}.confirm`,
+            ),
+          ],
+        }
+  }
+
+  if ("setStatus" in action) {
+    const setStatus = parseSetStatusAction(action.setStatus)
+    return setStatus
+      ? { action: { setStatus }, errors: [] }
+      : {
+          errors: [
+            createError(
+              filePath,
+              "invalid_action",
+              `${path}.setStatus must be a non-empty string or { text } with non-empty text.`,
+              `${path}.setStatus`,
+            ),
+          ],
+        }
+  }
+
   const bash = parseBashAction(action.bash)
   return bash
     ? { action: { bash }, errors: [] }
     : { errors: [createError(filePath, "invalid_action", `${path}.bash must be a string or { command, timeout? }.`, `${path}.bash`)] }
+}
+
+function parseNotifyAction(value: unknown): string | HookNotifyActionConfig | undefined {
+  if (isNonEmptyString(value)) {
+    return value
+  }
+
+  if (!isRecord(value) || !isNonEmptyString(value.text)) {
+    return undefined
+  }
+
+  if (value.level === undefined) {
+    return { text: value.text }
+  }
+
+  if (!isHookNotifyLevel(value.level)) {
+    return undefined
+  }
+
+  return { text: value.text, level: value.level }
+}
+
+function parseConfirmAction(value: unknown): HookConfirmActionConfig | undefined {
+  if (!isRecord(value) || !isNonEmptyString(value.message)) {
+    return undefined
+  }
+
+  if (value.title !== undefined && !isNonEmptyString(value.title)) {
+    return undefined
+  }
+
+  return value.title !== undefined ? { title: value.title, message: value.message } : { message: value.message }
+}
+
+function parseSetStatusAction(value: unknown): string | HookSetStatusActionConfig | undefined {
+  if (isNonEmptyString(value)) {
+    return value
+  }
+
+  if (!isRecord(value) || !isNonEmptyString(value.text)) {
+    return undefined
+  }
+
+  return { text: value.text }
+}
+
+function isHookNotifyLevel(value: unknown): value is HookNotifyLevel {
+  return value === "info" || value === "success" || value === "warning" || value === "error"
 }
 
 function parseCommandAction(value: unknown): string | HookCommandActionConfig | undefined {
