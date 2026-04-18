@@ -1,0 +1,43 @@
+{
+  "name": "pi-hooks",
+  "version": "0.1.0",
+  "description": "Port of OpenCode-Hooks to the PI harness: YAML-driven hooks with atomic-commit-snapshot-worker.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "pi": {
+    "extensions": "./src/index.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "hooks",
+    "automation",
+    "atomic-commit",
+    "snapshot-worker"
+  ],
+  "files": [
+    "dist",
+    "python",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KristjanPikhof/pi-hooks.git"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.67.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
