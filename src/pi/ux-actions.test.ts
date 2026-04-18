@@ -150,12 +150,16 @@ function createFakeHost(opts: { confirmReturn?: boolean; omitMethods?: boolean }
   const base: HostAdapter = {
     abort: () => {},
     getRootSessionId: (id) => id,
-    runBash: async (_req: BashExecutionRequest): Promise<BashHookResult> => ({
+    runBash: async (req: BashExecutionRequest): Promise<BashHookResult> => ({
+      command: req.command,
       exitCode: 0,
       stdout: "",
       stderr: "",
       timedOut: false,
       blocking: false,
+      status: "success",
+      durationMs: 0,
+      signal: null,
     }),
     sendPrompt: () => {},
   }
