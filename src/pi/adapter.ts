@@ -1,21 +1,17 @@
 /**
  * PI adapter for pi-hooks.
  *
- * Phase 1 wired the atomic-commit-snapshot pipeline to PI's `tool_result` and
- * session lifecycle events. Phase 2 expands that to a full YAML-driven
- * HostAdapter: we load hooks.yaml via `core/load-hooks.ts`, construct the core
- * runtime via `createHooksRuntime`, and forward every relevant PI event into
- * the runtime's `tool.execute.before` / `tool.execute.after` / `event`
- * dispatch surface.
+ * Loads hooks.yaml via `core/load-hooks.ts`, constructs the core runtime via
+ * `createHooksRuntime`, and forwards every relevant PI event into the
+ * runtime's `tool.execute.before` / `tool.execute.after` / `event` dispatch
+ * surface.
  *
- * Phase 1 MUST NOT regress: the `tool_result` handler continues to synthesize
- * a `file.changed` payload for `write`/`edit` and pipes it into the Python
- * snapshot-hook, and the shutdown/switch handlers continue to flush the
- * snapshot worker. The runtime dispatch happens after the Phase 1 Python call
- * so a failure in one path does not poison the other.
+ * file.changed is synthesized from `tool_result` events for the PI built-in
+ * `write` and `edit` tools so that YAML-defined `file.changed` hooks fire on
+ * file mutations.
  *
- * Windows guardrail: the snapshot worker stack depends on POSIX signals and
- * process groups. On win32 we emit one warning and register nothing.
+ * Windows guardrail: the bash executor depends on a POSIX bash on PATH. On
+ * win32 we emit one warning and register nothing.
  */
 
 import type {
