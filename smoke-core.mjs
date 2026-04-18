@@ -28,6 +28,7 @@ try {
       "--declaration",
       "false",
       "--skipLibCheck",
+      "--strict",
       "src/core/types.ts",
       "src/core/bash-types.ts",
       "src/core/config-paths.ts",
