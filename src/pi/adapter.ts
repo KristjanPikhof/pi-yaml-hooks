@@ -160,6 +160,10 @@ export function registerAdapter(pi: ExtensionAPI): void {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       debugLog(`tool.execute.before blocked ${event.toolName}: ${reason}`);
+      // P2 #18 fix: blocked tool calls never produce a tool_result, so the
+      // tool_result handler that normally cleans up callIdsToSessionIds will
+      // never fire. Drop the entry here so the map does not leak.
+      callIdsToSessionIds.delete(event.toolCallId);
       // The runtime calls host.abort() internally when a `stop` behaviour hook
       // fires; we also report the block back to PI so the tool doesn't run.
       return { block: true, reason };
