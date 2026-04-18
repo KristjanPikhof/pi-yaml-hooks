@@ -77,6 +77,19 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // though they live outside the event handler scope. The ctx is replayed
   // for each PI event, so "last seen" is the right handle to use.
   const latestContexts = new Map<string, ExtensionContext>();
+  // P1 #4 fix: PI emits both session_before_switch AND session_shutdown for
+  // the same logical /new, /resume, /fork transition. Track which session
+  // ids we have already fired session.deleted for so cleanup hooks do not
+  // double-run. Entries are cleared shortly after to keep the set bounded.
+  const deletedSessionIds = new Set<string>();
+  function markSessionDeleted(sessionId: string): boolean {
+    if (deletedSessionIds.has(sessionId)) return false;
+    deletedSessionIds.add(sessionId);
+    // Drop the marker after a few seconds — long enough to absorb the
+    // before_switch/shutdown pair, short enough not to leak forever.
+    setTimeout(() => deletedSessionIds.delete(sessionId), 5_000).unref?.();
+    return true;
+  }
 
   function rememberContext(cwd: string, ctx: ExtensionContext): void {
     latestContexts.set(cwd, ctx);
