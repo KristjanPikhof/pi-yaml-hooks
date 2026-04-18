@@ -126,6 +126,7 @@ export interface ParsedHooksFile {
   readonly hooks: HookMap
   readonly overrides: HookOverrideEntry[]
   readonly errors: HookValidationError[]
+  readonly advisories?: string[]
 }
 
 export function isHookEvent(value: unknown): value is HookEvent {
