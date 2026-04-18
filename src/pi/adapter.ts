@@ -436,6 +436,17 @@ function safeGetSessionId(sessionManager: ReadonlySessionManager | undefined): s
   }
 }
 
+function safeGetParentSessionPath(sessionManager: ReadonlySessionManager | undefined): string | undefined {
+  if (!sessionManager) return undefined;
+  try {
+    const header = sessionManager.getHeader();
+    const parent = header?.parentSession;
+    return typeof parent === "string" && parent.length > 0 ? parent : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function debugLog(message: string): void {
   if (process.env.PI_HOOKS_DEBUG) {
     // eslint-disable-next-line no-console
