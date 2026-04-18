@@ -245,6 +245,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // session_shutdown also fires on terminal exit; the runtime re-entry after
   // the process dies is harmless).
   pi.on("session_shutdown", async (_event, ctx: ExtensionContext): Promise<void> => {
+    rememberContext(ctx.cwd, ctx);
     await flushQuietly(ctx.cwd);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
