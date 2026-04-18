@@ -21,12 +21,18 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  ReadonlySessionManager,
   SessionStartEvent,
   ToolCallEvent,
   ToolCallEventResult,
   ToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
+
+/**
+ * Aliased locally: ReadonlySessionManager is defined in the PI package but
+ * not re-exported from its root module. We recover it from ExtensionContext
+ * so we don't reach into a subpath export.
+ */
+type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
 import { executeBashHook } from "../core/bash-executor.js";
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
