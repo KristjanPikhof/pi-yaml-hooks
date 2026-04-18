@@ -110,7 +110,26 @@ export function parseHooksFile(filePath: string, content: string): ParsedHooksFi
     hooks.set(parsedHook.hook.event, [...existing, parsedHook.hook])
   })
 
-  return { hooks, overrides, errors, files: [filePath] }
+  const piDiagnostics = collectUnsupportedDiagnostics(hooks)
+  for (const message of piDiagnostics.errors) {
+    errors.push({ code: "unsupported_on_pi", filePath, message })
+  }
+  if (piDiagnostics.advisories.length > 0) {
+    for (const advisory of piDiagnostics.advisories) {
+      // Surface advisories so operators see them even without inspecting
+      // ParsedHooksFile.advisories directly.
+      // eslint-disable-next-line no-console
+      console.info(`[pi-hooks] ${advisory}`)
+    }
+  }
+
+  return {
+    hooks,
+    overrides,
+    errors,
+    ...(piDiagnostics.advisories.length > 0 ? { advisories: piDiagnostics.advisories } : {}),
+    files: [filePath],
+  }
 }
 
 export function loadHooksFile(filePath: string, readFile: (filePath: string) => string = defaultReadFile): ParsedHooksFileResult {
