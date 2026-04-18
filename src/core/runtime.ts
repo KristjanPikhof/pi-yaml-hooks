@@ -437,7 +437,9 @@ async function dispatchToolHooks(
     return wildcardResult
   }
 
-  for (const resolvedToolName of getMutationToolHookNames(toolName).length > 0 ? getMutationToolHookNames(toolName) : [toolName]) {
+  const mutationNames = getMutationToolHookNames(toolName);
+  const resolvedNames = mutationNames.length > 0 ? mutationNames : [toolName];
+  for (const resolvedToolName of resolvedNames) {
     const result = await dispatchHooks(
       hooks,
       state,
