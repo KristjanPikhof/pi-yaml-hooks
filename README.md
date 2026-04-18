@@ -153,10 +153,6 @@ scope: all     # default — fires in all sessions
 
 `scope: main` is only supported for bash actions. Using it with other action types is a hard load error.
 
-### Atomic-commit-snapshot-worker pipeline
-
-Automatically active. Every `write` or `edit` tool result synthesizes a `file.changed` payload and pipes it into the Python snapshot pipeline — no YAML required.
-
 ---
 
 ## Unsupported / compatibility notes
