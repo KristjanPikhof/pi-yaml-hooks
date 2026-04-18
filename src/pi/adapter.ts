@@ -256,6 +256,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
+    if (!markSessionDeleted(sessionId)) return; // session_shutdown already fired
 
     try {
       const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
