@@ -17,6 +17,24 @@ const KILL_GRACE_PERIOD_MS = 250
 const BASH_EXECUTABLE = process.env.PI_HOOKS_BASH_EXECUTABLE || process.env.OPENCODE_HOOKS_BASH_EXECUTABLE || "bash"
 const MAX_LOG_FIELD_LENGTH = 400
 const REDACTED = "[REDACTED]"
+// P1 #9: cap captured stdout/stderr per hook invocation. A misbehaving hook
+// (e.g. `find / -type f`) would otherwise buffer arbitrarily large output
+// into the host process. Override via PI_HOOKS_MAX_OUTPUT_BYTES.
+const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
+const TRUNCATION_MARKER = "\n…[pi-hooks: output truncated]"
+
+function parseMaxOutputBytes(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+function appendCapped(existing: string, chunk: Buffer): string {
+  if (existing.length >= MAX_OUTPUT_BYTES) return existing
+  const remaining = MAX_OUTPUT_BYTES - existing.length
+  if (chunk.length <= remaining) return existing + chunk.toString()
+  return existing + chunk.toString("utf8", 0, remaining) + TRUNCATION_MARKER
+}
 
 export async function executeBashHook(request: BashExecutionRequest): Promise<BashHookResult> {
   const processResult = await executeBashProcess(request)
