@@ -150,3 +150,20 @@ export function isHookRunIn(value: unknown): value is HookRunIn {
 export function isHookBehavior(value: unknown): value is HookBehavior {
   return typeof value === "string" && HOOK_BEHAVIORS.includes(value as HookBehavior)
 }
+
+// Host adapter is imported from the runtime embedder (for example the PI
+// adapter in src/pi). Runtime code calls into the host exclusively through
+// this surface so the core stays host-agnostic.
+import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
+
+export interface HostAdapter {
+  /** Abort the given session (best-effort). Errors must be handled by the adapter. */
+  abort(sessionId: string): void | Promise<void>
+  /** Return the root/parent-less session id reachable from `sessionId`. */
+  getRootSessionId(sessionId: string): string | Promise<string>
+  /** Execute a bash hook request; same contract as the node bash-executor. */
+  runBash(request: BashExecutionRequest): Promise<BashHookResult>
+  /** Queue a prompt in the current session; used as the fallback for `tool:` actions. */
+  sendPrompt(sessionId: string, text: string): void | Promise<void>
+}
+
