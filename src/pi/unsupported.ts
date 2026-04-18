@@ -137,11 +137,17 @@ export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
 export function collectUnsupportedDiagnostics(hookMap: HookMap): UnsupportedDiagnostics {
   const errors: string[] = []
   const advisories: string[] = []
+  const invalidHooks = new Set<HookConfig>()
 
   for (const hooks of hookMap.values()) {
     for (const hook of hooks) {
-      errors.push(...diagnoseCommandActions(hook))
-      errors.push(...diagnoseRunInMainNonBash(hook))
+      const hookErrors: string[] = []
+      hookErrors.push(...diagnoseCommandActions(hook))
+      hookErrors.push(...diagnoseRunInMainNonBash(hook))
+      if (hookErrors.length > 0) {
+        invalidHooks.add(hook)
+        errors.push(...hookErrors)
+      }
 
       advisories.push(...diagnoseToolActions(hook))
       advisories.push(...diagnoseScopeChild(hook))
@@ -149,5 +155,5 @@ export function collectUnsupportedDiagnostics(hookMap: HookMap): UnsupportedDiag
     }
   }
 
-  return { errors, advisories }
+  return { errors, advisories, invalidHooks }
 }
