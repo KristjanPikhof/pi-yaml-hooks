@@ -57,7 +57,11 @@ export function runPythonSnapshotHook(
   options: { cwd?: string } = {},
 ): Promise<PythonRunResult> {
   const script = resolveSnapshotHookScript();
-  const cwd = options.cwd ?? (typeof payload.cwd === "string" ? payload.cwd : process.cwd());
+  const cwdFromPayload =
+    typeof (payload as { cwd?: unknown }).cwd === "string"
+      ? ((payload as { cwd?: string }).cwd as string)
+      : undefined;
+  const cwd = options.cwd ?? cwdFromPayload ?? process.cwd();
 
   return new Promise<PythonRunResult>((resolvePromise) => {
     let stdout = "";
