@@ -67,6 +67,19 @@ export function registerAdapter(pi: ExtensionAPI): void {
     return;
   }
 
+  // P1 #8 fix: matchesAnyPath / matchesAllPaths conditions use node:path
+  // matchesGlob, which exists from Node 22.0.0. Older Node throws TypeError
+  // inside shouldRunHook's catch block, silently making path-conditioned
+  // hooks never match. Fail loudly at startup instead.
+  if (typeof (path as { matchesGlob?: unknown }).matchesGlob !== "function") {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[pi-hooks] node:path.matchesGlob is unavailable on this Node runtime (${process.version}). ` +
+        `pi-hooks requires Node >= 22.0.0 for path conditions to work. Extension is a no-op.`,
+    );
+    return;
+  }
+
   // Runtime is created lazily on the first event so that `ctx.cwd` is
   // available and we honour the project's hooks.yaml location. Once built,
   // we cache the runtime keyed by cwd so subsequent cwd changes in the same
