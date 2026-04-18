@@ -236,11 +236,10 @@ export function registerAdapter(pi: ExtensionAPI): void {
 
   // ---- session_before_switch ----
   // Same lossy compat shim as session_shutdown: fires on /new, /resume,
-  // /fork with no clean way to distinguish. We flush the worker and fire
-  // session.deleted so per-session cleanup hooks run before the switch.
+  // /fork with no clean way to distinguish. Fire session.deleted so per-session
+  // cleanup hooks run before the switch.
   pi.on("session_before_switch", async (_event, ctx: ExtensionContext): Promise<void> => {
     rememberContext(ctx.cwd, ctx);
-    await flushQuietly(ctx.cwd);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
 
