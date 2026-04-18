@@ -55,6 +55,7 @@ export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}
   const projectDir = options.projectDir
 
   const globalPath = pickFirstExisting(globalCandidatePaths(platform, homeDir, appDataDir), exists)
+  if (globalPath) warnLegacyPathOnce(globalPath, "global")
 
   let projectPath: string | undefined
   if (projectDir) {
