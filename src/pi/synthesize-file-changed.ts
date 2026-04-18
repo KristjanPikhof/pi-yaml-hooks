@@ -13,7 +13,7 @@
  *     cwd:         string,
  *     session_id:  string | undefined,
  *     tool_name:   "write" | "edit",
- *     tool_input:  { file_path: string, ... },
+ *     tool_input:  { path: string, ... },
  *     files:       string[],            // modified paths
  *     changes:     [{ operation, path }] // "modify" for both write & edit
  *   }
