@@ -73,11 +73,30 @@ The extension resolves one global config and one project-level config. Resolutio
 3. `~/.config/opencode/hook/hooks.yaml` (OpenCode fallback)
 4. `%APPDATA%/opencode/hook/hooks.yaml` (Windows OpenCode fallback)
 
-**Project-level** (resolved from `cwd` at first event):
+**Project-level** (resolved from `cwd` at first event, **only when the project is trusted** — see below):
 1. `<project>/.pi/hooks.yaml` (PI-native, preferred)
 2. `<project>/.opencode/hook/hooks.yaml` (OpenCode fallback)
 
 Both files are loaded when both exist. The project file can override the global one.
+
+A first-load warning fires when a legacy OpenCode path is being used so you remember to migrate to the PI-native paths.
+
+### Project hook trust (security)
+
+Project-scoped hook files contain `bash:` actions and run with your user's full permissions. To prevent a freshly cloned untrusted repo from executing arbitrary code the moment you `cd` in, **project hooks are only loaded for explicitly trusted directories**.
+
+Two ways to trust a project:
+
+1. **Per-session env var** — fast and ephemeral:
+   ```bash
+   PI_HOOKS_TRUST_PROJECT=1 pi
+   ```
+2. **Persistent trust list** — add the absolute project directory to `~/.pi/agent/trusted-projects.json`:
+   ```json
+   ["/Users/me/code/myproj", "/Users/me/code/another-proj"]
+   ```
+
+Untrusted project hook files trigger a one-time warning explaining how to opt in, and are then skipped. Global hooks (`~/.pi/agent/hooks.yaml`) are not gated — they're already in your home directory and under your direct control.
 
 ### Minimal example
 
