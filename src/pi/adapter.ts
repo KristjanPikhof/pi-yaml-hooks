@@ -335,12 +335,16 @@ function createHostAdapter(
         if (!warnedNoConfirm) {
           // eslint-disable-next-line no-console
           console.warn(
-            "[pi-hooks] confirm action skipped (auto-approving): PI UI surface unavailable (likely print/RPC mode).",
+            "[pi-hooks] confirm action denied: PI UI surface unavailable (likely print/RPC mode). " +
+              "confirm: hooks fail closed in headless mode so destructive operations are not silently auto-approved. " +
+              "Set PI_HOOKS_CONFIRM_AUTO_APPROVE=1 to override.",
           );
           warnedNoConfirm = true;
         }
-        // No UI to ask — don't block the agent. Treat as approval.
-        return true;
+        // P1 #5 fix: fail closed in headless mode. Returning false routes
+        // through the runtime's block path for pre-tool hooks. Operators who
+        // explicitly want to keep the old behavior can opt back in.
+        return process.env.PI_HOOKS_CONFIRM_AUTO_APPROVE === "1";
       }
       try {
         // PI's confirm takes (title, message) as positional args; title is
