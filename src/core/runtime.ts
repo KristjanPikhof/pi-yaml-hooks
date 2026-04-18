@@ -509,13 +509,12 @@ async function dispatchHooks(
   }
 
   if (currentState.pending.length > 0) {
-    if (!options.canBlock) {
-      await drainPendingRequests()
-    } else {
-      setTimeout(() => {
-        void drainPendingRequests()
-      }, 0)
-    }
+    // P2 #23 fix: previously the canBlock branch deferred drain via
+    // setTimeout(..., 0) and returned synchronously. That created a window
+    // where a fresh dispatch with the same key could race with the deferred
+    // drain's `dispatchStates.delete(dispatchKey)`. Always await inline so
+    // dispatch state lifetime is well-defined.
+    await drainPendingRequests()
   } else {
     currentState.active = false
     currentState.pending = []
