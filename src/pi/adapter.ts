@@ -395,8 +395,3 @@ function debugLog(message: string): void {
     console.warn(`[pi-hooks] ${message}`);
   }
 }
-
-function truncate(value: string, max = 400): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max)}…`;
-}
