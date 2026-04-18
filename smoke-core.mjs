@@ -8,7 +8,9 @@ import path from "node:path"
 // Use tsc to emit the core files to a temp dir, then import.
 import { execFileSync } from "node:child_process"
 
-const tmp = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-smoke-"))
+// Emit into a dir inside the project so Node resolves 'yaml' from the project's
+// node_modules.
+const tmp = mkdtempSync(path.join(process.cwd(), ".pi-hooks-smoke-"))
 try {
   execFileSync(
     "npx",
