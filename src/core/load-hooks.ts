@@ -118,6 +118,21 @@ export function parseHooksFile(filePath: string, content: string): ParsedHooksFi
   for (const message of piDiagnostics.errors) {
     errors.push({ code: "unsupported_on_pi", filePath, message })
   }
+
+  // P1 #2 fix: drop hooks that produced unsupported_on_pi errors so the
+  // runtime never executes them. The errors above remain so operators see
+  // why their hook was skipped.
+  if (piDiagnostics.invalidHooks.size > 0) {
+    for (const [event, hookList] of hooks) {
+      const filtered = hookList.filter((hook) => !piDiagnostics.invalidHooks.has(hook))
+      if (filtered.length === 0) {
+        hooks.delete(event)
+      } else if (filtered.length !== hookList.length) {
+        hooks.set(event, filtered)
+      }
+    }
+  }
+
   if (piDiagnostics.advisories.length > 0) {
     for (const advisory of piDiagnostics.advisories) {
       // Surface advisories so operators see them even without inspecting
