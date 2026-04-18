@@ -61,15 +61,11 @@ export function synthesizeFileChangedFromToolResult(
   let filePath: string | undefined;
   let toolInput: Record<string, unknown>;
 
-  if (isWriteToolResult(event)) {
-    const input = event.input as { file_path?: unknown };
-    if (typeof input.file_path === "string" && input.file_path.length > 0) {
-      filePath = input.file_path;
-    }
-    toolInput = event.input as Record<string, unknown>;
-  } else if (isEditToolResult(event)) {
-    const input = event.input as { file_path?: unknown };
-    if (typeof input.file_path === "string" && input.file_path.length > 0) {
+  if (isWriteToolResult(event) || isEditToolResult(event)) {
+    const input = event.input as { path?: unknown; file_path?: unknown };
+    if (typeof input.path === "string" && input.path.length > 0) {
+      filePath = input.path;
+    } else if (typeof input.file_path === "string" && input.file_path.length > 0) {
       filePath = input.file_path;
     }
     toolInput = event.input as Record<string, unknown>;
