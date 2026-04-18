@@ -211,13 +211,11 @@ export function registerAdapter(pi: ExtensionAPI): void {
   });
 
   // ---- session_shutdown ----
-  // Phase 1 flush must run. Then fire session.deleted (lossy compat shim:
-  // PI does not distinguish graceful shutdown from /new|/resume|/fork and
-  // session_shutdown also fires on terminal exit; the runtime re-entry after
-  // the process dies is harmless).
+  // Fire session.deleted (lossy compat shim: PI does not distinguish graceful
+  // shutdown from /new|/resume|/fork and session_shutdown also fires on
+  // terminal exit; the runtime re-entry after the process dies is harmless).
   pi.on("session_shutdown", async (_event, ctx: ExtensionContext): Promise<void> => {
     rememberContext(ctx.cwd, ctx);
-    await flushQuietly(ctx.cwd);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
 
