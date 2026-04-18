@@ -219,6 +219,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // existing sessions being re-entered; firing session.created there would
   // overfire hooks that are meant to run once per fresh session.
   pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
+    rememberContext(ctx.cwd, ctx);
     if (event.reason !== "new" && event.reason !== "startup") return;
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
