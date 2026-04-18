@@ -201,5 +201,22 @@ export interface HostAdapter {
   runBash(request: BashExecutionRequest): Promise<BashHookResult>
   /** Queue a prompt in the current session; used as the fallback for `tool:` actions. */
   sendPrompt(sessionId: string, text: string): void | Promise<void>
+  /**
+   * Show a user-visible notification. Optional: hosts that do not implement
+   * a UI surface (e.g. headless tests, non-PI embedders) may omit this; the
+   * runtime degrades to a log + skip in that case.
+   */
+  notify?(text: string, level?: HookNotifyLevel): void | Promise<void>
+  /**
+   * Prompt the user for confirmation. Must resolve to a boolean: `true` =
+   * user approved, `false` = user rejected (treated as a blocking result
+   * for pre-tool hooks, same as exit-code-2 from a bash action).
+   */
+  confirm?(options: { title?: string; message: string }): boolean | Promise<boolean>
+  /**
+   * Set a status-bar entry for the given hookId. Pass an empty string to
+   * clear; hosts without a status surface may omit this.
+   */
+  setStatus?(hookId: string, text: string): void | Promise<void>
 }
 
