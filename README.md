@@ -102,10 +102,12 @@ Untrusted project hook files trigger a one-time warning explaining how to opt in
 
 ```yaml
 hooks:
-  - event: tool.after.write
+  # Log every file the agent writes/edits.
+  - event: file.changed
     actions:
-      - bash: echo "wrote $PI_PROJECT_DIR"
+      - bash: 'echo "[hook] changed: $(jq -r ".changes[].path" <<<"$(cat)")"'
 
+  # Notify when the agent finishes a turn.
   - event: session.idle
     actions:
       - notify: "Agent is idle"
