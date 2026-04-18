@@ -25,6 +25,7 @@ import {
   isHookScope,
 } from "./types.js"
 import { discoverHookConfigPaths, type HookConfigDiscoveryOptions } from "./config-paths.js"
+import { collectUnsupportedDiagnostics } from "../pi/unsupported.js"
 
 export interface HookDiscoveryResult {
   readonly hooks: HookMap
