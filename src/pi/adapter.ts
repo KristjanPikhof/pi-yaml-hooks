@@ -135,36 +135,13 @@ export function registerAdapter(pi: ExtensionAPI): void {
   });
 
   // ---- tool_result ----
-  // Phase 1 path FIRST: synthesize file.changed for write/edit and pipe it
-  // into the Python snapshot-hook so the atomic-commit pipeline never
-  // regresses. Then dispatch tool.after.* via the core runtime for YAML
-  // hooks.
+  // Dispatch tool.after.* through the core runtime. The runtime emits
+  // file.changed for mutation tools (write/edit) internally — see
+  // src/core/runtime.ts:282 — so YAML file.changed hooks fire from this path.
   pi.on("tool_result", async (event: ToolResultEvent, ctx: ExtensionContext): Promise<void> => {
     rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager) ?? callIdsToSessionIds.get(event.toolCallId);
 
-    // Phase 1 snapshot-hook path.
-    const payload = synthesizeFileChangedFromToolResult(event, {
-      cwd: ctx.cwd,
-      sessionId,
-    });
-    if (payload) {
-      try {
-        const result = await runPythonSnapshotHook(payload, { cwd: ctx.cwd });
-        if (result.exitCode !== 0) {
-          debugLog(
-            `snapshot-hook exited ${result.exitCode}` +
-              (result.stderr ? `: ${truncate(result.stderr)}` : ""),
-          );
-        }
-      } catch (error) {
-        debugLog(
-          `snapshot-hook spawn failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-
-    // Phase 2 runtime dispatch.
     if (sessionId) {
       try {
         const runtime = getRuntimeFor(ctx.cwd, ctx.sessionManager);
