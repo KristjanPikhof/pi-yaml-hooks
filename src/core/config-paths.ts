@@ -38,6 +38,14 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
  * Discover all existing config files in precedence order: PI-native first,
  * OpenCode legacy second. Global comes before project so the project file can
  * override the global one (preserving original layering semantics).
+ *
+ * Project hook files are gated by an explicit trust list (P0 #1 fix) — a repo
+ * cannot drop in `.pi/hooks.yaml` and silently get arbitrary `bash:` execution
+ * just because someone `cd`'d into it. Trust is established by either:
+ *   - Setting `PI_HOOKS_TRUST_PROJECT=1` for the process, or
+ *   - Adding the absolute project directory to ~/.pi/agent/trusted-projects.json
+ *     (a JSON array of absolute paths, e.g. ["/Users/me/code/myproj"]).
+ * Untrusted project files are skipped with a one-time warning.
  */
 export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}): string[] {
   const exists = options.exists ?? existsSync
@@ -46,14 +54,49 @@ export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}
   const appDataDir = options.appDataDir ?? process.env.APPDATA
   const projectDir = options.projectDir
 
-  const candidates: (string | undefined)[] = [
-    // Global, PI-native then OpenCode fallback.
-    pickFirstExisting(globalCandidatePaths(platform, homeDir, appDataDir), exists),
-    // Project, PI-native then OpenCode fallback.
-    projectDir ? pickFirstExisting(projectCandidatePaths(projectDir), exists) : undefined,
-  ]
+  const globalPath = pickFirstExisting(globalCandidatePaths(platform, homeDir, appDataDir), exists)
 
-  return candidates.filter((filePath): filePath is string => Boolean(filePath))
+  let projectPath: string | undefined
+  if (projectDir) {
+    const candidate = pickFirstExisting(projectCandidatePaths(projectDir), exists)
+    if (candidate) {
+      if (isProjectTrusted(projectDir, homeDir)) {
+        projectPath = candidate
+      } else {
+        warnUntrustedProjectOnce(projectDir, candidate)
+      }
+    }
+  }
+
+  return [globalPath, projectPath].filter((filePath): filePath is string => Boolean(filePath))
+}
+
+const warnedUntrustedProjects = new Set<string>()
+
+function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
+  if (warnedUntrustedProjects.has(projectDir)) return
+  warnedUntrustedProjects.add(projectDir)
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[pi-hooks] Skipping untrusted project hooks at ${candidate}.\n` +
+      `         To trust this project, either:\n` +
+      `           - set PI_HOOKS_TRUST_PROJECT=1 for this session, or\n` +
+      `           - add ${JSON.stringify(projectDir)} to ~/.pi/agent/trusted-projects.json`,
+  )
+}
+
+function isProjectTrusted(projectDir: string, homeDir: string): boolean {
+  if (process.env.PI_HOOKS_TRUST_PROJECT === "1") return true
+  const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
+  try {
+    if (!existsSync(trustFile)) return false
+    const raw = readFileSync(trustFile, "utf8")
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return false
+    return parsed.some((entry) => typeof entry === "string" && path.resolve(entry) === path.resolve(projectDir))
+  } catch {
+    return false
+  }
 }
 
 function resolveGlobalConfigPath(
