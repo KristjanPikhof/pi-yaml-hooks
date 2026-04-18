@@ -113,6 +113,7 @@ export type HookValidationErrorCode =
   | "override_target_not_found"
   | "invalid_override"
   | "invalid_async"
+  | "unsupported_on_pi"
 
 export interface HookValidationError {
   readonly code: HookValidationErrorCode
