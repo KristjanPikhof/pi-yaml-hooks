@@ -146,6 +146,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // regresses. Then dispatch tool.after.* via the core runtime for YAML
   // hooks.
   pi.on("tool_result", async (event: ToolResultEvent, ctx: ExtensionContext): Promise<void> => {
+    rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager) ?? callIdsToSessionIds.get(event.toolCallId);
 
     // Phase 1 snapshot-hook path.
