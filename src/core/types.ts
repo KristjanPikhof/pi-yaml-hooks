@@ -69,7 +69,41 @@ export interface HookBashAction {
   readonly bash: string | HookBashActionConfig
 }
 
-export type HookAction = HookCommandAction | HookToolAction | HookBashAction
+export type HookNotifyLevel = "info" | "success" | "warning" | "error"
+
+export interface HookNotifyActionConfig {
+  readonly text: string
+  readonly level?: HookNotifyLevel
+}
+
+export interface HookNotifyAction {
+  readonly notify: string | HookNotifyActionConfig
+}
+
+export interface HookConfirmActionConfig {
+  readonly title?: string
+  readonly message: string
+}
+
+export interface HookConfirmAction {
+  readonly confirm: HookConfirmActionConfig
+}
+
+export interface HookSetStatusActionConfig {
+  readonly text: string
+}
+
+export interface HookSetStatusAction {
+  readonly setStatus: string | HookSetStatusActionConfig
+}
+
+export type HookAction =
+  | HookCommandAction
+  | HookToolAction
+  | HookBashAction
+  | HookNotifyAction
+  | HookConfirmAction
+  | HookSetStatusAction
 
 export interface HookConfigSource {
   readonly filePath: string
