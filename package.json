@@ -3,21 +3,16 @@
   "version": "0.1.0",
   "description": "Port of OpenCode-Hooks to the PI harness: YAML-driven hooks with atomic-commit-snapshot-worker.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "pi": {
-    "extensions": "./src/index.ts"
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "keywords": [
-    "pi-package",
-    "pi-extension",
-    "hooks",
-    "automation",
-    "atomic-commit",
-    "snapshot-worker"
+    "pi-package"
   ],
   "files": [
-    "dist",
+    "src",
     "python",
     "README.md"
   ],
