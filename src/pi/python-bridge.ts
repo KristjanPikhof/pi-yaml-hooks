@@ -53,7 +53,7 @@ function resolveSnapshotWorkerScript(): string {
  * handle failure (typically: log at debug and continue).
  */
 export function runPythonSnapshotHook(
-  payload: Record<string, unknown>,
+  payload: object,
   options: { cwd?: string } = {},
 ): Promise<PythonRunResult> {
   const script = resolveSnapshotHookScript();
