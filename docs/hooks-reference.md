@@ -431,6 +431,42 @@ The process working directory is the current project directory.
 | `session.deleted` | supported but lossy |
 | `confirm:` in headless mode | deny by default |
 
+## Debug logging
+
+When you start PI with:
+
+```bash
+PI_HOOKS_DEBUG=1 pi
+```
+
+`pi-hooks` writes persistent NDJSON logs to:
+
+```text
+~/.pi/agent/logs/pi-hooks.ndjson
+```
+
+Useful environment variables:
+
+| Variable | Meaning |
+|---|---|
+| `PI_HOOKS_DEBUG=1` | enable debug-level persistent logging |
+| `PI_HOOKS_LOG_FILE=/path/file.ndjson` | override the log file location |
+| `PI_HOOKS_LOG_LEVEL=debug|info|warn|error` | explicitly set the log level |
+| `PI_HOOKS_LOG_STDERR=1` | mirror structured log entries to stderr |
+
+The easiest way to inspect the log is:
+
+```bash
+./scripts/tail-hook-log.sh
+```
+
+For focused debugging, filter by hook or event:
+
+```bash
+./scripts/tail-hook-log.sh --hook load-writer-skill-when-markdown-changes
+./scripts/tail-hook-log.sh --event session.idle
+```
+
 ## Best next steps
 
 - For installation and trust: [`setup.md`](./setup.md)
