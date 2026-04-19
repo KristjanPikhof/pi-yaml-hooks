@@ -18,6 +18,7 @@
     "src",
     "docs",
     "examples",
+    "scripts",
     "README.md"
   ],
   "scripts": {
