@@ -33,6 +33,7 @@ type ReadonlySessionManager = ExtensionContext["sessionManager"];
 import path from "node:path";
 import { executeBashHook } from "../core/bash-executor.js";
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
+import { getPiHooksLogger } from "../core/logger.js";
 import { formatHookLoadSummary, loadDiscoveredHooks } from "../core/load-hooks.js";
 import {
   createHooksRuntime,
@@ -59,11 +60,16 @@ import { getRootSessionId } from "./session-lineage.js";
  *                    session.deleted for all of them)
  */
 export function registerAdapter(pi: ExtensionAPI): void {
+  const logger = getPiHooksLogger();
+
   if (process.platform === "win32") {
     // eslint-disable-next-line no-console
     console.warn(
       "[pi-hooks] bash hooks require a POSIX bash on PATH; Windows is unsupported. Extension is a no-op.",
     );
+    logger.warn("adapter_disabled", "Windows is unsupported; extension registered as a no-op.", {
+      details: { platform: process.platform },
+    });
     return;
   }
 
@@ -77,6 +83,9 @@ export function registerAdapter(pi: ExtensionAPI): void {
       `[pi-hooks] node:path.matchesGlob is unavailable on this Node runtime (${process.version}). ` +
         `pi-hooks requires Node >= 22.0.0 for path conditions to work. Extension is a no-op.`,
     );
+    logger.error("adapter_disabled", "node:path.matchesGlob is unavailable; extension registered as a no-op.", {
+      details: { nodeVersion: process.version },
+    });
     return;
   }
 
@@ -127,9 +136,26 @@ export function registerAdapter(pi: ExtensionAPI): void {
           .map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`)
           .join("\n")}`,
       );
+      logger.error("config_load", "Hook loading reported validation errors.", {
+        cwd,
+        details: {
+          files: loaded.files,
+          errors: loaded.errors.map((error) => ({
+            filePath: error.filePath,
+            path: error.path,
+            code: error.code,
+            message: error.message,
+          })),
+        },
+      });
     }
+    const summary = formatHookLoadSummary(loaded);
     // eslint-disable-next-line no-console
-    console.info(formatHookLoadSummary(loaded));
+    console.info(summary);
+    logger.info("config_load", "Hook configuration loaded.", {
+      cwd,
+      details: { files: loaded.files, summary, sources: loaded.sources },
+    });
     const runtime = createHooksRuntime(host, { directory: cwd, hooks: loaded.hooks });
     runtimes.set(cwd, runtime);
     return runtime;
@@ -313,6 +339,7 @@ function createHostAdapter(
   getSessionManager: () => ReadonlySessionManager | undefined,
   getContext: () => ExtensionContext | undefined,
 ): HostAdapter {
+  const logger = getPiHooksLogger();
   // Once-per-missing-capability warning flags. We log a single warning per
   // process lifetime instead of spamming on every hook invocation when the
   // host's UI surface is absent (e.g. print/RPC mode where ctx.hasUI is
@@ -348,6 +375,10 @@ function createHostAdapter(
       try {
         pi.sendUserMessage(text, { deliverAs: "followUp" });
       } catch (error) {
+        logger.error("host_send_prompt", "sendUserMessage failed.", {
+          cwd: projectDir,
+          details: { text, error: error instanceof Error ? error.message : String(error) },
+        });
         debugLog(
           `sendUserMessage failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -365,6 +396,9 @@ function createHostAdapter(
           console.warn(
             "[pi-hooks] notify action skipped: PI UI surface unavailable (likely print/RPC mode).",
           );
+          logger.warn("host_notify", "notify action skipped because PI UI surface is unavailable.", {
+            cwd: projectDir,
+          });
           warnedNoNotify = true;
         }
         return;
@@ -387,6 +421,10 @@ function createHostAdapter(
               "confirm: hooks fail closed in headless mode so destructive operations are not silently auto-approved. " +
               "Set PI_HOOKS_CONFIRM_AUTO_APPROVE=1 to override.",
           );
+          logger.warn("host_confirm", "confirm action denied because PI UI surface is unavailable.", {
+            cwd: projectDir,
+            details: { autoApprove: process.env.PI_HOOKS_CONFIRM_AUTO_APPROVE === "1" },
+          });
           warnedNoConfirm = true;
         }
         // P1 #5 fix: fail closed in headless mode. Returning false routes
@@ -415,6 +453,9 @@ function createHostAdapter(
           console.warn(
             "[pi-hooks] setStatus action skipped: PI UI surface unavailable (likely print/RPC mode).",
           );
+          logger.warn("host_set_status", "setStatus action skipped because PI UI surface is unavailable.", {
+            cwd: projectDir,
+          });
           warnedNoSetStatus = true;
         }
         return;
@@ -454,6 +495,7 @@ function safeGetParentSessionPath(sessionManager: ReadonlySessionManager | undef
 
 function debugLog(message: string): void {
   if (process.env.PI_HOOKS_DEBUG) {
+    getPiHooksLogger().debug("adapter_debug", message)
     // eslint-disable-next-line no-console
     console.warn(`[pi-hooks] ${message}`);
   }
