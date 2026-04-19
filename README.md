@@ -238,7 +238,9 @@ PI built-ins are: `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`. Hooks o
 
 ### `runIn: main` on non-bash actions — rejected at load time
 
-`runIn: main` is only supported for `bash:` actions on PI. Hooks with `runIn: main` paired with a `tool:`, `notify:`, `confirm:`, or `setStatus:` action are dropped at load with an error.
+Hooks with `runIn: main` paired with a `tool:`, `notify:`, `confirm:`, or `setStatus:` action are dropped at load with an error.
+
+`runIn` is compatibility metadata, not a strong cross-session execution guarantee on PI. For the exact current behavior, see [`docs/hooks-reference.md`](./docs/hooks-reference.md).
 
 ### `tool:` action — advisory only
 
