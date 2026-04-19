@@ -1318,6 +1318,11 @@ function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, 
 
 function logHookFailure(event: HookEvent, filePath: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
+  getPiHooksLogger().error("hook_error", "Hook execution failed.", {
+    event,
+    hookSource: filePath,
+    details: { error: message },
+  })
   console.error(`[pi-hooks] ${event} hook from ${filePath} failed: ${message}`)
 }
 
