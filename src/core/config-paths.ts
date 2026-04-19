@@ -25,8 +25,8 @@ export interface DiscoveredHookConfigPath {
 /**
  * Resolve the primary global and project config paths. Only PI-native
  * locations are considered:
- * - global: ~/.pi/agent/hooks.yaml
- * - project: <projectDir>/.pi/hooks.yaml
+ * - global: ~/.pi/agent/hook/hooks.yaml, then ~/.pi/agent/hooks.yaml
+ * - project: <projectDir>/.pi/hook/hooks.yaml, then <projectDir>/.pi/hooks.yaml
  */
 export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {}): HookConfigPaths {
   const exists = options.exists ?? existsSync
@@ -48,7 +48,8 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
  * (preserving original layering semantics).
  *
  * Project hook files are gated by an explicit trust list — a repo cannot drop
- * in `.pi/hooks.yaml` and silently get arbitrary `bash:` execution just
+ * in `.pi/hook/hooks.yaml` or `.pi/hooks.yaml` and silently get arbitrary
+ * `bash:` execution just
  * because someone `cd`'d into it. Trust is established by either:
  *   - Setting `PI_HOOKS_TRUST_PROJECT=1` for the process, or
  *   - Adding the absolute project directory to ~/.pi/agent/trusted-projects.json
@@ -138,12 +139,16 @@ function resolveProjectConfigPath(
 
 function globalCandidatePaths(platform: string, homeDir: string, appDataDir: string | undefined): string[] {
   const candidates: string[] = [
-    // PI-native: ~/.pi/agent/hooks.yaml
+    // PI-native preferred global config: ~/.pi/agent/hook/hooks.yaml
+    path.join(homeDir, ".pi", "agent", "hook", "hooks.yaml"),
+    // PI-native flat global config: ~/.pi/agent/hooks.yaml
     path.join(homeDir, ".pi", "agent", "hooks.yaml"),
   ]
 
-  // PI-native on Windows: %APPDATA%/pi/agent/hooks.yaml
+  // PI-native on Windows: %APPDATA%/pi/agent/hook/hooks.yaml, then
+  // %APPDATA%/pi/agent/hooks.yaml
   if (platform === "win32" && appDataDir) {
+    candidates.push(path.join(appDataDir, "pi", "agent", "hook", "hooks.yaml"))
     candidates.push(path.join(appDataDir, "pi", "agent", "hooks.yaml"))
   }
 
@@ -152,7 +157,9 @@ function globalCandidatePaths(platform: string, homeDir: string, appDataDir: str
 
 function projectCandidatePaths(projectDir: string): string[] {
   return [
-    // PI-native project config: <projectDir>/.pi/hooks.yaml
+    // PI-native preferred project config: <projectDir>/.pi/hook/hooks.yaml
+    path.join(projectDir, ".pi", "hook", "hooks.yaml"),
+    // PI-native flat project config: <projectDir>/.pi/hooks.yaml
     path.join(projectDir, ".pi", "hooks.yaml"),
   ]
 }
