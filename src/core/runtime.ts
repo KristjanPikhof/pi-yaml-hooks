@@ -946,18 +946,35 @@ async function executeAction(
   sessionID: string,
   context: RuntimeActionContext,
   sourceFilePath: string,
+  hookId: string,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
 ): Promise<HookExecutionResult> {
+  const logger = getPiHooksLogger()
   const executionDirectory = projectDir
+  const actionType = getActionType(action)
+
+  logger.debug("action_start", "Starting hook action.", {
+    cwd: projectDir,
+    event,
+    sessionId: sessionID,
+    hookId,
+    hookSource: sourceFilePath,
+    action: actionType,
+    details: getActionDetails(action),
+  })
 
   if ("command" in action) {
-    // PI host does not expose a session-scoped slash-command surface; fail loud
-    // so the diagnostics lane surfaces the misconfiguration to the user.
-    logHookFailure(
+    const error = new Error("command: actions are not supported on PI — remove this action or use bash instead")
+    logger.error("action_result", "Unsupported command action encountered.", {
+      cwd: projectDir,
       event,
-      sourceFilePath,
-      new Error("command: actions are not supported on PI — remove this action or use bash instead"),
-    )
+      sessionId: sessionID,
+      hookId,
+      hookSource: sourceFilePath,
+      action: actionType,
+      details: { error: error.message },
+    })
+    logHookFailure(event, sourceFilePath, error)
     return { blocked: false }
   }
 
@@ -965,20 +982,42 @@ async function executeAction(
     try {
       const targetSessionID = await resolveActionSessionID(state, host, sessionID, runIn)
       if (!targetSessionID) {
+        logger.warn("action_result", "Tool action skipped because target session is unavailable.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+        })
         return { blocked: false }
       }
 
+      const prompt = `Use the ${action.tool.name} tool with these arguments: ${JSON.stringify(action.tool.args ?? {})}`
       const actionKey = `${event}:${targetSessionID}:tool:${sourceFilePath}:${JSON.stringify(action.tool)}`
       await withActionRecursionGuard(actionRecursionGuards, actionKey, async () => {
-        // PI degrades tool: actions to a current-session prompt injection: the
-        // host queues a user-visible instruction rather than invoking the tool
-        // imperatively (which the PI runtime does not support).
-        await host.sendPrompt(
-          targetSessionID,
-          `Use the ${action.tool.name} tool with these arguments: ${JSON.stringify(action.tool.args ?? {})}`,
-        )
+        await host.sendPrompt(targetSessionID, prompt)
+      })
+      logger.info("action_result", "Tool action queued a follow-up prompt.", {
+        cwd: projectDir,
+        event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: sourceFilePath,
+        action: actionType,
+        toolName: action.tool.name,
+        details: { targetSessionID, prompt, args: action.tool.args ?? {} },
       })
     } catch (error) {
+      logger.error("action_result", "Tool action failed.", {
+        cwd: projectDir,
+        event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: sourceFilePath,
+        action: actionType,
+        details: { error: error instanceof Error ? error.message : String(error) },
+      })
       logHookFailure(event, sourceFilePath, error)
     }
 
@@ -991,11 +1030,37 @@ async function executeAction(
       const level = config.level ?? "info"
       if (typeof host.notify === "function") {
         await host.notify(config.text, level)
+        logger.info("action_result", "Notification action delivered.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { text: config.text, level },
+        })
       } else {
-        // Graceful fallback for hosts without a UI surface (tests, RPC).
         console.warn(`[pi-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
+        logger.warn("action_result", "Notification action skipped because host.notify is unavailable.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { text: config.text, level },
+        })
       }
     } catch (error) {
+      logger.error("action_result", "Notification action failed.", {
+        cwd: projectDir,
+        event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: sourceFilePath,
+        action: actionType,
+        details: { error: error instanceof Error ? error.message : String(error) },
+      })
       logHookFailure(event, sourceFilePath, error)
     }
     return { blocked: false }
@@ -1008,16 +1073,40 @@ async function executeAction(
           ...(action.confirm.title !== undefined ? { title: action.confirm.title } : {}),
           message: action.confirm.message,
         })
+        logger.info("action_result", "Confirmation action completed.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { title: action.confirm.title, message: action.confirm.message, approved },
+        })
         if (!approved) {
-          // User rejection is exit-2 / blocking semantics. Only pre-tool hooks
-          // can actually block; on non-blocking events the dispatch ignores
-          // the blocked flag (same rule as bash `exit 2`).
           return { blocked: true, blockReason: "Blocked by user via confirm action" }
         }
       } else {
         console.warn(`[pi-hooks] confirm action skipped (host.confirm not implemented): ${action.confirm.message}`)
+        logger.warn("action_result", "Confirmation action skipped because host.confirm is unavailable.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { title: action.confirm.title, message: action.confirm.message },
+        })
       }
     } catch (error) {
+      logger.error("action_result", "Confirmation action failed.", {
+        cwd: projectDir,
+        event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: sourceFilePath,
+        action: actionType,
+        details: { error: error instanceof Error ? error.message : String(error) },
+      })
       logHookFailure(event, sourceFilePath, error)
     }
     return { blocked: false }
@@ -1027,15 +1116,39 @@ async function executeAction(
     try {
       const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
       if (typeof host.setStatus === "function") {
-        // Key the status by the hook's source file + index so concurrent hooks
-        // don't clobber each other's status slot. This is the closest thing
-        // pi-hooks has to a stable "hookId" when the YAML author omits one.
-        const hookId = `${sourceFilePath}#${event}`
-        await host.setStatus(hookId, config.text)
+        const statusHookId = `${sourceFilePath}#${event}`
+        await host.setStatus(statusHookId, config.text)
+        logger.info("action_result", "Status action updated the PI status surface.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { statusHookId, text: config.text },
+        })
       } else {
         console.warn(`[pi-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
+        logger.warn("action_result", "Status action skipped because host.setStatus is unavailable.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          details: { text: config.text },
+        })
       }
     } catch (error) {
+      logger.error("action_result", "Status action failed.", {
+        cwd: projectDir,
+        event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: sourceFilePath,
+        action: actionType,
+        details: { error: error instanceof Error ? error.message : String(error) },
+      })
       logHookFailure(event, sourceFilePath, error)
     }
     return { blocked: false }
@@ -1054,6 +1167,25 @@ async function executeAction(
       changes: context.changes,
       tool_name: context.toolName,
       tool_args: context.toolArgs,
+    },
+  })
+
+  logger.info("action_result", "Bash action completed.", {
+    cwd: projectDir,
+    event,
+    sessionId: sessionID,
+    hookId,
+    hookSource: sourceFilePath,
+    action: actionType,
+    details: {
+      command: config.command,
+      timeout: config.timeout,
+      status: result.status,
+      exitCode: result.exitCode,
+      blocking: result.blocking,
+      durationMs: result.durationMs,
+      stdout: result.stdout,
+      stderr: result.stderr,
     },
   })
 
