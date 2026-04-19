@@ -4,6 +4,7 @@ import { extname, isAbsolute, matchesGlob, relative } from "node:path"
 import { executeBashHook } from "./bash-executor.js"
 import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
 import { loadDiscoveredHooksSnapshot } from "./load-hooks.js"
+import { getPiHooksLogger } from "./logger.js"
 import { SessionStateStore } from "./session-state.js"
 import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
 import type {
@@ -139,6 +140,13 @@ interface HookExecutionResult {
   readonly stopSession?: boolean
 }
 
+interface HookMatchDecision {
+  readonly matched: boolean
+  readonly reason: string
+  readonly changedPaths: readonly string[]
+  readonly details?: Record<string, unknown>
+}
+
 interface DispatchState {
   active: boolean
   pending: DispatchRequest[]
@@ -173,12 +181,23 @@ export interface CreateHooksRuntimeOptions {
 
 export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntimeOptions): HooksRuntime {
   const projectDir = options.directory
+  const logger = getPiHooksLogger()
 
   let loaded = options.hooks
     ? { hooks: options.hooks, errors: [] as HookValidationError[], signature: "manual" }
     : loadDiscoveredHooksSnapshot({ projectDir })
   if (loaded.errors.length > 0) {
     console.error(formatHookLoadErrors(loaded.errors))
+    logger.error("config_load", "Initial hook load reported validation errors.", {
+      cwd: projectDir,
+      details: {
+        errors: loaded.errors.map((error) => ({
+          filePath: error.filePath,
+          path: error.path,
+          message: error.message,
+        })),
+      },
+    })
   }
 
   let hooks = loaded.hooks
@@ -204,12 +223,31 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
     if (nextLoaded.errors.length > 0) {
       if (lastReportedInvalidSignature !== nextLoaded.signature) {
         console.error(formatHookReloadErrors(nextLoaded.errors))
+        logger.error("config_reload", "Hook reload failed; keeping last known good hooks.", {
+          cwd: projectDir,
+          details: {
+            signature: nextLoaded.signature,
+            errors: nextLoaded.errors.map((error) => ({
+              filePath: error.filePath,
+              path: error.path,
+              message: error.message,
+            })),
+          },
+        })
         lastReportedInvalidSignature = nextLoaded.signature
       }
       return hooks
     }
 
     hooks = nextLoaded.hooks
+    logger.info("config_reload", "Hook configuration reloaded.", {
+      cwd: projectDir,
+      details: {
+        signature: nextLoaded.signature,
+        eventCount: hooks.size,
+        files: Array.from(new Set(Array.from(hooks.values()).flat().map((hook) => hook.source.filePath))),
+      },
+    })
     lastReportedInvalidSignature = undefined
     return hooks
   }
