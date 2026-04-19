@@ -89,6 +89,10 @@ export function registerAdapter(pi: ExtensionAPI): void {
     return;
   }
 
+  logger.info("adapter_start", "PI hooks adapter initialized.", {
+    details: { platform: process.platform, nodeVersion: process.version },
+  });
+
   // Runtime is created lazily on the first event so that `ctx.cwd` is
   // available and we honour the project's hooks.yaml location. Once built,
   // we cache the runtime keyed by cwd so subsequent cwd changes in the same
