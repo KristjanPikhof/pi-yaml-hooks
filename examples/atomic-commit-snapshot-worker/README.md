@@ -18,9 +18,10 @@ yourself by adding the snippet below to your `hooks.yaml`.
 
 ### 2. Wire it from `hooks.yaml`
 
-Drop this into `~/.pi/agent/hooks.yaml` (global) or `<project>/.pi/hooks.yaml`
-(project-local). Replace `/abs/path/to/pi-hooks` with where you cloned this
-repo.
+Drop this into `~/.pi/agent/hook/hooks.yaml` (global, preferred),
+`~/.pi/agent/hooks.yaml`, `<project>/.pi/hook/hooks.yaml` (project-local,
+preferred), or `<project>/.pi/hooks.yaml`. Replace `/abs/path/to/pi-hooks`
+with where you cloned this repo.
 
 ```yaml
 hooks:
