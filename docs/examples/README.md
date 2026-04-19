@@ -6,6 +6,7 @@ These examples are designed to be copied into `hooks.yaml` with minimal editing.
 
 - [`notify-on-idle.md`](./notify-on-idle.md) — simplest possible visible hook
 - [`confirm-before-bash.md`](./confirm-before-bash.md) — require user approval before any `bash` tool call
+- [`block-destructive-bash.md`](./block-destructive-bash.md) — block selected `bash` commands with exit code `2`
 - [`log-file-changes.md`](./log-file-changes.md) — capture `file.changed` payloads to a local log
 - [`path-filters.md`](./path-filters.md) — run hooks only for selected files or directories
 - [`session-scope.md`](./session-scope.md) — use `scope: all|main|child`
