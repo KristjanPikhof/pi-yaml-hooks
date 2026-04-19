@@ -1321,7 +1321,7 @@ function getActionDetails(action: HookAction): Record<string, unknown> {
   return { text: config.text }
 }
 
-function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, string>> {
+function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, unknown>> {
   return changes.map((change) =>
     change.operation === "rename"
       ? { operation: change.operation, fromPath: change.fromPath, toPath: change.toPath }
