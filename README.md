@@ -26,8 +26,8 @@ bun install      # or: npm install
 ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
 
 # Drop a minimal hooks.yaml so something happens
-mkdir -p ~/.pi/agent
-cat > ~/.pi/agent/hooks.yaml <<'YAML'
+mkdir -p ~/.pi/agent/hook
+cat > ~/.pi/agent/hook/hooks.yaml <<'YAML'
 hooks:
   - event: session.idle
     actions:
@@ -39,7 +39,7 @@ pi
 # expect: [pi-hooks] Loaded 1 hook (global: 1, project: 0).
 ```
 
-If a trusted project also has `.pi/hooks.yaml`, startup output looks like:
+If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), startup output looks like:
 
 ```text
 [pi-hooks] Loaded 3 hooks (global: 1, project: 2).
@@ -68,13 +68,16 @@ If a trusted project also has `.pi/hooks.yaml`, startup output looks like:
 The extension resolves one global config and one project-level config.
 
 **Global:**
-1. `~/.pi/agent/hooks.yaml`
-2. `%APPDATA%/pi/agent/hooks.yaml` (Windows only)
+1. `~/.pi/agent/hook/hooks.yaml` (preferred)
+2. `~/.pi/agent/hooks.yaml`
+3. `%APPDATA%/pi/agent/hook/hooks.yaml` (Windows only, preferred)
+4. `%APPDATA%/pi/agent/hooks.yaml` (Windows only)
 
 **Project-level** (resolved from `cwd` at first event, **only when the project is trusted** — see below):
-1. `<project>/.pi/hooks.yaml`
+1. `<project>/.pi/hook/hooks.yaml` (preferred)
+2. `<project>/.pi/hooks.yaml`
 
-Both files are loaded when both exist. The project file can override the global one.
+One global config and one project config are loaded at most. Within each scope, the first existing path wins. The project file can override the global one.
 
 On first load, pi-hooks prints a short summary so you can see what was picked up:
 
@@ -97,7 +100,7 @@ Two ways to trust a project:
    ["/Users/me/code/myproj", "/Users/me/code/another-proj"]
    ```
 
-Untrusted project hook files trigger a one-time warning explaining how to opt in, and are then skipped. Global hooks (`~/.pi/agent/hooks.yaml`) are not gated — they're already in your home directory and under your direct control.
+Untrusted project hook files trigger a one-time warning explaining how to opt in, and are then skipped. Global hooks (`~/.pi/agent/hook/hooks.yaml` or `~/.pi/agent/hooks.yaml`) are not gated — they're already in your home directory and under your direct control.
 
 ### Minimal example
 
@@ -289,8 +292,10 @@ PI_HOOKS_MAX_OUTPUT_BYTES=4194304
 
 OpenCode hook paths are no longer discovered automatically. Move your config to the PI-native locations instead:
 
-- global: `~/.pi/agent/hooks.yaml`
-- project: `<project>/.pi/hooks.yaml`
+- global: `~/.pi/agent/hook/hooks.yaml` or `~/.pi/agent/hooks.yaml`
+- project: `<project>/.pi/hook/hooks.yaml` or `<project>/.pi/hooks.yaml`
+
+If both PI-native variants exist in the same scope, the `hook/hooks.yaml` location wins.
 
 **What carries over unchanged:**
 - All hook events: `tool.before.*`, `tool.after.*`, `file.changed`, `session.*`
