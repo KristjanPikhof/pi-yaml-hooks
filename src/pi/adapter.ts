@@ -374,6 +374,10 @@ function createHostAdapter(
       // treated the same as "current".
       try {
         pi.sendUserMessage(text, { deliverAs: "followUp" });
+        logger.info("host_send_prompt", "Queued follow-up prompt in the current PI session.", {
+          cwd: projectDir,
+          details: { text },
+        });
       } catch (error) {
         logger.error("host_send_prompt", "sendUserMessage failed.", {
           cwd: projectDir,
@@ -407,7 +411,15 @@ function createHostAdapter(
         level === "warning" || level === "error" ? level : "info";
       try {
         ctx.ui.notify(text, piLevel);
+        logger.info("host_notify", "Delivered UI notification.", {
+          cwd: projectDir,
+          details: { text, level: piLevel },
+        });
       } catch (error) {
+        logger.error("host_notify", "UI notification failed.", {
+          cwd: projectDir,
+          details: { text, level: piLevel, error: error instanceof Error ? error.message : String(error) },
+        });
         debugLog(`ui.notify failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
@@ -436,8 +448,17 @@ function createHostAdapter(
         // PI's confirm takes (title, message) as positional args; title is
         // required on the PI side, so we synthesize a neutral default when
         // the YAML omits it.
-        return await ctx.ui.confirm(options.title ?? "Confirm", options.message);
+        const approved = await ctx.ui.confirm(options.title ?? "Confirm", options.message);
+        logger.info("host_confirm", "Completed UI confirmation request.", {
+          cwd: projectDir,
+          details: { title: options.title ?? "Confirm", message: options.message, approved },
+        });
+        return approved;
       } catch (error) {
+        logger.error("host_confirm", "UI confirmation failed.", {
+          cwd: projectDir,
+          details: { title: options.title ?? "Confirm", message: options.message, error: error instanceof Error ? error.message : String(error) },
+        });
         debugLog(`ui.confirm failed: ${error instanceof Error ? error.message : String(error)}`);
         // Errors from the UI surface (dismissed, aborted) fall through as
         // "not approved" so the runtime's block semantics still fire when
@@ -465,7 +486,15 @@ function createHostAdapter(
         // string-only API at the hook layer and collapse empty strings to
         // "clear" so YAML authors can write `setStatus: ""` to reset.
         ctx.ui.setStatus(hookId, text.length > 0 ? text : undefined);
+        logger.info("host_set_status", "Updated PI status surface.", {
+          cwd: projectDir,
+          details: { hookId, text },
+        });
       } catch (error) {
+        logger.error("host_set_status", "Updating PI status surface failed.", {
+          cwd: projectDir,
+          details: { hookId, text, error: error instanceof Error ? error.message : String(error) },
+        });
         debugLog(`ui.setStatus failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
