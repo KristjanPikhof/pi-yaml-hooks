@@ -65,6 +65,7 @@ If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), start
 - [`docs/setup.md`](./docs/setup.md) — installation, config paths, trust, reloads
 - [`docs/hooks-reference.md`](./docs/hooks-reference.md) — exact hook fields, events, conditions, actions, and PI-specific behavior
 - [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) — practical rules for people and agents writing `hooks.yaml`
+- [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
 - [`docs/examples/`](./docs/examples/) — copy-paste examples for each major hook pattern
 
 ---
