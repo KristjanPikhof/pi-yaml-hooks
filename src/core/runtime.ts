@@ -265,6 +265,13 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
       const toolArgs = eventOutput.args ?? {}
       state.setPendingToolCall(eventInput.callID, sessionID, toolArgs)
+      logger.debug("dispatch_start", "Dispatching pre-tool hooks.", {
+        cwd: projectDir,
+        event: `tool.before.${eventInput.tool}`,
+        sessionId: sessionID,
+        toolName: eventInput.tool,
+        details: { callID: eventInput.callID, toolArgs },
+      })
 
       const result = await dispatchToolHooks(
         activeHooks,
@@ -286,11 +293,26 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
       if (result.blocked) {
         state.consumePendingToolCall(eventInput.callID)
+        logger.warn("dispatch_end", "Pre-tool dispatch blocked the tool call.", {
+          cwd: projectDir,
+          event: `tool.before.${eventInput.tool}`,
+          sessionId: sessionID,
+          toolName: eventInput.tool,
+          details: { callID: eventInput.callID, blockReason: result.blockReason, stopSession: result.stopSession === true },
+        })
         if (result.stopSession) {
           await abortSession(host, sessionID)
         }
         throw new Error(result.blockReason ?? "Blocked by hook")
       }
+
+      logger.debug("dispatch_end", "Finished pre-tool dispatch.", {
+        cwd: projectDir,
+        event: `tool.before.${eventInput.tool}`,
+        sessionId: sessionID,
+        toolName: eventInput.tool,
+        details: { callID: eventInput.callID },
+      })
     },
 
     "tool.execute.after": async (
@@ -307,6 +329,14 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       const toolArgs = resolveToolArgs(eventInput.args, pending?.toolArgs)
       const changes = getToolFileChanges(eventInput.tool, toolArgs)
       const files = changes.length > 0 ? getChangedPaths(changes) : undefined
+
+      logger.debug("dispatch_start", "Dispatching post-tool hooks.", {
+        cwd: projectDir,
+        event: `tool.after.${eventInput.tool}`,
+        sessionId: sessionID,
+        toolName: eventInput.tool,
+        details: { callID: eventInput.callID, toolArgs, files, changes: summarizeChanges(changes) },
+      })
 
       state.addFileChanges(sessionID, changes)
 
@@ -351,6 +381,14 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
           toolArgs,
         },
       )
+
+      logger.debug("dispatch_end", "Finished post-tool dispatch.", {
+        cwd: projectDir,
+        event: `tool.after.${eventInput.tool}`,
+        sessionId: sessionID,
+        toolName: eventInput.tool,
+        details: { callID: eventInput.callID, files, changes: summarizeChanges(changes) },
+      })
     },
 
     event: async ({ event }: RuntimeEventEnvelope): Promise<void> => {
@@ -365,6 +403,12 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
         }
 
         state.rememberSession(sessionID, pickString(info?.parentID) ?? null)
+        logger.debug("dispatch_start", "Dispatching session.created hooks.", {
+          cwd: projectDir,
+          event: "session.created",
+          sessionId: sessionID,
+          details: { parentID: pickString(info?.parentID) ?? null },
+        })
         await dispatchHooks(
           activeHooks,
           state,
@@ -391,6 +435,11 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
         state.rememberSession(sessionID, pickString(info?.parentID) ?? undefined)
         state.deleteSession(sessionID)
+        logger.debug("dispatch_start", "Dispatching session.deleted hooks.", {
+          cwd: projectDir,
+          event: "session.deleted",
+          sessionId: sessionID,
+        })
         await dispatchHooks(
           activeHooks,
           state,
@@ -416,6 +465,12 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
         const changes = state.getFileChanges(sessionID)
         const files = state.getModifiedPaths(sessionID)
+        logger.debug("idle_changes_snapshot", "Captured pending idle changes.", {
+          cwd: projectDir,
+          event: "session.idle",
+          sessionId: sessionID,
+          details: { files, changes: summarizeChanges(changes) },
+        })
         state.beginIdleDispatch(sessionID, changes)
 
         try {
@@ -434,6 +489,12 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
             asyncQueues,
           )
           state.consumeFileChanges(sessionID, changes)
+          logger.debug("idle_changes_consumed", "Consumed idle changes after dispatch.", {
+            cwd: projectDir,
+            event: "session.idle",
+            sessionId: sessionID,
+            details: { files, changes: summarizeChanges(changes) },
+          })
         } catch (error) {
           state.cancelIdleDispatch(sessionID)
           throw error
