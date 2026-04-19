@@ -682,14 +682,70 @@ async function executeHook(
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, Promise<void>>,
 ): Promise<HookExecutionResult> {
+  const logger = getPiHooksLogger()
+  const hookId = getHookIdentifier(hook)
+  let decision: HookMatchDecision
+
+  logger.debug("hook_consider", "Evaluating hook against event context.", {
+    cwd: projectDir,
+    event: hook.event,
+    sessionId: sessionID,
+    hookId,
+    hookSource: formatHookSource(hook),
+    details: {
+      scope: hook.scope,
+      runIn: hook.runIn,
+      async: hook.async === true,
+      files: context.files,
+      changes: summarizeChanges(context.changes ?? []),
+      toolName: context.toolName,
+    },
+  })
+
   try {
-    if (!(await shouldRunHook(hook, state, host, projectDir, sessionID, context))) {
-      return { blocked: false }
-    }
+    decision = await shouldRunHook(hook, state, host, projectDir, sessionID, context)
   } catch (error) {
+    logger.error("hook_skip", "Hook evaluation failed.", {
+      cwd: projectDir,
+      event: hook.event,
+      sessionId: sessionID,
+      hookId,
+      hookSource: formatHookSource(hook),
+      details: { error: error instanceof Error ? error.message : String(error) },
+    })
     logHookFailure(hook.event, hook.source.filePath, error)
     return { blocked: false }
   }
+
+  if (!decision.matched) {
+    logger.debug("hook_skip", "Hook did not match the current event context.", {
+      cwd: projectDir,
+      event: hook.event,
+      sessionId: sessionID,
+      hookId,
+      hookSource: formatHookSource(hook),
+      details: {
+        reason: decision.reason,
+        changedPaths: decision.changedPaths,
+        ...decision.details,
+      },
+    })
+    return { blocked: false }
+  }
+
+  logger.info("hook_match", "Hook matched the current event context.", {
+    cwd: projectDir,
+    event: hook.event,
+    sessionId: sessionID,
+    hookId,
+    hookSource: formatHookSource(hook),
+    details: {
+      changedPaths: decision.changedPaths,
+      files: context.files,
+      changes: summarizeChanges(context.changes ?? []),
+      toolName: context.toolName,
+    },
+  })
 
   if (hook.async) {
     const queueKey = `${hook.event}:${sessionID}`
@@ -708,11 +764,20 @@ async function executeHook(
             sessionID,
             context,
             hook.source.filePath,
+            hookId,
             actionRecursionGuards,
           )
         }
       })
       .catch((error) => {
+        logger.error("hook_async", "Async hook execution failed.", {
+          cwd: projectDir,
+          event: hook.event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: formatHookSource(hook),
+          details: { error: error instanceof Error ? error.message : String(error) },
+        })
         logHookFailure(hook.event, hook.source.filePath, error)
       })
       .finally(() => {
@@ -721,6 +786,14 @@ async function executeHook(
         }
       })
     asyncQueues.set(queueKey, next)
+    logger.debug("hook_async", "Queued hook for asynchronous execution.", {
+      cwd: projectDir,
+      event: hook.event,
+      sessionId: sessionID,
+      hookId,
+      hookSource: formatHookSource(hook),
+      details: { queueKey },
+    })
     return { blocked: false }
   }
 
@@ -736,9 +809,18 @@ async function executeHook(
       sessionID,
       context,
       hook.source.filePath,
+      hookId,
       actionRecursionGuards,
     )
     if (result.blocked && options.canBlock) {
+      logger.warn("hook_block", "Hook action blocked event execution.", {
+        cwd: projectDir,
+        event: hook.event,
+        sessionId: sessionID,
+        hookId,
+        hookSource: formatHookSource(hook),
+        details: { blockReason: result.blockReason, stopSession: hook.action === "stop" },
+      })
       return {
         ...result,
         ...(hook.action === "stop" ? { stopSession: true } : {}),
@@ -756,17 +838,28 @@ async function shouldRunHook(
   projectDir: string,
   sessionID: string,
   context: RuntimeActionContext,
-): Promise<boolean> {
-  if (!(await state.evaluateScope(sessionID, hook.scope, (currentSessionID) => resolveParentSessionID(host, currentSessionID)))) {
-    return false
-  }
-
+): Promise<HookMatchDecision> {
   const changedPaths = getFinalChangedPaths(projectDir, context)
+
+  if (!(await state.evaluateScope(sessionID, hook.scope, (currentSessionID) => resolveParentSessionID(host, currentSessionID)))) {
+    return {
+      matched: false,
+      reason: "scope_mismatch",
+      changedPaths,
+      details: { scope: hook.scope },
+    }
+  }
 
   for (const condition of hook.conditions ?? []) {
     if (condition === "matchesCodeFiles") {
-      if (!(context.files ?? []).some(hasCodeExtension)) {
-        return false
+      const files = context.files ?? []
+      if (!files.some(hasCodeExtension)) {
+        return {
+          matched: false,
+          reason: "matchesCodeFiles_failed",
+          changedPaths,
+          details: { files },
+        }
       }
 
       continue
@@ -774,26 +867,46 @@ async function shouldRunHook(
 
     if ("matchesAnyPath" in condition) {
       if (changedPaths.length === 0) {
-        return false
+        return {
+          matched: false,
+          reason: "matchesAnyPath_no_paths",
+          changedPaths,
+          details: { patterns: condition.matchesAnyPath },
+        }
       }
 
       if (!changedPaths.some((filePath) => condition.matchesAnyPath.some((pattern) => matchesGlob(filePath, pattern)))) {
-        return false
+        return {
+          matched: false,
+          reason: "matchesAnyPath_failed",
+          changedPaths,
+          details: { patterns: condition.matchesAnyPath },
+        }
       }
 
       continue
     }
 
     if (changedPaths.length === 0) {
-      return false
+      return {
+        matched: false,
+        reason: "matchesAllPaths_no_paths",
+        changedPaths,
+        details: { patterns: condition.matchesAllPaths },
+      }
     }
 
     if (!changedPaths.every((filePath) => condition.matchesAllPaths.some((pattern) => matchesGlob(filePath, pattern)))) {
-      return false
+      return {
+        matched: false,
+        reason: "matchesAllPaths_failed",
+        changedPaths,
+        details: { patterns: condition.matchesAllPaths },
+      }
     }
   }
 
-  return true
+  return { matched: true, reason: "matched", changedPaths }
 }
 
 function getFinalChangedPaths(projectDir: string, context: RuntimeActionContext): readonly string[] {
