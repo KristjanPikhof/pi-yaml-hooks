@@ -17,7 +17,7 @@ __pycache__/
 .DS_Store
 
 # Agents
-.claude/*
+.claude
 
 # Local secrets / env
 .env
