@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+import { getPiHooksLogger } from "./logger.js"
+
 export interface HookConfigDiscoveryOptions {
   readonly projectDir?: string
   readonly platform?: string
@@ -92,13 +94,17 @@ const warnedUntrustedProjects = new Set<string>()
 function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
   if (warnedUntrustedProjects.has(projectDir)) return
   warnedUntrustedProjects.add(projectDir)
-  // eslint-disable-next-line no-console
-  console.warn(
+  const message =
     `[pi-hooks] Skipping untrusted project hooks at ${candidate}.\n` +
-      `         To trust this project, either:\n` +
-      `           - set PI_HOOKS_TRUST_PROJECT=1 for this session, or\n` +
-      `           - add ${JSON.stringify(projectDir)} to ~/.pi/agent/trusted-projects.json`,
-  )
+    `         To trust this project, either:\n` +
+    `           - set PI_HOOKS_TRUST_PROJECT=1 for this session, or\n` +
+    `           - add ${JSON.stringify(projectDir)} to ~/.pi/agent/trusted-projects.json`
+  // eslint-disable-next-line no-console
+  console.warn(message)
+  getPiHooksLogger().warn("project_untrusted", "Skipping untrusted project hooks.", {
+    cwd: projectDir,
+    details: { projectDir, candidate },
+  })
 }
 
 function isProjectTrusted(projectDir: string, homeDir: string): boolean {
