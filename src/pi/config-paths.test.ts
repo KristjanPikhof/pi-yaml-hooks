@@ -8,9 +8,11 @@ interface Case {
 
 const homeDir = "/Users/tester"
 const projectDir = "/repo/pi-hooks"
-const globalPiPath = `${homeDir}/.pi/agent/hooks.yaml`
+const globalPiHookDirPath = `${homeDir}/.pi/agent/hook/hooks.yaml`
+const globalPiFlatPath = `${homeDir}/.pi/agent/hooks.yaml`
 const globalLegacyPath = `${homeDir}/.config/opencode/hook/hooks.yaml`
-const projectPiPath = `${projectDir}/.pi/hooks.yaml`
+const projectPiHookDirPath = `${projectDir}/.pi/hook/hooks.yaml`
+const projectPiFlatPath = `${projectDir}/.pi/hooks.yaml`
 const projectLegacyPath = `${projectDir}/.opencode/hook/hooks.yaml`
 
 function withTrustedProject<T>(run: () => T): T {
@@ -29,16 +31,39 @@ function withTrustedProject<T>(run: () => T): T {
 
 const cases: Case[] = [
   {
-    name: "discovers only PI-native global + project paths",
+    name: "prefers hook-directory PI-native global + project paths",
     run: () => withTrustedProject(() => {
-      const existing = new Set([globalPiPath, globalLegacyPath, projectPiPath, projectLegacyPath])
+      const existing = new Set([
+        globalPiHookDirPath,
+        globalPiFlatPath,
+        globalLegacyPath,
+        projectPiHookDirPath,
+        projectPiFlatPath,
+        projectLegacyPath,
+      ])
       const paths = discoverHookConfigPaths({
         homeDir,
         projectDir,
         exists: (filePath) => existing.has(filePath),
       })
 
-      const expected = [globalPiPath, projectPiPath]
+      const expected = [globalPiHookDirPath, projectPiHookDirPath]
+      return JSON.stringify(paths) === JSON.stringify(expected)
+        ? { ok: true }
+        : { ok: false, detail: `paths=${JSON.stringify(paths)}` }
+    }),
+  },
+  {
+    name: "supports flat PI-native paths when hook-directory files are absent",
+    run: () => withTrustedProject(() => {
+      const existing = new Set([globalPiFlatPath, projectPiFlatPath])
+      const paths = discoverHookConfigPaths({
+        homeDir,
+        projectDir,
+        exists: (filePath) => existing.has(filePath),
+      })
+
+      const expected = [globalPiFlatPath, projectPiFlatPath]
       return JSON.stringify(paths) === JSON.stringify(expected)
         ? { ok: true }
         : { ok: false, detail: `paths=${JSON.stringify(paths)}` }
@@ -62,10 +87,10 @@ const cases: Case[] = [
   {
     name: "formats startup summary with global + project hook counts",
     run: () => withTrustedProject(() => {
-      const existing = new Set([globalPiPath, projectPiPath])
+      const existing = new Set([globalPiHookDirPath, projectPiHookDirPath])
       const files = new Map<string, string>([
-        [globalPiPath, `hooks:\n  - event: session.idle\n    actions:\n      - notify: "one"\n  - event: session.created\n    actions:\n      - notify: "two"\n`],
-        [projectPiPath, `hooks:\n  - event: tool.after.write\n    actions:\n      - notify: "three"\n`],
+        [globalPiHookDirPath, `hooks:\n  - event: session.idle\n    actions:\n      - notify: "one"\n  - event: session.created\n    actions:\n      - notify: "two"\n`],
+        [projectPiHookDirPath, `hooks:\n  - event: tool.after.write\n    actions:\n      - notify: "three"\n`],
       ])
 
       const loaded = loadDiscoveredHooks({
