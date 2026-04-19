@@ -90,13 +90,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-jq_filter='(
-  ($hook == "" or (.hookId // "") == $hook) and
-  ($event == "" or (.event // "") == $event) and
-  ($session == "" or (.sessionId // "") == $session) and
-  ($kind == "" or (.kind // "") == $kind) and
-  ($level == "" or (.level // "") == $level)
-)'
+read -r -d '' JQ_FILTER <<'EOF' || true
+($hook == "" or (.hookId // "") == $hook) and
+($event == "" or (.event // "") == $event) and
+($session == "" or (.sessionId // "") == $session) and
+($kind == "" or (.kind // "") == $kind) and
+($level == "" or (.level // "") == $level)
+EOF
 
 if [[ "$RAW_OUTPUT" -eq 1 ]]; then
   tail -F "$LOG_FILE" | jq -c \
@@ -105,9 +105,48 @@ if [[ "$RAW_OUTPUT" -eq 1 ]]; then
     --arg session "$SESSION_FILTER" \
     --arg kind "$KIND_FILTER" \
     --arg level "$LEVEL_FILTER" \
-    "select($jq_filter)"
+    "select($JQ_FILTER)"
   exit 0
 fi
+
+read -r -d '' JQ_PROGRAM <<'EOF' || true
+def details_summary:
+  [
+    (if .details.reason then "reason=" + (.details.reason | tostring) else empty end),
+    (if .details.prompt then "prompt=" + (.details.prompt | tostring) else empty end),
+    (if .details.targetSessionID then "target=" + (.details.targetSessionID | tostring) else empty end),
+    (if .details.blockReason then "block=" + (.details.blockReason | tostring) else empty end),
+    (if .details.approved != null then "approved=" + (.details.approved | tostring) else empty end),
+    (if .details.status then "status=" + (.details.status | tostring) else empty end),
+    (if .details.exitCode != null then "exit=" + (.details.exitCode | tostring) else empty end),
+    (if .details.durationMs != null then "durationMs=" + (.details.durationMs | tostring) else empty end),
+    (if .details.files then "files=" + (.details.files | @json) else empty end),
+    (if .details.changedPaths then "changedPaths=" + (.details.changedPaths | @json) else empty end),
+    (if .details.error then "error=" + (.details.error | tostring) else empty end)
+  ] | map(select(length > 0)) | join(" | ");
+
+select(
+  ($hook == "" or (.hookId // "") == $hook) and
+  ($event == "" or (.event // "") == $event) and
+  ($session == "" or (.sessionId // "") == $session) and
+  ($kind == "" or (.kind // "") == $kind) and
+  ($level == "" or (.level // "") == $level)
+)
+| [
+    (.ts // "-"),
+    (.level // "info"),
+    (.kind // "-"),
+    (if .event then "event=" + .event else empty end),
+    (if .sessionId then "session=" + .sessionId else empty end),
+    (if .hookId then "hook=" + .hookId else empty end),
+    (if .action then "action=" + .action else empty end),
+    (if .toolName then "tool=" + .toolName else empty end),
+    (if .message then .message else empty end),
+    details_summary
+  ]
+| map(select(. != null and . != ""))
+| join(" | ")
+EOF
 
 tail -F "$LOG_FILE" | jq -r \
   --arg hook "$HOOK_FILTER" \
@@ -115,29 +154,4 @@ tail -F "$LOG_FILE" | jq -r \
   --arg session "$SESSION_FILTER" \
   --arg kind "$KIND_FILTER" \
   --arg level "$LEVEL_FILTER" \
-  '
-  def compact(v):
-    if v == null or v == "" or v == [] or v == {} then empty else v end;
-
-  def short(v):
-    if v == null then empty
-    elif (v | type) == "string" then v
-    else (v | @json)
-    end;
-
-  def details_summary:
-    [
-      (if .details.reason then "reason=" + (.details.reason | tostring) else empty end),
-      (if .details.prompt then "prompt=" + (.details.prompt | tostring) else empty end),
-      (if .details.targetSessionID then "target=" + (.details.targetSessionID | tostring) else empty end),
-      (if .details.blockReason then "block=" + (.details.blockReason | tostring) else empty end),
-      (if .details.approved != null then "approved=" + (.details.approved | tostring) else empty end),
-      (if .details.status then "status=" + (.details.status | tostring) else empty end),
-      (if .details.exitCode != null then "exit=" + (.details.exitCode | tostring) else empty end),
-      (if .details.durationMs != null then "durationMs=" + (.details.durationMs | tostring) else empty end),
-      (if .details.files then "files=" + ((.details.files | @json)) else empty end),
-      (if .details.changedPaths then "changedPaths=" + ((.details.changedPaths | @json)) else empty end),
-      (if .details.error then "error=" + (.details.error | tostring) else empty end)
-    ] | map(select(length > 0)) | join(" | ");
-
-  select('
+  "$JQ_PROGRAM"
