@@ -33,7 +33,7 @@ type ReadonlySessionManager = ExtensionContext["sessionManager"];
 import path from "node:path";
 import { executeBashHook } from "../core/bash-executor.js";
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
-import { loadDiscoveredHooks } from "../core/load-hooks.js";
+import { formatHookLoadSummary, loadDiscoveredHooks } from "../core/load-hooks.js";
 import {
   createHooksRuntime,
   type HooksRuntime,
@@ -128,6 +128,8 @@ export function registerAdapter(pi: ExtensionAPI): void {
           .join("\n")}`,
       );
     }
+    // eslint-disable-next-line no-console
+    console.info(formatHookLoadSummary(loaded));
     const runtime = createHooksRuntime(host, { directory: cwd, hooks: loaded.hooks });
     runtimes.set(cwd, runtime);
     return runtime;
