@@ -36,13 +36,13 @@ YAML
 
 # Run pi as usual; on session idle a notification fires.
 pi
+# expect: [pi-hooks] Loaded 1 hook (global: 1, project: 0).
 ```
 
-To verify it loaded, run pi with debug logging:
+If a trusted project also has `.pi/hooks.yaml`, startup output looks like:
 
-```bash
-PI_HOOKS_DEBUG=1 pi
-# expect lines starting with "[pi-hooks]" on stderr
+```text
+[pi-hooks] Loaded 3 hooks (global: 1, project: 2).
 ```
 
 ### Alternative installation paths
@@ -65,21 +65,22 @@ PI_HOOKS_DEBUG=1 pi
 
 ### hooks.yaml locations
 
-The extension resolves one global config and one project-level config. Resolution order (first existing file wins within each tier):
+The extension resolves one global config and one project-level config.
 
 **Global:**
-1. `~/.pi/agent/hooks.yaml` (PI-native, preferred)
+1. `~/.pi/agent/hooks.yaml`
 2. `%APPDATA%/pi/agent/hooks.yaml` (Windows only)
-3. `~/.config/opencode/hook/hooks.yaml` (OpenCode fallback)
-4. `%APPDATA%/opencode/hook/hooks.yaml` (Windows OpenCode fallback)
 
 **Project-level** (resolved from `cwd` at first event, **only when the project is trusted** — see below):
-1. `<project>/.pi/hooks.yaml` (PI-native, preferred)
-2. `<project>/.opencode/hook/hooks.yaml` (OpenCode fallback)
+1. `<project>/.pi/hooks.yaml`
 
 Both files are loaded when both exist. The project file can override the global one.
 
-A first-load warning fires when a legacy OpenCode path is being used so you remember to migrate to the PI-native paths.
+On first load, pi-hooks prints a short summary so you can see what was picked up:
+
+```text
+[pi-hooks] Loaded 3 hooks (global: 1, project: 2).
+```
 
 ### Project hook trust (security)
 
