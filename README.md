@@ -256,8 +256,8 @@ If PI is running without a UI surface (print/RPC mode), `confirm:` actions retur
 
 1. Confirm Node version: `node --version` → must be ≥ 22.0.0. Older Node disables path-conditioned hooks silently (now hard-fails at startup with an error in the latest version).
 2. Confirm `bash` is on `$PATH`: `which bash`. Override with `PI_HOOKS_BASH_EXECUTABLE=/path/to/bash`.
-3. Run with debug logging: `PI_HOOKS_DEBUG=1 pi`. Look for `[pi-hooks]` lines on stderr.
-4. Confirm the extension is loaded: a debug build shows `[pi-hooks] registered …` on startup.
+3. Start PI and look for the startup summary: `[pi-hooks] Loaded N hooks (global: G, project: P).`
+4. If you need deeper diagnostics, run with debug logging: `PI_HOOKS_DEBUG=1 pi`.
 5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the project path is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
 6. If a `notify:` / `confirm:` / `setStatus:` action does nothing, PI is in headless mode (`ctx.hasUI === false`). Bash actions still run.
 
@@ -287,7 +287,10 @@ PI_HOOKS_MAX_OUTPUT_BYTES=4194304
 
 ## Migration from OpenCode
 
-Existing `~/.config/opencode/hook/hooks.yaml` continues to work as a fallback with no changes required.
+OpenCode hook paths are no longer discovered automatically. Move your config to the PI-native locations instead:
+
+- global: `~/.pi/agent/hooks.yaml`
+- project: `<project>/.pi/hooks.yaml`
 
 **What carries over unchanged:**
 - All hook events: `tool.before.*`, `tool.after.*`, `file.changed`, `session.*`
