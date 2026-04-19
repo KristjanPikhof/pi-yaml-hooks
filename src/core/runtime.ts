@@ -578,8 +578,21 @@ async function dispatchHooks(
 ): Promise<HookExecutionResult> {
   const eventHooks = hooks.get(event)
   if (!eventHooks || eventHooks.length === 0) {
+    getPiHooksLogger().debug("dispatch_skip", "No hooks registered for event.", {
+      cwd: projectDir,
+      event,
+      sessionId: sessionID,
+      details: { files: context.files, changes: summarizeChanges(context.changes ?? []) },
+    })
     return { blocked: false }
   }
+
+  getPiHooksLogger().debug("dispatch_event", "Dispatching hooks for event.", {
+    cwd: projectDir,
+    event,
+    sessionId: sessionID,
+    details: { hookCount: eventHooks.length, files: context.files, changes: summarizeChanges(context.changes ?? []) },
+  })
 
   const hooksForEvent = eventHooks
 
