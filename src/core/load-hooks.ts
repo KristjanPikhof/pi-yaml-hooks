@@ -283,14 +283,18 @@ export interface HookLoadSummary {
 }
 
 export function summarizeHookSources(sources: readonly HookSourceSummary[]): HookLoadSummary {
-  const summary: HookLoadSummary = { global: 0, project: 0, total: 0 }
+  let global = 0
+  let project = 0
 
   for (const source of sources) {
-    summary[source.scope] += source.hookCount
+    if (source.scope === "global") {
+      global += source.hookCount
+    } else {
+      project += source.hookCount
+    }
   }
 
-  summary.total = summary.global + summary.project
-  return summary
+  return { global, project, total: global + project }
 }
 
 export function formatHookLoadSummary(result: Pick<HookDiscoveryResult, "sources">): string {
