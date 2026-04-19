@@ -15,11 +15,18 @@ export interface HookConfigPaths {
   readonly project?: string
 }
 
+export type HookConfigSourceScope = "global" | "project"
+
+export interface DiscoveredHookConfigPath {
+  readonly scope: HookConfigSourceScope
+  readonly filePath: string
+}
+
 /**
- * Resolve the primary global and project config paths. PI-native locations
- * (`~/.pi/agent/hooks.yaml` globally, `<projectDir>/.pi/hooks.yaml` per-project)
- * win. If none of the PI-native paths exist, we fall back to the legacy
- * OpenCode locations so existing users keep working during the migration.
+ * Resolve the primary global and project config paths. Only PI-native
+ * locations are considered:
+ * - global: ~/.pi/agent/hooks.yaml
+ * - project: <projectDir>/.pi/hooks.yaml
  */
 export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {}): HookConfigPaths {
   const exists = options.exists ?? existsSync
@@ -35,59 +42,48 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
 }
 
 /**
- * Discover all existing config files in precedence order: PI-native first,
- * OpenCode legacy second. Global comes before project so the project file can
- * override the global one (preserving original layering semantics).
+ * Discover all existing PI-native config files in precedence order.
  *
- * Project hook files are gated by an explicit trust list (P0 #1 fix) — a repo
- * cannot drop in `.pi/hooks.yaml` and silently get arbitrary `bash:` execution
- * just because someone `cd`'d into it. Trust is established by either:
+ * Global comes before project so the project file can override the global one
+ * (preserving original layering semantics).
+ *
+ * Project hook files are gated by an explicit trust list — a repo cannot drop
+ * in `.pi/hooks.yaml` and silently get arbitrary `bash:` execution just
+ * because someone `cd`'d into it. Trust is established by either:
  *   - Setting `PI_HOOKS_TRUST_PROJECT=1` for the process, or
  *   - Adding the absolute project directory to ~/.pi/agent/trusted-projects.json
  *     (a JSON array of absolute paths, e.g. ["/Users/me/code/myproj"]).
  * Untrusted project files are skipped with a one-time warning.
  */
-export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}): string[] {
+export function discoverHookConfigEntries(options: HookConfigDiscoveryOptions = {}): DiscoveredHookConfigPath[] {
   const exists = options.exists ?? existsSync
   const platform = options.platform ?? process.platform
   const homeDir = options.homeDir ?? os.homedir()
   const appDataDir = options.appDataDir ?? process.env.APPDATA
   const projectDir = options.projectDir
 
+  const entries: DiscoveredHookConfigPath[] = []
   const globalPath = pickFirstExisting(globalCandidatePaths(platform, homeDir, appDataDir), exists)
-  if (globalPath) warnLegacyPathOnce(globalPath, "global")
+  if (globalPath) {
+    entries.push({ scope: "global", filePath: globalPath })
+  }
 
-  let projectPath: string | undefined
   if (projectDir) {
     const candidate = pickFirstExisting(projectCandidatePaths(projectDir), exists)
     if (candidate) {
       if (isProjectTrusted(projectDir, homeDir)) {
-        projectPath = candidate
-        warnLegacyPathOnce(candidate, "project")
+        entries.push({ scope: "project", filePath: candidate })
       } else {
         warnUntrustedProjectOnce(projectDir, candidate)
       }
     }
   }
 
-  return [globalPath, projectPath].filter((filePath): filePath is string => Boolean(filePath))
+  return entries
 }
 
-const warnedLegacyPaths = new Set<string>()
-
-function warnLegacyPathOnce(filePath: string, scope: "global" | "project"): void {
-  // P2 #21: notify the operator they are still using legacy OpenCode hook
-  // discovery paths. The PI-native locations are preferred; legacy paths
-  // continue to load for backwards compatibility.
-  const isLegacy = filePath.includes(`${path.sep}.opencode${path.sep}hook${path.sep}`) || filePath.includes(`${path.sep}opencode${path.sep}hook${path.sep}`)
-  if (!isLegacy) return
-  if (warnedLegacyPaths.has(filePath)) return
-  warnedLegacyPaths.add(filePath)
-  // eslint-disable-next-line no-console
-  console.warn(
-    `[pi-hooks] Loading ${scope} hooks from legacy OpenCode path ${filePath}. ` +
-      `Migrate to ${scope === "global" ? "~/.pi/agent/hooks.yaml" : "<project>/.pi/hooks.yaml"} when convenient.`,
-  )
+export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}): string[] {
+  return discoverHookConfigEntries(options).map((entry) => entry.filePath)
 }
 
 const warnedUntrustedProjects = new Set<string>()
@@ -151,14 +147,6 @@ function globalCandidatePaths(platform: string, homeDir: string, appDataDir: str
     candidates.push(path.join(appDataDir, "pi", "agent", "hooks.yaml"))
   }
 
-  // Legacy OpenCode fallback: ~/.config/opencode/hook/hooks.yaml
-  candidates.push(path.join(homeDir, ".config", "opencode", "hook", "hooks.yaml"))
-
-  // Legacy OpenCode fallback on Windows: %APPDATA%/opencode/hook/hooks.yaml
-  if (platform === "win32" && appDataDir) {
-    candidates.push(path.join(appDataDir, "opencode", "hook", "hooks.yaml"))
-  }
-
   return candidates
 }
 
@@ -166,8 +154,6 @@ function projectCandidatePaths(projectDir: string): string[] {
   return [
     // PI-native project config: <projectDir>/.pi/hooks.yaml
     path.join(projectDir, ".pi", "hooks.yaml"),
-    // Legacy OpenCode project config fallback: <projectDir>/.opencode/hook/hooks.yaml
-    path.join(projectDir, ".opencode", "hook", "hooks.yaml"),
   ]
 }
 
