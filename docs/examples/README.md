@@ -13,6 +13,7 @@ These examples are designed to be copied into `hooks.yaml` with minimal editing.
 - [`project-overrides.md`](./project-overrides.md) — replace or disable a global hook from a trusted project file
 - [`background-hooks.md`](./background-hooks.md) — run slow post-processing asynchronously
 - [`tool-follow-up-prompts.md`](./tool-follow-up-prompts.md) — ask the current PI session to do something next
+- [`tail-hook-logs.md`](./tail-hook-logs.md) — tail and filter the persistent hook log while debugging
 - [`snapshot-autocommit.md`](./snapshot-autocommit.md) — hook up the included Python snapshot worker example
 
 ## Before you paste
