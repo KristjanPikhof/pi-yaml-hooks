@@ -28,13 +28,25 @@ import {
   isHookRunIn,
   isHookScope,
 } from "./types.js"
-import { discoverHookConfigPaths, type HookConfigDiscoveryOptions } from "./config-paths.js"
+import {
+  discoverHookConfigEntries,
+  type DiscoveredHookConfigPath,
+  type HookConfigDiscoveryOptions,
+  type HookConfigSourceScope,
+} from "./config-paths.js"
 import { collectUnsupportedDiagnostics } from "../pi/unsupported.js"
+
+export interface HookSourceSummary {
+  readonly scope: HookConfigSourceScope
+  readonly filePath: string
+  readonly hookCount: number
+}
 
 export interface HookDiscoveryResult {
   readonly hooks: HookMap
   readonly errors: HookValidationError[]
   readonly files: string[]
+  readonly sources: HookSourceSummary[]
 }
 
 export interface HookLoadOptions extends HookConfigDiscoveryOptions {
@@ -47,8 +59,8 @@ export interface HookLoadSnapshot extends HookDiscoveryResult {
 
 type ParsedHooksFileResult = ParsedHooksFile & { readonly files: string[] }
 type DiscoveredHooksFileSnapshot =
-  | { readonly filePath: string; readonly content: string }
-  | { readonly filePath: string; readonly readError: string }
+  | { readonly scope: HookConfigSourceScope; readonly filePath: string; readonly content: string }
+  | { readonly scope: HookConfigSourceScope; readonly filePath: string; readonly readError: string }
 
 export function parseHooksFile(filePath: string, content: string): ParsedHooksFileResult {
   const document = YAML.parseDocument(content)
@@ -165,8 +177,8 @@ export function loadHooksFile(filePath: string, readFile: (filePath: string) => 
 }
 
 export function loadDiscoveredHooks(options: HookLoadOptions = {}): HookDiscoveryResult {
-  const files = discoverHookConfigPaths(options)
-  return loadDiscoveredHooksFromFiles(files, options)
+  const entries = discoverHookConfigEntries(options)
+  return loadDiscoveredHooksFromFiles(entries, options)
 }
 
 // P1 #10 fix: cache the last parsed snapshot keyed on a cheap stat-based
@@ -180,7 +192,8 @@ interface CachedSnapshot {
 const snapshotCache = new Map<string, CachedSnapshot>()
 
 export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): HookLoadSnapshot {
-  const files = discoverHookConfigPaths(options)
+  const entries = discoverHookConfigEntries(options)
+  const files = entries.map((entry) => entry.filePath)
   const fingerprintSignature = computeFingerprintSignature(files)
   const cacheKey = files.join("\0")
   const cached = snapshotCache.get(cacheKey)
@@ -188,7 +201,7 @@ export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): Hook
     return { ...cached.result, signature: cached.signature }
   }
 
-  const snapshots = snapshotDiscoveredHookFiles(files, options.readFile ?? defaultReadFile)
+  const snapshots = snapshotDiscoveredHookFiles(entries, options.readFile ?? defaultReadFile)
   const result = loadDiscoveredHooksFromSnapshots(snapshots)
   snapshotCache.set(cacheKey, { signature: fingerprintSignature, result })
   return { ...result, signature: fingerprintSignature }
@@ -207,9 +220,9 @@ function computeFingerprintSignature(files: readonly string[]): string {
   return parts.join("\n")
 }
 
-function loadDiscoveredHooksFromFiles(files: string[], options: HookLoadOptions): HookDiscoveryResult {
+function loadDiscoveredHooksFromFiles(entries: DiscoveredHookConfigPath[], options: HookLoadOptions): HookDiscoveryResult {
   const readFile = options.readFile ?? defaultReadFile
-  const snapshots = snapshotDiscoveredHookFiles(files, readFile)
+  const snapshots = snapshotDiscoveredHookFiles(entries, readFile)
 
   return loadDiscoveredHooksFromSnapshots(snapshots)
 }
@@ -217,6 +230,7 @@ function loadDiscoveredHooksFromFiles(files: string[], options: HookLoadOptions)
 function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFileSnapshot[]): HookDiscoveryResult {
   const hooks = new Map<HookConfig["event"], HookConfig[]>()
   const errors: HookValidationError[] = []
+  const sources: HookSourceSummary[] = []
 
   for (const snapshot of snapshots) {
     const result = loadSnapshotHooksFile(snapshot)
@@ -226,17 +240,25 @@ function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFil
     mergeHookMapsInto(hooks, result.hooks)
     errors.push(...resolved.errors)
     errors.push(...result.errors)
+    sources.push({
+      scope: snapshot.scope,
+      filePath: snapshot.filePath,
+      hookCount: countHookConfigs(result.hooks),
+    })
   }
 
-  return { hooks, errors, files: snapshots.map((snapshot) => snapshot.filePath) }
+  return { hooks, errors, files: snapshots.map((snapshot) => snapshot.filePath), sources }
 }
 
-function snapshotDiscoveredHookFiles(files: readonly string[], readFile: (filePath: string) => string): DiscoveredHooksFileSnapshot[] {
-  return files.map((filePath) => {
+function snapshotDiscoveredHookFiles(
+  entries: readonly DiscoveredHookConfigPath[],
+  readFile: (filePath: string) => string,
+): DiscoveredHooksFileSnapshot[] {
+  return entries.map(({ scope, filePath }) => {
     try {
-      return { filePath, content: readFile(filePath) }
+      return { scope, filePath, content: readFile(filePath) }
     } catch (error) {
-      return { filePath, readError: formatHookReadError(error) }
+      return { scope, filePath, readError: formatHookReadError(error) }
     }
   })
 }
@@ -252,6 +274,29 @@ function loadSnapshotHooksFile(snapshot: DiscoveredHooksFileSnapshot): ParsedHoo
     errors: [{ code: "invalid_frontmatter", filePath: snapshot.filePath, message: snapshot.readError }],
     files: [snapshot.filePath],
   }
+}
+
+export interface HookLoadSummary {
+  readonly global: number
+  readonly project: number
+  readonly total: number
+}
+
+export function summarizeHookSources(sources: readonly HookSourceSummary[]): HookLoadSummary {
+  const summary: HookLoadSummary = { global: 0, project: 0, total: 0 }
+
+  for (const source of sources) {
+    summary[source.scope] += source.hookCount
+  }
+
+  summary.total = summary.global + summary.project
+  return summary
+}
+
+export function formatHookLoadSummary(result: Pick<HookDiscoveryResult, "sources">): string {
+  const summary = summarizeHookSources(result.sources)
+  const label = summary.total === 1 ? "hook" : "hooks"
+  return `[pi-hooks] Loaded ${summary.total} ${label} (global: ${summary.global}, project: ${summary.project}).`
 }
 
 export function mergeHookMaps(...hookMaps: HookMap[]): HookMap {
@@ -887,6 +932,10 @@ function parseOverrideTarget(
 
 function flattenHookMap(hooks: HookMap): HookConfig[] {
   return Array.from(hooks.values()).flat()
+}
+
+function countHookConfigs(hooks: HookMap): number {
+  return flattenHookMap(hooks).length
 }
 
 function toHookMap(hooks: HookConfig[]): HookMap {
