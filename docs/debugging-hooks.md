@@ -34,6 +34,30 @@ Pretty tail helper:
 ./scripts/tail-hook-log.sh
 ```
 
+Filter by hook:
+
+```bash
+./scripts/tail-hook-log.sh --hook load-writer-skill-when-markdown-changes
+```
+
+Filter by event and session:
+
+```bash
+./scripts/tail-hook-log.sh --event session.idle --session abc123
+```
+
+Filter by log kind:
+
+```bash
+./scripts/tail-hook-log.sh --kind action_result --level info
+```
+
+See raw NDJSON after filtering:
+
+```bash
+./scripts/tail-hook-log.sh --hook load-writer-skill-when-markdown-changes --raw
+```
+
 ## What gets logged
 
 When debug logging is enabled, `pi-hooks` logs:
@@ -45,6 +69,8 @@ When debug logging is enabled, `pi-hooks` logs:
 - each action start/result
 - the exact prompt text queued by `tool:` actions
 - bash result status, exit code, duration, stdout, and stderr
+- exact skip reasons such as `matchesAnyPath_failed` or `scope_mismatch`
+- target session ids and prompt text for `tool:` follow-up injections
 
 ## Important note
 
@@ -54,6 +80,43 @@ That means:
 
 - `~/.pi/agent/sessions/*.jsonl` will not contain the full hook debug trail
 - the canonical hook log is `~/.pi/agent/logs/pi-hooks.ndjson`
+
+## Common debugging workflow
+
+For a hook like:
+
+```yaml
+- id: load-writer-skill-when-markdown-changes
+  event: session.idle
+  conditions:
+    - matchesAnyPath:
+        - "*.md"
+        - "**/*.md"
+  actions:
+    - tool:
+        name: read
+        args:
+          path: /Users/me/.pi/agent/skills/writer/SKILL.md
+```
+
+Run:
+
+```bash
+PI_HOOKS_DEBUG=1 pi
+```
+
+Then in another terminal:
+
+```bash
+./scripts/tail-hook-log.sh --hook load-writer-skill-when-markdown-changes
+```
+
+You should be able to see:
+
+- whether the hook was considered
+- whether it matched or skipped
+- the skip reason if it did not match
+- the exact prompt text queued by the `tool:` action if it matched
 
 ## Useful environment variables
 
