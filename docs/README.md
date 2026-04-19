@@ -7,6 +7,7 @@
 - [`setup.md`](./setup.md) — install the extension, choose hook file locations, and trust project hooks safely
 - [`hooks-reference.md`](./hooks-reference.md) — exact hook fields, events, conditions, actions, and PI-specific behavior
 - [`agent-authoring-guide.md`](./agent-authoring-guide.md) — practical rules for people and agents writing `hooks.yaml`
+- [`debugging-hooks.md`](./debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
 - [`examples/`](./examples/) — copy-paste examples for each major capability
 
 ## What pi-hooks can do today
