@@ -59,6 +59,14 @@ If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), start
 
 - [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — auto-commit every `write`/`edit` through a Python snapshot pipeline. Includes a ready-to-paste `hooks.yaml`.
 
+## Detailed docs
+
+- [`docs/README.md`](./docs/README.md) — documentation entry point
+- [`docs/setup.md`](./docs/setup.md) — installation, config paths, trust, reloads
+- [`docs/hooks-reference.md`](./docs/hooks-reference.md) — exact hook fields, events, conditions, actions, and PI-specific behavior
+- [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) — practical rules for people and agents writing `hooks.yaml`
+- [`docs/examples/`](./docs/examples/) — copy-paste examples for each major hook pattern
+
 ---
 
 ## Configuration
@@ -77,7 +85,7 @@ The extension resolves one global config and one project-level config.
 1. `<project>/.pi/hook/hooks.yaml` (preferred)
 2. `<project>/.pi/hooks.yaml`
 
-One global config and one project config are loaded at most. Within each scope, the first existing path wins. The project file can override the global one.
+One global config and one project config are loaded at most. Within each scope, the first existing path wins. Both files stay active unless the later file explicitly replaces or disables earlier hooks by `id` with `override:` / `disable:`.
 
 On first load, pi-hooks prints a short summary so you can see what was picked up:
 
@@ -106,10 +114,10 @@ Untrusted project hook files trigger a one-time warning explaining how to opt in
 
 ```yaml
 hooks:
-  # Log every file the agent writes/edits.
+  # Log every synthesized file.changed payload for later inspection.
   - event: file.changed
     actions:
-      - bash: 'echo "[hook] changed: $(jq -r ".changes[].path" <<<"$(cat)")"'
+      - bash: 'mkdir -p .pi-hook-logs && cat >> .pi-hook-logs/file-changed.ndjson'
 
   # Notify when the agent finishes a turn.
   - event: session.idle
@@ -129,7 +137,7 @@ hooks:
 | `tool.before.*` | Before every tool call |
 | `tool.after.<name>` | After any tool call |
 | `tool.after.*` | After every tool call |
-| `file.changed` | Synthesized from `write`/`edit` tool results |
+| `file.changed` | Synthesized from recognized mutation tool results; on stock PI that includes `write`, `edit`, and some `bash` commands such as `mv`, `rm`, `touch`, and `mkdir` |
 | `session.idle` | When the agent loop ends and no messages are pending |
 | `session.created` | On new session or PI startup |
 | `session.deleted` | On session shutdown or session switch (lossy — see Unsupported) |
@@ -144,9 +152,8 @@ conditions:
   - matchesAnyPath:
       - "src/**/*.ts"
       - "*.json"
-  - matchesAllPaths:
-      - "src/**"
-      - "**/*.ts"
+  - matchesAllPaths: "src/**"
+  - matchesAllPaths: "**/*.ts"
 ```
 
 ### Actions
@@ -190,12 +197,12 @@ Setting `async: true` enqueues the hook for serialized execution instead of runn
 ### scope
 
 ```yaml
-scope: main    # bash actions only — fires only in the root/main session
+scope: main    # fires only in the root/main session
 scope: child   # fires only in child sessions (filters via session ancestry)
 scope: all     # default — fires in all sessions
 ```
 
-`scope: main` is only supported for bash actions. Using it with other action types is a hard load error.
+`scope` filters where the hook itself runs. This is separate from `runIn`, which is compatibility metadata for action targeting.
 
 ---
 
