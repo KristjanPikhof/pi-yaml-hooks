@@ -1264,6 +1264,58 @@ function resolveToolArgs(
   return pendingArgs ?? eventArgs ?? {}
 }
 
+function getHookIdentifier(hook: HookConfig): string {
+  return hook.id ?? `${hook.source.filePath}#hooks[${hook.source.index}]`
+}
+
+function formatHookSource(hook: HookConfig): string {
+  return `${hook.source.filePath}#hooks[${hook.source.index}]`
+}
+
+function getActionType(action: HookAction): string {
+  if ("command" in action) return "command"
+  if ("tool" in action) return "tool"
+  if ("bash" in action) return "bash"
+  if ("notify" in action) return "notify"
+  if ("confirm" in action) return "confirm"
+  return "setStatus"
+}
+
+function getActionDetails(action: HookAction): Record<string, unknown> {
+  if ("command" in action) {
+    return { command: action.command }
+  }
+
+  if ("tool" in action) {
+    return { name: action.tool.name, args: action.tool.args ?? {} }
+  }
+
+  if ("bash" in action) {
+    const config = typeof action.bash === "string" ? { command: action.bash } : action.bash
+    return { command: config.command, timeout: config.timeout }
+  }
+
+  if ("notify" in action) {
+    const config = typeof action.notify === "string" ? { text: action.notify } : action.notify
+    return { text: config.text, level: config.level ?? "info" }
+  }
+
+  if ("confirm" in action) {
+    return { title: action.confirm.title, message: action.confirm.message }
+  }
+
+  const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
+  return { text: config.text }
+}
+
+function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, string>> {
+  return changes.map((change) =>
+    change.operation === "rename"
+      ? { operation: change.operation, fromPath: change.fromPath, toPath: change.toPath }
+      : { operation: change.operation, path: change.path },
+  )
+}
+
 function logHookFailure(event: HookEvent, filePath: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[pi-hooks] ${event} hook from ${filePath} failed: ${message}`)
