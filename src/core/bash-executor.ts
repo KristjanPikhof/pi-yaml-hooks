@@ -355,34 +355,15 @@ export function resolveExecutionContext(
     cacheExecutionContext(normalizedProjectDir, context)
     return context
   } catch {
-    const context = { worktreeDir: normalizedProjectDir, resolvedFromGit: false }
-    cacheExecutionContext(normalizedProjectDir, context)
-    return context
+    return { worktreeDir: normalizedProjectDir, resolvedFromGit: false }
   }
 }
 
 function getCachedExecutionContext(projectDir: string): ExecutionContext | undefined {
-  const direct = executionContextCache.get(projectDir)
-  if (direct) {
-    return direct
-  }
-
-  for (const context of executionContextCache.values()) {
-    if (context.resolvedFromGit && isWithinDir(projectDir, context.worktreeDir)) {
-      executionContextCache.set(projectDir, context)
-      return context
-    }
-  }
-
-  return undefined
+  return executionContextCache.get(projectDir)
 }
 
 function cacheExecutionContext(projectDir: string, context: ExecutionContext): void {
   executionContextCache.set(projectDir, context)
   executionContextCache.set(context.worktreeDir, context)
-}
-
-function isWithinDir(candidate: string, dir: string): boolean {
-  const relativePath = path.relative(dir, candidate)
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
 }
