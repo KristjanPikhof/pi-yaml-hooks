@@ -277,6 +277,62 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "before_agent_start warns when current hook files are invalid",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify:
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        const result = await harness.beforeAgentStart()
+
+        return result &&
+            typeof result === "object" &&
+            "systemPrompt" in result &&
+            typeof result.systemPrompt === "string" &&
+            result.systemPrompt.includes("validation issue") &&
+            result.systemPrompt.includes("/hooks-validate")
+          ? { ok: true }
+          : { ok: false, detail: `result=${JSON.stringify(result)}` }
+      }),
+  },
+  {
+    name: "before_agent_start can be disabled by environment variable",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const previous = process.env.PI_HOOKS_PROMPT_AWARENESS
+        process.env.PI_HOOKS_PROMPT_AWARENESS = "0"
+        try {
+          writeProjectHooks(
+            projectDir,
+            `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+          )
+
+          const harness = new FakePiHarness(projectDir)
+          harness.register()
+          const result = await harness.beforeAgentStart()
+
+          return result === undefined
+            ? { ok: true }
+            : { ok: false, detail: `result=${JSON.stringify(result)}` }
+        } finally {
+          if (previous === undefined) delete process.env.PI_HOOKS_PROMPT_AWARENESS
+          else process.env.PI_HOOKS_PROMPT_AWARENESS = previous
+        }
+      }),
+  },
+  {
     name: "untrusted project hooks do not load through the lifecycle harness",
     run: async () =>
       await withIsolatedProject(false, async (projectDir) => {
