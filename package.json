@@ -24,7 +24,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "bun src/pi/unsupported.test.ts && bun src/pi/ux-actions.test.ts && bun src/pi/config-paths.test.ts && bun src/pi/logger.test.ts && bun src/pi/logging.test.ts"
+    "test": "bun src/pi/unsupported.test.ts && bun src/pi/ux-actions.test.ts && bun src/pi/config-paths.test.ts && bun src/pi/logger.test.ts && bun src/pi/logging.test.ts && bun src/pi/adapter.test.ts"
   },
   "repository": {
     "type": "git",
