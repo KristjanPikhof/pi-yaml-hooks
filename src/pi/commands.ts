@@ -70,6 +70,8 @@ export function registerCommands(pi: ExtensionAPI): void {
           lines.push(`Project hook file is untrusted and has validation errors: ${validation.project.path}`)
           lines.push(...validation.project.errors.map(formatValidationError))
         }
+      } else if (!validation.project.exists) {
+        lines.push("No project hook file is present for the current repo/worktree scope.")
       }
 
       const level = validation.active.errors.length > 0 || validation.project.errors.length > 0 ? "warning" : "info"

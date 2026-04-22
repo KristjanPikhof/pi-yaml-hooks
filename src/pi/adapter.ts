@@ -156,7 +156,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
       sendHookDiagnostics(pi, {
         title: "Hook configuration issues",
         level: "warning",
-        content: `Hook loading found ${loaded.errors.length} validation issue(s). Valid hooks stayed active.`,
+        content: `Hook loading found ${loaded.errors.length} validation issue(s). Valid hooks, if any, stayed active.`,
         sections: [
           {
             label: "Files",
