@@ -116,6 +116,10 @@ class FakePiHarness {
     await this.emit("tool_result", { toolName, toolCallId, input })
   }
 
+  async userBash(command: string, excludeFromContext = false): Promise<unknown> {
+    return await this.emit("user_bash", { type: "user_bash", command, excludeFromContext, cwd: this.projectDir })
+  }
+
   async command(name: string, args = ""): Promise<void> {
     const handler = this.commands.get(name)
     if (!handler) {
@@ -356,6 +360,73 @@ const cases: Case[] = [
         return harness.notifications.length === 0
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "opt-in user_bash interception blocks destructive commands via pre-bash hooks",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const previous = process.env.PI_HOOKS_ENABLE_USER_BASH
+        process.env.PI_HOOKS_ENABLE_USER_BASH = "1"
+        try {
+          writeProjectHooks(
+            projectDir,
+            `hooks:
+  - event: tool.before.bash
+    actions:
+      - confirm:
+          title: "Dangerous command"
+          message: "Run user bash command?"
+`,
+          )
+
+          const harness = new FakePiHarness(projectDir)
+          harness.hasUI = false
+          harness.register()
+          const result = await harness.userBash("rm -rf .")
+
+          return result &&
+              typeof result === "object" &&
+              "result" in result &&
+              typeof result.result === "object" &&
+              result.result !== null &&
+              "cancelled" in result.result &&
+              result.result.cancelled === true &&
+              "output" in result.result &&
+              typeof result.result.output === "string" &&
+              result.result.output.includes("user_bash blocked")
+            ? { ok: true }
+            : { ok: false, detail: `result=${JSON.stringify(result)}` }
+        } finally {
+          if (previous === undefined) delete process.env.PI_HOOKS_ENABLE_USER_BASH
+          else process.env.PI_HOOKS_ENABLE_USER_BASH = previous
+        }
+      }),
+  },
+  {
+    name: "user_bash interception is disabled by default",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        delete process.env.PI_HOOKS_ENABLE_USER_BASH
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: tool.before.bash
+    actions:
+      - confirm:
+          title: "Dangerous command"
+          message: "Run user bash command?"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.hasUI = false
+        harness.register()
+        const result = await harness.userBash("rm -rf .")
+
+        return result === undefined
+          ? { ok: true }
+          : { ok: false, detail: `result=${JSON.stringify(result)}` }
       }),
   },
   {
