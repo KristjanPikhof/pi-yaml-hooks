@@ -18,7 +18,7 @@
 - Show UI notifications and status-bar entries when PI has a UI surface
 - Send follow-up prompts back into the current PI session with `tool:` actions
 - React to session lifecycle events: `session.created`, `session.idle`, and `session.deleted`
-- React to `file.changed`, which PI synthesizes after recognized file mutations
+- React to `file.changed`, which PI synthesizes after recognized file mutations, including `cp`/`git cp`
 - Filter hooks by file extension or glob patterns
 - Restrict hooks to `all`, `main`, or `child` sessions
 - Queue selected hooks asynchronously so they do not block the agent turn
@@ -32,7 +32,7 @@ These are the details that matter most when authoring hooks:
 - Only one global root config and one project root config are discovered.
 - Each root can import more hook files before its own hooks load.
 - Later files stay compatible with the same explicit `override:` / `disable:` behavior by `id`.
-- Project hook files are ignored until the project is trusted.
+- Project hook files are ignored until the repo/worktree trust anchor is trusted.
 - `command:` actions are rejected at load time on PI.
 - `tool:` does not imperatively invoke a tool; it sends a follow-up prompt to the current session.
 - `confirm:` blocks only on `tool.before.*` hooks.

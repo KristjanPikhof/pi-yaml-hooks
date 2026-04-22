@@ -124,7 +124,7 @@ PI_HOOKS_TRUST_PROJECT=1 pi
 
 ### Persistent trust
 
-Add the absolute project path to:
+Add the absolute repo/worktree trust anchor path to:
 
 ```text
 ~/.pi/agent/trusted-projects.json
@@ -138,7 +138,9 @@ Example:
 ]
 ```
 
-If a project hook file exists but the project is not trusted, `pi-hooks` prints a warning once and skips that file.
+If a project hook file exists but the repo/worktree is not trusted, `pi-hooks` prints a warning once and skips that file.
+
+For nested packages, monorepos, and linked worktrees, `pi-hooks` resolves the nearest project hook root up to the current git worktree root and evaluates trust against that repo/worktree anchor, not just the current cwd string.
 
 ## How loading works
 

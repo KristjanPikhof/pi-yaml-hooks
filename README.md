@@ -90,7 +90,7 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 
 - `pi-hooks` now targets the Pi 0.68.1 extension surface and declares `@mariozechner/pi-coding-agent ^0.68.1` as its peer dependency.
 - The supported native surfaces are the current tool and session lifecycle events, `pi.sendUserMessage`, and `ctx.ui.notify` / `ctx.ui.confirm` / `ctx.ui.setStatus`.
-- Known PI limitations remain explicit: `command:` actions are still rejected, non-bash cross-session targeting is still unavailable, and `behavior: stop` only blocks pre-tool hooks.
+- Known PI limitations remain explicit: `command:` actions are still rejected, non-bash cross-session targeting is still unavailable, and `action: stop` only blocks pre-tool hooks.
 - This release also tightens default failure reporting so hook delivery and adapter dispatch problems are visible without requiring debug mode.
 
 ---
@@ -167,7 +167,7 @@ hooks:
 | `tool.before.*` | Before every tool call |
 | `tool.after.<name>` | After any tool call |
 | `tool.after.*` | After every tool call |
-| `file.changed` | Synthesized from recognized mutation tool results; on stock PI that includes `write`, `edit`, and some `bash` commands such as `mv`, `rm`, `touch`, and `mkdir` |
+| `file.changed` | Synthesized from recognized mutation tool results; on stock PI that includes `write`, `edit`, and some `bash` commands such as `mv`, `rm`, `cp`, `touch`, and `mkdir` |
 | `session.idle` | When the agent loop ends and no messages are pending |
 | `session.created` | On new session or PI startup |
 | `session.deleted` | On session shutdown or session switch (lossy — see Unsupported) |
@@ -278,7 +278,7 @@ For valid PI configurations, `tool:` actions run as current-session follow-up pr
 
 If `pi.sendUserMessage` fails, the hook now reports a normal error to stderr by default. `PI_HOOKS_DEBUG=1` is only needed for deeper trace-level diagnostics.
 
-### `behavior: stop` — only for pre-tool hooks
+### `action: stop` — only for pre-tool hooks
 
 PI does not expose an extension-side abort outside `tool_call`. `action: stop` on a `tool.before.*` hook reaches PI as a `block: true` response (the tool does not run). On `tool.after.*` or `session.idle`, abort is a no-op (logged when `PI_HOOKS_DEBUG=1`).
 
@@ -311,7 +311,7 @@ Set `PI_HOOKS_ENABLE_USER_BASH=1` to route human `!` / `!!` shell commands throu
 2. Confirm `bash` is on `$PATH`: `which bash`. Override with `PI_HOOKS_BASH_EXECUTABLE=/path/to/bash`.
 3. Start PI and look for the startup summary: `[pi-hooks] Loaded N hooks (global: G, project: P).`
 4. If you need deeper diagnostics, run with debug logging: `PI_HOOKS_DEBUG=1 pi`.
-5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the project path is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
+5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the repo/worktree trust anchor is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
 6. If a `notify:` / `confirm:` / `setStatus:` action is degraded, PI is in headless mode (`ctx.hasUI === false`). `notify` and `setStatus` warn once per adapter/runtime instance; `confirm` fails closed. Bash actions still run.
 
 **Windows:** Unsupported. The extension logs one warning and registers no handlers (the bash executor requires a POSIX `bash`).
@@ -367,7 +367,7 @@ If both PI-native variants exist in the same scope, the `hook/hooks.yaml` locati
 | `runIn: main` on non-bash actions | `bash:` equivalent or remove `runIn` |
 | `tool.before.multiedit` / `patch` / `apply_patch` events | `tool.before.edit` or `tool.before.write` |
 
-**New in PI:** `notify:`, `confirm:`, `setStatus:` actions wired to `ctx.ui`. `/snapshot-status`, `/snapshot-flush` slash commands. Live queue-depth status widget.
+**New in PI:** `notify:`, `confirm:`, and `setStatus:` actions are wired to `ctx.ui`; `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, and `/hooks-tail-log` are built in; hook diagnostics can render as structured in-session messages. The snapshot worker remains an opt-in example, not a native slash-command feature.
 
 ---
 

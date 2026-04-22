@@ -34,7 +34,7 @@ Either run PI with one-session trust:
 PI_HOOKS_TRUST_PROJECT=1 pi
 ```
 
-Or add the project path to `~/.pi/agent/trusted-projects.json`.
+Or add the repo/worktree trust anchor to `~/.pi/agent/trusted-projects.json`.
 
 ## Disable instead of replace
 
