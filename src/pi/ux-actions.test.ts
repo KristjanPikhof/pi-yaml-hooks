@@ -25,6 +25,7 @@ import type {
   HookSetStatusAction,
   HostAdapter,
 } from "../core/types.js"
+import { createHostAdapter } from "./adapter.js"
 
 interface ParserCase {
   readonly name: string
@@ -275,6 +276,58 @@ const runtimeCases: RuntimeCase[] = [
       return records.length === 0
         ? { ok: true }
         : { ok: false, detail: `records=${JSON.stringify(records)}` }
+    },
+  },
+  {
+    name: "adapter notify reports degraded when PI UI is unavailable",
+    run: async () => {
+      const pi = { sendUserMessage: () => {} } as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(pi, "/tmp", () => undefined, () => ({ hasUI: false } as never))
+      const result = host.notify?.("hi", "warning")
+      return result && typeof result === "object" && "status" in result && result.status === "degraded"
+        ? { ok: true }
+        : { ok: false, detail: `result=${JSON.stringify(result)}` }
+    },
+  },
+  {
+    name: "adapter sendPrompt throws when sendUserMessage fails",
+    run: async () => {
+      const pi = {
+        sendUserMessage: () => {
+          throw new Error("send failed")
+        },
+      } as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(pi, "/tmp", () => undefined, () => undefined)
+      try {
+        host.sendPrompt("s1", "hello")
+        return { ok: false, detail: "sendPrompt did not throw" }
+      } catch (error) {
+        return error instanceof Error && /sendUserMessage failed: send failed/i.test(error.message)
+          ? { ok: true }
+          : { ok: false, detail: String(error) }
+      }
+    },
+  },
+  {
+    name: "adapter setStatus throws when PI UI status update fails",
+    run: async () => {
+      const pi = { sendUserMessage: () => {} } as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(pi, "/tmp", () => undefined, () => ({
+        hasUI: true,
+        ui: {
+          setStatus: () => {
+            throw new Error("status failed")
+          },
+        },
+      } as never))
+      try {
+        host.setStatus?.("hook#1", "busy")
+        return { ok: false, detail: "setStatus did not throw" }
+      } catch (error) {
+        return error instanceof Error && /ui\.setStatus failed: status failed/i.test(error.message)
+          ? { ok: true }
+          : { ok: false, detail: String(error) }
+      }
     },
   },
 ]
