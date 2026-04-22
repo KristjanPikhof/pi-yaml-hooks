@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 import { getPiHooksLogger } from "./logger.js"
 
@@ -10,6 +11,9 @@ export interface HookConfigDiscoveryOptions {
   readonly homeDir?: string
   readonly appDataDir?: string
   readonly exists?: (filePath: string) => boolean
+  readonly readFile?: (filePath: string) => string
+  readonly realpath?: (filePath: string) => string
+  readonly resolveGitWorktreeRoot?: (cwd: string) => string | undefined
 }
 
 export interface HookConfigPaths {
@@ -24,6 +28,17 @@ export interface DiscoveredHookConfigPath {
   readonly filePath: string
 }
 
+export interface ProjectHookResolution {
+  readonly cwd: string
+  readonly anchorDir: string
+  readonly canonicalCwd: string
+  readonly canonicalAnchorDir: string
+  readonly worktreeRoot?: string
+  readonly discoveredProjectRoot?: string
+  readonly projectConfigPath?: string
+  readonly trusted: boolean
+}
+
 /**
  * Resolve the primary global and project config paths. Only PI-native
  * locations are considered:
@@ -35,11 +50,11 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
   const platform = options.platform ?? process.platform
   const homeDir = options.homeDir ?? resolveHomeDir()
   const appDataDir = options.appDataDir ?? process.env.APPDATA
-  const projectDir = options.projectDir
+  const project = resolveProjectHookResolution(options)
 
   return {
     global: resolveGlobalConfigPath(exists, platform, homeDir, appDataDir),
-    project: resolveProjectConfigPath(exists, projectDir),
+    project: project?.projectConfigPath,
   }
 }
 
@@ -63,7 +78,7 @@ export function discoverHookConfigEntries(options: HookConfigDiscoveryOptions = 
   const platform = options.platform ?? process.platform
   const homeDir = options.homeDir ?? resolveHomeDir()
   const appDataDir = options.appDataDir ?? process.env.APPDATA
-  const projectDir = options.projectDir
+  const project = resolveProjectHookResolution(options)
 
   const entries: DiscoveredHookConfigPath[] = []
   const globalPath = pickFirstExisting(globalCandidatePaths(platform, homeDir, appDataDir), exists)
@@ -71,15 +86,12 @@ export function discoverHookConfigEntries(options: HookConfigDiscoveryOptions = 
     entries.push({ scope: "global", filePath: globalPath })
   }
 
-  if (projectDir) {
-    const candidate = pickFirstExisting(projectCandidatePaths(projectDir), exists)
-    if (candidate) {
-      if (isProjectTrusted(projectDir, homeDir)) {
-        entries.push({ scope: "project", filePath: candidate })
+  if (project?.projectConfigPath) {
+      if (project.trusted) {
+        entries.push({ scope: "project", filePath: project.projectConfigPath })
       } else {
-        warnUntrustedProjectOnce(projectDir, candidate)
+        warnUntrustedProjectOnce(project.anchorDir, project.projectConfigPath)
       }
-    }
   }
 
   return entries
@@ -107,15 +119,54 @@ function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
   })
 }
 
-function isProjectTrusted(projectDir: string, homeDir: string): boolean {
+export function resolveProjectHookResolution(options: HookConfigDiscoveryOptions = {}): ProjectHookResolution | undefined {
+  const projectDir = options.projectDir
+  if (!projectDir) {
+    return undefined
+  }
+
+  const exists = options.exists ?? existsSync
+  const homeDir = options.homeDir ?? resolveHomeDir()
+  const readFile = options.readFile ?? ((filePath: string) => readFileSync(filePath, "utf8"))
+  const realpath = options.realpath ?? defaultRealpath
+  const cwd = path.resolve(projectDir)
+  const canonicalCwd = canonicalizePath(cwd, realpath)
+  const worktreeRoot = resolveWorktreeRoot(cwd, options.resolveGitWorktreeRoot, realpath)
+  const discoveredProjectRoot = findNearestProjectRoot(cwd, worktreeRoot, exists, realpath)
+  const projectConfigPath = discoveredProjectRoot
+    ? pickFirstExisting(projectCandidatePaths(discoveredProjectRoot), exists)
+    : undefined
+  const anchorDir = worktreeRoot ?? discoveredProjectRoot ?? cwd
+  const canonicalAnchorDir = canonicalizePath(anchorDir, realpath)
+
+  return {
+    cwd,
+    anchorDir,
+    canonicalCwd,
+    canonicalAnchorDir,
+    ...(worktreeRoot ? { worktreeRoot } : {}),
+    ...(discoveredProjectRoot ? { discoveredProjectRoot } : {}),
+    ...(projectConfigPath ? { projectConfigPath } : {}),
+    trusted: isProjectTrusted(canonicalAnchorDir, homeDir, readFile, realpath),
+  }
+}
+
+function isProjectTrusted(
+  canonicalAnchorDir: string,
+  homeDir: string,
+  readFile: (filePath: string) => string,
+  realpath: (filePath: string) => string,
+): boolean {
   if (process.env.PI_HOOKS_TRUST_PROJECT === "1") return true
   const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
   try {
     if (!existsSync(trustFile)) return false
-    const raw = readFileSync(trustFile, "utf8")
+    const raw = readFile(trustFile)
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return false
-    return parsed.some((entry) => typeof entry === "string" && path.resolve(entry) === path.resolve(projectDir))
+    return parsed.some(
+      (entry) => typeof entry === "string" && canonicalizePath(entry, realpath) === canonicalAnchorDir,
+    )
   } catch {
     return false
   }
@@ -128,18 +179,6 @@ function resolveGlobalConfigPath(
   appDataDir: string | undefined,
 ): string {
   const candidates = globalCandidatePaths(platform, homeDir, appDataDir)
-  return pickFirstExisting(candidates, exists) ?? candidates[0]
-}
-
-function resolveProjectConfigPath(
-  exists: (filePath: string) => boolean,
-  projectDir: string | undefined,
-): string | undefined {
-  if (!projectDir) {
-    return undefined
-  }
-
-  const candidates = projectCandidatePaths(projectDir)
   return pickFirstExisting(candidates, exists) ?? candidates[0]
 }
 
@@ -168,6 +207,71 @@ function projectCandidatePaths(projectDir: string): string[] {
     // PI-native flat project config: <projectDir>/.pi/hooks.yaml
     path.join(projectDir, ".pi", "hooks.yaml"),
   ]
+}
+
+function findNearestProjectRoot(
+  cwd: string,
+  worktreeRoot: string | undefined,
+  exists: (filePath: string) => boolean,
+  realpath: (filePath: string) => string,
+): string | undefined {
+  for (const dir of ancestorDirs(cwd, worktreeRoot, realpath)) {
+    if (pickFirstExisting(projectCandidatePaths(dir), exists)) {
+      return dir
+    }
+  }
+
+  return undefined
+}
+
+function* ancestorDirs(cwd: string, stopDir: string | undefined, realpath: (filePath: string) => string): Iterable<string> {
+  const canonicalStopDir = stopDir ? canonicalizePath(stopDir, realpath) : undefined
+  let current = path.resolve(cwd)
+
+  while (true) {
+    yield current
+    if (canonicalStopDir && canonicalizePath(current, realpath) === canonicalStopDir) {
+      return
+    }
+    const parent = path.dirname(current)
+    if (parent === current) {
+      return
+    }
+    current = parent
+  }
+}
+
+function resolveWorktreeRoot(
+  cwd: string,
+  resolveGitWorktreeRootFn: ((cwd: string) => string | undefined) | undefined,
+  realpath: (filePath: string) => string,
+): string | undefined {
+  const worktreeRoot = resolveGitWorktreeRootFn?.(cwd) ?? defaultResolveGitWorktreeRoot(cwd)
+  return worktreeRoot ? canonicalizePath(worktreeRoot, realpath) : undefined
+}
+
+function defaultResolveGitWorktreeRoot(cwd: string): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function canonicalizePath(filePath: string, realpath: (filePath: string) => string): string {
+  try {
+    return path.resolve(realpath(filePath))
+  } catch {
+    return path.resolve(filePath)
+  }
+}
+
+function defaultRealpath(filePath: string): string {
+  return realpathSync.native(filePath)
 }
 
 function pickFirstExisting(
