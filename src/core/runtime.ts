@@ -182,6 +182,7 @@ export interface HooksRuntime {
     input: ToolExecuteAfterInput,
     output?: unknown,
   ) => Promise<void>
+  readonly "user.bash.before": (input: ToolExecuteBeforeInput, output: ToolExecuteBeforeOutput) => Promise<void>
   readonly event: (envelope: RuntimeEventEnvelope) => Promise<void>
 }
 
@@ -408,6 +409,43 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
         toolName: eventInput.tool,
         details: { callID: eventInput.callID, files, changes: summarizeChanges(changes) },
       })
+    },
+
+    "user.bash.before": async (
+      eventInput: ToolExecuteBeforeInput,
+      eventOutput: ToolExecuteBeforeOutput,
+    ): Promise<void> => {
+      const activeHooks = refreshHooks()
+      const sessionID = eventInput.sessionID
+      if (!sessionID) {
+        return
+      }
+
+      const toolArgs = eventOutput.args ?? {}
+      const result = await dispatchToolHooks(
+        activeHooks,
+        state,
+        host,
+        projectDir,
+        runBashHook,
+        dispatchStates,
+        actionRecursionGuards,
+        asyncQueues,
+        "before",
+        eventInput.tool,
+        sessionID,
+        {
+          toolName: eventInput.tool,
+          toolArgs,
+        },
+      )
+
+      if (result.blocked) {
+        if (result.stopSession) {
+          await abortSession(host, sessionID)
+        }
+        throw new Error(result.blockReason ?? "Blocked by hook")
+      }
     },
 
     event: async ({ event }: RuntimeEventEnvelope): Promise<void> => {
