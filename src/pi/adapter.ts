@@ -42,7 +42,7 @@ import {
   type ToolExecuteBeforeInput,
   type ToolExecuteBeforeOutput,
 } from "../core/runtime.js";
-import type { HookNotifyLevel, HostAdapter } from "../core/types.js";
+import type { HookNotifyLevel, HostAdapter, HostDeliveryResult } from "../core/types.js";
 import { getRootSessionId } from "./session-lineage.js";
 
 /**
@@ -221,9 +221,12 @@ export function registerAdapter(pi: ExtensionAPI): void {
         };
         await runtime["tool.execute.after"](input);
       } catch (error) {
-        debugLog(
-          `tool.execute.after dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        reportDispatchFailure(logger, {
+          cwd: ctx.cwd,
+          event: `tool.after.${event.toolName}`,
+          sessionId,
+          details: { toolCallId: event.toolCallId },
+        }, error);
       } finally {
         callIdsToSessionIds.delete(event.toolCallId);
       }
@@ -247,9 +250,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
         event: { type: "session.idle", properties: { sessionID: sessionId } },
       });
     } catch (error) {
-      debugLog(
-        `session.idle dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.idle", sessionId }, error);
     }
   });
 
@@ -277,9 +278,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
         },
       });
     } catch (error) {
-      debugLog(
-        `session.created dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.created", sessionId }, error);
     }
   });
 
@@ -302,9 +301,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
         },
       });
     } catch (error) {
-      debugLog(
-        `session.deleted dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.deleted", sessionId }, error);
     }
   });
 
@@ -327,8 +324,15 @@ export function registerAdapter(pi: ExtensionAPI): void {
         },
       });
     } catch (error) {
-      debugLog(
-        `session.deleted (before_switch) dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
+      reportDispatchFailure(
+        logger,
+        {
+          cwd: ctx.cwd,
+          event: "session.deleted",
+          sessionId,
+          details: { trigger: "session_before_switch" },
+        },
+        error,
       );
     }
   });
@@ -337,7 +341,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
 /** Backwards-compat alias for the Phase 1 export name. */
 export const registerPhase1Adapter = registerAdapter;
 
-function createHostAdapter(
+export function createHostAdapter(
   pi: ExtensionAPI,
   projectDir: string,
   getSessionManager: () => ReadonlySessionManager | undefined,
@@ -371,7 +375,7 @@ function createHostAdapter(
     getRootSessionId: (sessionId: string): string => getRootSessionId(sessionId, getSessionManager()),
     runBash: (request: BashExecutionRequest): Promise<BashHookResult> =>
       executeBashHook({ ...request, projectDir: request.projectDir || projectDir }),
-    sendPrompt: (_sessionId: string, text: string): void => {
+    sendPrompt: (_sessionId: string, text: string): HostDeliveryResult => {
       // PI's sendUserMessage always targets the current session. For tool:
       // actions runIn: "current" this matches the runtime's intent; runIn:
       // "main" cannot be honoured from a subprocess-less extension and is
@@ -382,17 +386,17 @@ function createHostAdapter(
           cwd: projectDir,
           details: { text },
         });
+        return { status: "accepted" };
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         logger.error("host_send_prompt", "sendUserMessage failed.", {
           cwd: projectDir,
-          details: { text, error: error instanceof Error ? error.message : String(error) },
+          details: { text, error: message },
         });
-        debugLog(
-          `sendUserMessage failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        throw new Error(`sendUserMessage failed: ${message}`);
       }
     },
-    notify: (text: string, level?: HookNotifyLevel): void => {
+    notify: (text: string, level?: HookNotifyLevel): HostDeliveryResult => {
       // PI's ctx.ui.notify only supports "info" | "warning" | "error".
       // We collapse our "success" level into "info" so the YAML schema
       // stays aligned with common notification systems; if PI adds a
@@ -409,7 +413,11 @@ function createHostAdapter(
           });
           warnedNoNotify = true;
         }
-        return;
+        return {
+          status: "degraded",
+          reason: "ui_unavailable",
+          details: { text, level: level ?? "info" },
+        };
       }
       const piLevel: "info" | "warning" | "error" =
         level === "warning" || level === "error" ? level : "info";
@@ -419,12 +427,14 @@ function createHostAdapter(
           cwd: projectDir,
           details: { text, level: piLevel },
         });
+        return { status: "accepted" };
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         logger.error("host_notify", "UI notification failed.", {
           cwd: projectDir,
-          details: { text, level: piLevel, error: error instanceof Error ? error.message : String(error) },
+          details: { text, level: piLevel, error: message },
         });
-        debugLog(`ui.notify failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`ui.notify failed: ${message}`);
       }
     },
     confirm: async (options: { title?: string; message: string }): Promise<boolean> => {
@@ -470,7 +480,7 @@ function createHostAdapter(
         return false;
       }
     },
-    setStatus: (hookId: string, text: string): void => {
+    setStatus: (hookId: string, text: string): HostDeliveryResult => {
       const ctx = getContext();
       if (!ctx?.hasUI || typeof ctx.ui?.setStatus !== "function") {
         if (!warnedNoSetStatus) {
@@ -483,7 +493,11 @@ function createHostAdapter(
           });
           warnedNoSetStatus = true;
         }
-        return;
+        return {
+          status: "degraded",
+          reason: "ui_unavailable",
+          details: { hookId, text },
+        };
       }
       try {
         // PI clears a status slot when text is undefined. We expose a plain
@@ -494,15 +508,38 @@ function createHostAdapter(
           cwd: projectDir,
           details: { hookId, text },
         });
+        return { status: "accepted" };
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         logger.error("host_set_status", "Updating PI status surface failed.", {
           cwd: projectDir,
-          details: { hookId, text, error: error instanceof Error ? error.message : String(error) },
+          details: { hookId, text, error: message },
         });
-        debugLog(`ui.setStatus failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`ui.setStatus failed: ${message}`);
       }
     },
   };
+}
+
+export function reportDispatchFailure(
+  logger: ReturnType<typeof getPiHooksLogger>,
+  context: {
+    cwd: string;
+    event: string;
+    sessionId?: string;
+    details?: Record<string, unknown>;
+  },
+  error: unknown,
+): void {
+  const message = error instanceof Error ? error.message : String(error);
+  logger.error("adapter_dispatch", "PI adapter dispatch failed.", {
+    cwd: context.cwd,
+    event: context.event,
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+    details: { ...(context.details ?? {}), error: message },
+  });
+  // eslint-disable-next-line no-console
+  console.error(`[pi-hooks] ${context.event} dispatch failed: ${message}`);
 }
 
 function safeGetSessionId(sessionManager: ReadonlySessionManager | undefined): string | undefined {
