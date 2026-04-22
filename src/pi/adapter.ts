@@ -34,7 +34,7 @@ import path from "node:path";
 import { executeBashHook } from "../core/bash-executor.js";
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
 import { getPiHooksLogger } from "../core/logger.js";
-import { formatHookLoadSummary, loadDiscoveredHooks } from "../core/load-hooks.js";
+import { formatHookLoadSummary, loadDiscoveredHooksSnapshot } from "../core/load-hooks.js";
 import {
   createHooksRuntime,
   type HooksRuntime,
@@ -132,7 +132,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     const getLiveSessionManager = (): ReadonlySessionManager | undefined =>
       latestContexts.get(cwd)?.sessionManager;
     const host = createHostAdapter(pi, cwd, getLiveSessionManager, () => latestContexts.get(cwd));
-    const loaded = loadDiscoveredHooks({ projectDir: cwd });
+    const loaded = loadDiscoveredHooksSnapshot({ projectDir: cwd });
     if (loaded.errors.length > 0) {
       // eslint-disable-next-line no-console
       console.error(
@@ -160,7 +160,12 @@ export function registerAdapter(pi: ExtensionAPI): void {
       cwd,
       details: { files: loaded.files, summary, sources: loaded.sources },
     });
-    const runtime = createHooksRuntime(host, { directory: cwd, hooks: loaded.hooks });
+    const runtime = createHooksRuntime(host, {
+      directory: cwd,
+      hooks: loaded.hooks,
+      initialSignature: loaded.signature,
+      reloadDiscoveredHooks: true,
+    });
     runtimes.set(cwd, runtime);
     return runtime;
   }
