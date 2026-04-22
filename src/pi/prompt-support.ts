@@ -1,4 +1,4 @@
-import type { BeforeAgentStartEvent, BeforeAgentStartEventResult, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent"
+import type { BeforeAgentStartEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent"
 
 import { resolveProjectHookResolution } from "../core/config-paths.js"
 import { loadDiscoveredHooksSnapshot, summarizeHookSources } from "../core/load-hooks.js"
@@ -6,7 +6,7 @@ import { loadDiscoveredHooksSnapshot, summarizeHookSources } from "../core/load-
 const PROMPT_AWARENESS_DISABLE_ENV = "PI_HOOKS_PROMPT_AWARENESS"
 
 export function registerPromptSupport(pi: ExtensionAPI): void {
-  pi.on("before_agent_start", (event: BeforeAgentStartEvent, ctx: ExtensionContext): BeforeAgentStartEventResult | void => {
+  pi.on("before_agent_start", (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     const systemPrompt = buildHookAwarenessSystemPrompt(ctx)
     if (!systemPrompt) {
       return
