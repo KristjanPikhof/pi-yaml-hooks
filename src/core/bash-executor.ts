@@ -17,6 +17,7 @@ const KILL_GRACE_PERIOD_MS = 250
 const BASH_EXECUTABLE = process.env.PI_HOOKS_BASH_EXECUTABLE || process.env.OPENCODE_HOOKS_BASH_EXECUTABLE || "bash"
 const MAX_LOG_FIELD_LENGTH = 400
 const REDACTED = "[REDACTED]"
+const SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL = process.platform !== "win32"
 // P1 #9: cap captured stdout/stderr per hook invocation. A misbehaving hook
 // (e.g. `find / -type f`) would otherwise buffer arbitrarily large output
 // into the host process. Override via PI_HOOKS_MAX_OUTPUT_BYTES.
@@ -93,6 +94,7 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
       cwd: request.context.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL,
     })
 
     let stdout = ""
@@ -100,6 +102,7 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
     let timedOut = false
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
+    const timeoutCleanupNotes: string[] = []
 
     const finalize = (result: Omit<BashProcessResult, "durationMs">): void => {
       if (settled) {
@@ -120,9 +123,11 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
 
     const timeoutTimer = setTimeout(() => {
       timedOut = true
-      child.kill("SIGTERM")
+      const sigtermResult = signalTimedOutProcess(child, "SIGTERM")
+      timeoutCleanupNotes.push(...formatTimeoutCleanupLines(sigtermResult, timeout, "SIGTERM"))
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL")
+        const sigkillResult = signalTimedOutProcess(child, "SIGKILL")
+        timeoutCleanupNotes.push(...formatTimeoutCleanupLines(sigkillResult, timeout, "SIGKILL"))
       }, KILL_GRACE_PERIOD_MS)
     }, timeout)
 
@@ -150,12 +155,18 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
 
     child.on("close", (code, signal) => {
       const exitCode = timedOut ? TIMEOUT_EXIT_CODE : (code ?? TIMEOUT_EXIT_CODE)
-      const timeoutMessage = timedOut ? `Command timed out after ${timeout}ms` : undefined
+      const timeoutMessages = timedOut
+        ? [
+            `Command timed out after ${timeout}ms`,
+            ...timeoutCleanupNotes,
+            `Timeout cleanup: final result exitCode=${code ?? "none"} signal=${signal ?? "none"}`,
+          ]
+        : []
 
       finalize({
         command: request.command,
         stdout,
-        stderr: appendStderr(stderr, timeoutMessage),
+        stderr: appendStderrLines(stderr, timeoutMessages),
         exitCode,
         signal,
         timedOut,
@@ -174,6 +185,75 @@ function appendStderr(stderr: string, message?: string): string {
   }
 
   return `${stderr}${stderr.endsWith("\n") ? "" : "\n"}${message}`
+}
+
+function appendStderrLines(stderr: string, messages: readonly string[]): string {
+  if (messages.length === 0) {
+    return stderr
+  }
+
+  return messages.reduce((current, message) => appendStderr(current, message), stderr)
+}
+
+function signalTimedOutProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): {
+  readonly signal: NodeJS.Signals
+  readonly target: "process_group" | "process"
+  readonly targetPid?: number
+  readonly error?: string
+} {
+  const pid = child.pid ?? undefined
+  if (SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL && typeof pid === "number" && pid > 0) {
+    try {
+      process.kill(-pid, signal)
+      return { signal, target: "process_group", targetPid: pid }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      try {
+        child.kill(signal)
+        return { signal, target: "process", targetPid: pid, error: `process group kill failed: ${message}` }
+      } catch (fallbackError) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        return {
+          signal,
+          target: "process",
+          targetPid: pid,
+          error: `process group kill failed: ${message}; fallback process kill failed: ${fallbackMessage}`,
+        }
+      }
+    }
+  }
+
+  try {
+    child.kill(signal)
+    return { signal, target: "process", ...(pid ? { targetPid: pid } : {}) }
+  } catch (error) {
+    return {
+      signal,
+      target: "process",
+      ...(pid ? { targetPid: pid } : {}),
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function formatTimeoutCleanupLines(
+  result: {
+    readonly signal: NodeJS.Signals
+    readonly target: "process_group" | "process"
+    readonly targetPid?: number
+    readonly error?: string
+  },
+  timeout: number,
+  signal: NodeJS.Signals,
+): string[] {
+  const pidText = result.targetPid !== undefined ? ` ${result.targetPid}` : ""
+  const targetText = result.target === "process_group" ? `process group${pidText}` : `process${pidText}`
+  const action = signal === "SIGKILL" ? `escalated to ${signal}` : `sent ${signal}`
+  const lines = [`Timeout cleanup: ${action} to ${targetText} after ${timeout}ms timeout`]
+  if (result.error) {
+    lines.push(`Timeout cleanup: ${result.error}`)
+  }
+  return lines
 }
 
 function logBashOutcome(result: BashHookResult, request: BashExecutionRequest): void {
