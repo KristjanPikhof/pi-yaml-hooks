@@ -53,6 +53,8 @@ If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), start
 | `pi -e /path/to/pi-hooks/src/index.ts` | One-off / testing without touching the global extensions dir. |
 | Drop in `<project>/.pi/extensions/pi-hooks.ts` | Project-local install. |
 
+Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if a reload fails, `pi-hooks` keeps the last known good hook set and logs the error.
+
 ---
 
 ## Examples (opt-in via `hooks.yaml`)
