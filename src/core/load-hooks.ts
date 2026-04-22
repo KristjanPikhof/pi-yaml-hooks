@@ -189,7 +189,7 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
   return {
     hooks,
     overrides,
-    errors,
+    errors: dedupeValidationErrors(errors),
     ...(piDiagnostics.advisories.length > 0 ? { advisories: piDiagnostics.advisories } : {}),
     files: [filePath],
   }
@@ -312,7 +312,21 @@ function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFil
 
   errors.push(...validateAsyncQueueConfigs(hooks))
 
-  return { hooks, errors, files, sources }
+  return { hooks, errors: dedupeValidationErrors(errors), files, sources }
+}
+
+function dedupeValidationErrors(errors: readonly HookValidationError[]): HookValidationError[] {
+  const seen = new Set<string>()
+  const deduped: HookValidationError[] = []
+  for (const error of errors) {
+    const key = `${error.code}\0${error.filePath}\0${error.path ?? ""}\0${error.message}`
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    deduped.push(error)
+  }
+  return deduped
 }
 
 function validateAsyncQueueConfigs(hooks: HookMap): HookValidationError[] {
