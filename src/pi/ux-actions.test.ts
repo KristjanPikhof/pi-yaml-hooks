@@ -260,8 +260,81 @@ const runtimeCases: RuntimeCase[] = [
       const statuses = records.filter((r) => r.kind === "setStatus").map((r) => r.args as { hookId: string; text: string })
       return statuses.length === 2 &&
           statuses[0]?.hookId !== statuses[1]?.hookId &&
-          statuses[0]?.hookId === "pi-hooks:build-status" &&
-          statuses[1]?.hookId === "pi-hooks:test-status"
+          statuses[0]?.hookId === "pi-hooks:build-status@/virtual/hooks.yaml" &&
+          statuses[1]?.hookId === "pi-hooks:test-status@/virtual/hooks.yaml"
+        ? { ok: true }
+        : { ok: false, detail: `statuses=${JSON.stringify(statuses)}` }
+    },
+  },
+  {
+    name: "setStatus fallback keys stay distinct when ids are absent",
+    run: async () => {
+      const { host, records } = createFakeHost()
+      const hooks: HookMap = new Map()
+      hooks.set("tool.after.write", [
+        {
+          event: "tool.after.write",
+          actions: [{ setStatus: "building" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 0 },
+        },
+        {
+          event: "tool.after.write",
+          actions: [{ setStatus: "testing" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 1 },
+        },
+      ])
+      const runtime = createHooksRuntime(host, { directory: "/tmp", hooks })
+      await runtime["tool.execute.after"]({
+        tool: "write",
+        sessionID: "s1",
+        callID: "c1",
+        args: { path: "/tmp/x.txt", content: "ok" },
+      })
+      const statuses = records.filter((r) => r.kind === "setStatus").map((r) => r.args as { hookId: string; text: string })
+      return statuses.length === 2 && statuses[0]?.hookId !== statuses[1]?.hookId
+        ? { ok: true }
+        : { ok: false, detail: `statuses=${JSON.stringify(statuses)}` }
+    },
+  },
+  {
+    name: "setStatus keys stay distinct for duplicate ids across different files",
+    run: async () => {
+      const { host, records } = createFakeHost()
+      const hooks: HookMap = new Map()
+      hooks.set("tool.after.write", [
+        {
+          id: "shared-status",
+          event: "tool.after.write",
+          actions: [{ setStatus: "global" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/global-hooks.yaml", index: 0 },
+        },
+        {
+          id: "shared-status",
+          event: "tool.after.write",
+          actions: [{ setStatus: "project" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/project-hooks.yaml", index: 0 },
+        },
+      ])
+      const runtime = createHooksRuntime(host, { directory: "/tmp", hooks })
+      await runtime["tool.execute.after"]({
+        tool: "write",
+        sessionID: "s1",
+        callID: "c1",
+        args: { path: "/tmp/x.txt", content: "ok" },
+      })
+      const statuses = records.filter((r) => r.kind === "setStatus").map((r) => r.args as { hookId: string; text: string })
+      return statuses.length === 2 &&
+          statuses[0]?.hookId !== statuses[1]?.hookId &&
+          statuses[0]?.hookId === "pi-hooks:shared-status@/virtual/global-hooks.yaml" &&
+          statuses[1]?.hookId === "pi-hooks:shared-status@/virtual/project-hooks.yaml"
         ? { ok: true }
         : { ok: false, detail: `statuses=${JSON.stringify(statuses)}` }
     },
