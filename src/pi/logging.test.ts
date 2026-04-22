@@ -185,6 +185,44 @@ const cases: Case[] = [
     }),
   },
   {
+    name: "degraded tool delivery logs warning instead of success",
+    run: async () => withDebugLog(async (logFile) => {
+      const runtime = createHooksRuntime(
+        {
+          ...createFakeHost(),
+          sendPrompt: () => ({ status: "degraded", reason: "current_session_only" }),
+        },
+        {
+          directory: "/repo",
+          hooks: buildHookMap(
+            [
+              {
+                tool: {
+                  name: "read",
+                  args: { path: "README.md" },
+                },
+              },
+            ],
+            "session.idle",
+          ),
+        },
+      )
+
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      const lines = readLogLines(logFile)
+      const sawWarning = lines.some(
+        (line) =>
+          line.includes("Tool action degraded before the follow-up prompt was accepted") &&
+          line.includes("current_session_only"),
+      )
+      const sawSuccess = lines.some((line) => line.includes("Tool action queued a follow-up prompt"))
+      return sawWarning && !sawSuccess
+        ? { ok: true }
+        : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
+    }),
+  },
+  {
     name: "notify degraded logs warning instead of delivery success",
     run: async () => withDebugLog(async (logFile) => {
       const runtime = createHooksRuntime(
