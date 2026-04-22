@@ -335,6 +335,65 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "edited imported hooks reload through PI events and invalid imported edits keep last known good config",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const importedPath = path.join(projectDir, ".pi", "hook", "imports", "session-idle.yaml")
+        mkdirSync(path.dirname(importedPath), { recursive: true })
+        writeFileSync(
+          path.join(projectDir, ".pi", "hook", "hooks.yaml"),
+          `imports:
+  - ./imports/session-idle.yaml
+hooks: []
+`,
+          "utf8",
+        )
+        writeFileSync(
+          importedPath,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "import-v1"
+`,
+          "utf8",
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+
+        await harness.agentEnd()
+
+        writeFileSync(
+          importedPath,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "import-v2"
+`,
+          "utf8",
+        )
+        await harness.toolResult("edit", "call-import-1", { path: importedPath })
+        await harness.agentEnd()
+
+        writeFileSync(
+          importedPath,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify:
+`,
+          "utf8",
+        )
+        await harness.toolResult("edit", "call-import-2", { path: importedPath })
+        await harness.agentEnd()
+
+        const expected = JSON.stringify(["import-v1", "import-v2", "import-v2"])
+        return JSON.stringify(harness.notifications) === expected
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
     name: "hooks-status command reports active hooks and trust state",
     run: async () =>
       await withIsolatedProject(true, async (projectDir) => {
