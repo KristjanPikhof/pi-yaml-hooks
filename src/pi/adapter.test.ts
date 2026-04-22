@@ -365,7 +365,7 @@ const cases: Case[] = [
         harness.register()
         await harness.command("hooks-status")
 
-        return harness.notifications.some((message) => message.includes("Project config:") && message.includes("(missing)")) &&
+        return harness.notifications.some((message) => message.includes(`Project config: ${projectDir}/.pi/hook/hooks.yaml (missing)`)) &&
             harness.notifications.every((message) => !message.includes("Project hooks exist but are not active"))
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
@@ -460,6 +460,38 @@ const cases: Case[] = [
               ok: false,
               detail: `notifications=${JSON.stringify(harness.notifications)}, trustFile=${JSON.stringify(readFileSync(trustFile, "utf8"))}`,
             }
+      }),
+  },
+  {
+    name: "hooks-trust dedupes an existing symlinked trust anchor",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+        const symlinkDir = `${projectDir}-alias`
+        symlinkSync(projectDir, symlinkDir)
+        const trustFile = path.join(process.env.HOME || process.env.USERPROFILE || os.homedir(), ".pi", "agent", "trusted-projects.json")
+        mkdirSync(path.dirname(trustFile), { recursive: true })
+        writeFileSync(trustFile, JSON.stringify([symlinkDir], null, 2) + "\n", "utf8")
+
+        try {
+          const harness = new FakePiHarness(projectDir)
+          harness.register()
+          await harness.command("hooks-trust")
+
+          const trustedProjects = readTrustedProjectsFile()
+          return trustedProjects.length === 1 && trustedProjects[0] === symlinkDir
+            ? { ok: true }
+            : { ok: false, detail: `trustedProjects=${JSON.stringify(trustedProjects)}` }
+        } finally {
+          rmSync(symlinkDir, { force: true })
+        }
       }),
   },
   {
