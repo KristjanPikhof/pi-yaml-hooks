@@ -398,6 +398,14 @@ const cases: Case[] = [
     name: "hooks-trust command writes the current project to trusted-projects.json",
     run: async () =>
       await withIsolatedProject(false, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
         const harness = new FakePiHarness(projectDir)
         harness.register()
         await harness.command("hooks-trust")
