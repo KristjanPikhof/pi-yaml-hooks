@@ -145,7 +145,8 @@ function resolveLogLevel(enabled: boolean): PiHooksLogLevel | undefined {
 }
 
 function resolveLogFilePath(): string {
-  return process.env.PI_HOOKS_LOG_FILE || path.join(os.homedir(), ".pi", "agent", "logs", "pi-hooks.ndjson")
+  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir()
+  return process.env.PI_HOOKS_LOG_FILE || path.join(homeDir, ".pi", "agent", "logs", "pi-hooks.ndjson")
 }
 
 function serializeLogEntry(entry: PiHooksLogEntry): string {
