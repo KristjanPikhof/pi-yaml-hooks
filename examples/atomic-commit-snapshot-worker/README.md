@@ -133,15 +133,16 @@ and generation now need one repo-scoped source of truth.
 
 ## Where state lives
 
-Put `snapshot-hook.py` and `snapshot-worker.py` in the same directory. By
-default, the hook finds the worker via `__file__`. If you need to override it,
-set:
+If you copy this example out of the repo, keep `snapshot-hook.py`,
+`snapshot-worker.py`, and `snapshot_shared.py` together in the same directory.
+By default, the hook finds the worker via `__file__`. If you need to override
+it, set:
 
 ```bash
 export SNAPSHOTD_WORKER_PATH=/abs/path/to/snapshot-worker.py
 ```
 
-Make both scripts executable:
+Make the executable entrypoints executable:
 
 ```bash
 chmod +x snapshot-hook.py snapshot-worker.py
