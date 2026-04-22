@@ -752,8 +752,9 @@ function normalizeAsyncConfig(
     }
   }
 
+  const normalizedGroup = group?.trim()
   const config: HookAsyncConfig = {
-    ...(group !== undefined ? { group } : {}),
+    ...(normalizedGroup !== undefined ? { group: normalizedGroup } : {}),
     ...(concurrency !== undefined ? { concurrency } : {}),
   }
 
