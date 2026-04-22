@@ -443,10 +443,10 @@ hooks: []
         harness.register()
         await harness.command("hooks-status")
 
-        return harness.notifications.some((message) => message.includes(`Project config: ${projectDir}/.pi/hook/hooks.yaml (missing)`)) &&
-            harness.notifications.every((message) => !message.includes("Project hooks exist but are not active"))
+        return harness.customMessages.some((message) => JSON.stringify(message.content).includes(`Project config: ${projectDir}/.pi/hook/hooks.yaml (missing)`)) &&
+            harness.customMessages.every((message) => !JSON.stringify(message.content).includes("Project hooks exist but are not active"))
           ? { ok: true }
-          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+          : { ok: false, detail: `messages=${JSON.stringify(harness.customMessages)}` }
       }),
   },
   {
