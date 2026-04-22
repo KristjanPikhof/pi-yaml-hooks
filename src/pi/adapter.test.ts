@@ -45,8 +45,8 @@ function createContext(cwd: string, notifications: string[]) {
   } as never
 }
 
-function writeGlobalHooks(homeDir: string, content: string): void {
-  const filePath = path.join(homeDir, ".pi", "agent", "hook", "hooks.yaml")
+function writeProjectHooks(projectDir: string, content: string): void {
+  const filePath = path.join(projectDir, ".pi", "hook", "hooks.yaml")
   mkdirSync(path.dirname(filePath), { recursive: true })
   writeFileSync(filePath, content, "utf8")
 }
@@ -64,22 +64,20 @@ const cases: Case[] = [
   {
     name: "adapter reloads edited hooks and keeps the last known good config on invalid edits",
     run: async () => {
-      const tempHome = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-adapter-"))
-      const previousHome = process.env.HOME
-      const previousUserProfile = process.env.USERPROFILE
+      const tempProject = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-adapter-"))
+      const previousTrust = process.env.PI_HOOKS_TRUST_PROJECT
       const previousWarn = console.warn
       const previousInfo = console.info
       const previousError = console.error
-      process.env.HOME = tempHome
-      process.env.USERPROFILE = tempHome
+      process.env.PI_HOOKS_TRUST_PROJECT = "1"
       resetPiHooksLoggerForTests()
       console.warn = () => {}
       console.info = () => {}
       console.error = () => {}
 
       try {
-        writeGlobalHooks(
-          tempHome,
+        writeProjectHooks(
+          tempProject,
           `hooks:
   - event: session.idle
     actions:
@@ -90,12 +88,12 @@ const cases: Case[] = [
         const notifications: string[] = []
         const { pi, handlers } = createFakePi()
         registerAdapter(pi)
-        const ctx = createContext("/tmp/project", notifications)
+        const ctx = createContext(tempProject, notifications)
 
         await dispatchIdle(handlers, ctx)
 
-        writeGlobalHooks(
-          tempHome,
+        writeProjectHooks(
+          tempProject,
           `hooks:
   - event: session.idle
     actions:
@@ -104,8 +102,8 @@ const cases: Case[] = [
         )
         await dispatchIdle(handlers, ctx)
 
-        writeGlobalHooks(
-          tempHome,
+        writeProjectHooks(
+          tempProject,
           `hooks:
   - event: session.idle
     actions:
@@ -121,12 +119,10 @@ const cases: Case[] = [
         console.warn = previousWarn
         console.info = previousInfo
         console.error = previousError
-        if (previousHome === undefined) delete process.env.HOME
-        else process.env.HOME = previousHome
-        if (previousUserProfile === undefined) delete process.env.USERPROFILE
-        else process.env.USERPROFILE = previousUserProfile
+        if (previousTrust === undefined) delete process.env.PI_HOOKS_TRUST_PROJECT
+        else process.env.PI_HOOKS_TRUST_PROJECT = previousTrust
         resetPiHooksLoggerForTests()
-        rmSync(tempHome, { recursive: true, force: true })
+        rmSync(tempProject, { recursive: true, force: true })
       }
     },
   },
