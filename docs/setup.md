@@ -143,6 +143,16 @@ In practice this means:
 
 If reload fails, PI keeps the last known good hook set and logs the parse errors.
 
+## Native `/hooks-*` commands
+
+Once the extension is loaded, PI exposes these helper commands:
+
+- `/hooks-status` — inspect the active hook summary, paths, trust state, and log file
+- `/hooks-validate` — validate active hooks and explain whether the project file is valid but untrusted
+- `/hooks-trust` — trust the current project without manually editing `trusted-projects.json`
+- `/hooks-reload` — reload extensions and command surfaces on demand
+- `/hooks-tail-log` — show the log file path and a ready-made tail command
+
 ## Useful environment variables
 
 | Variable | What it does |

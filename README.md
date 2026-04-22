@@ -70,6 +70,16 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 - [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
 - [`docs/examples/`](./docs/examples/) — copy-paste examples for each major hook pattern
 
+## Native /hooks commands
+
+`pi-hooks` now registers these PI slash commands:
+
+- `/hooks-status` — show the active hook summary, config paths, trust state, and log path
+- `/hooks-validate` — validate active hooks and explain whether a project hook file is valid but still untrusted
+- `/hooks-trust` — add the current project to `~/.pi/agent/trusted-projects.json`
+- `/hooks-reload` — reload extensions and command surfaces; edited `hooks.yaml` still auto-refreshes on the next event
+- `/hooks-tail-log` — show the log file path plus a ready-to-run `tail -F` command
+
 ---
 
 ## Pi 0.68.1 compatibility update

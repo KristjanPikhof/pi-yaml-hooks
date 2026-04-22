@@ -36,6 +36,8 @@ Pretty tail helper:
 ./scripts/tail-hook-log.sh
 ```
 
+Or from inside PI, run `/hooks-tail-log` to get the current log path and a `tail -F` command you can paste into a shell.
+
 Filter by hook:
 
 ```bash

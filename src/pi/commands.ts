@@ -6,7 +6,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-cod
 
 import { getPiHooksLogFilePath } from "../core/logger.js"
 import {
-  discoverHookConfigEntries,
   resolveHookConfigPaths,
 } from "../core/config-paths.js"
 import {
