@@ -281,7 +281,7 @@ const runtimeCases: RuntimeCase[] = [
   {
     name: "adapter notify reports degraded when PI UI is unavailable",
     run: async () => {
-      const pi = { sendUserMessage: () => {} } as Parameters<typeof createHostAdapter>[0]
+      const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
       const host = createHostAdapter(pi, "/tmp", () => undefined, () => ({ hasUI: false } as never))
       const result = host.notify?.("hi", "warning")
       return result && typeof result === "object" && "status" in result && result.status === "degraded"
@@ -296,7 +296,7 @@ const runtimeCases: RuntimeCase[] = [
         sendUserMessage: () => {
           throw new Error("send failed")
         },
-      } as Parameters<typeof createHostAdapter>[0]
+      } as unknown as Parameters<typeof createHostAdapter>[0]
       const host = createHostAdapter(pi, "/tmp", () => undefined, () => undefined)
       try {
         host.sendPrompt("s1", "hello")
@@ -311,7 +311,7 @@ const runtimeCases: RuntimeCase[] = [
   {
     name: "adapter setStatus throws when PI UI status update fails",
     run: async () => {
-      const pi = { sendUserMessage: () => {} } as Parameters<typeof createHostAdapter>[0]
+      const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
       const host = createHostAdapter(pi, "/tmp", () => undefined, () => ({
         hasUI: true,
         ui: {
