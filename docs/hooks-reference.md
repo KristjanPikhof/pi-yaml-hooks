@@ -28,6 +28,8 @@ Each action entry must define exactly one action key.
 
 At agent start, `pi-hooks` appends a short hook-awareness note to the system prompt. It summarizes the loaded hook count, current project trust state, and the main PI-specific limitations that matter while authoring or debugging hooks.
 
+This prompt injection is part of the current compatibility surface for Pi 0.68.1 and 0.69.0.
+
 Set `PI_HOOKS_PROMPT_AWARENESS=0` to disable this prompt injection.
 
 ## Optional `user_bash` interception
@@ -110,7 +112,7 @@ Custom tool names can also match if the host emits them.
 | `file.changed` | After recognized file mutations | Synthesized by `pi-hooks`; see below for exact sources |
 | `session.created` | On PI startup or a genuinely new session | Does not fire on resume, reload, or fork re-entry |
 | `session.idle` | When the agent loop ends and there are no pending messages | Includes accumulated file changes since the last successful idle dispatch |
-| `session.deleted` | On shutdown and before session switches | Lossy by design; PI does not distinguish closed vs switched sessions |
+| `session.deleted` | On shutdown and before session switches | Lossy by design; PI does not distinguish closed vs switched sessions such as `/new`, `/resume`, and `/fork` |
 
 ### Exact `file.changed` behavior
 
@@ -455,6 +457,16 @@ These environment variables are injected into every `bash` hook:
 | `PI_GIT_COMMON_DIR` | `OPENCODE_GIT_COMMON_DIR` | Git common dir for worktrees when resolvable |
 
 The process working directory is the current project directory.
+
+## Pi 0.69 smoke-check checklist
+
+For a real Pi 0.69.0 run, verify these compatibility-sensitive surfaces:
+
+- `before_agent_start` appends the hook-awareness note when `PI_HOOKS_PROMPT_AWARENESS` is not `0`
+- headless mode still mentions degraded UI actions in that prompt note
+- `/new` triggers lossy cleanup via `session.deleted` and a fresh `session.created`
+- `/resume` and `/fork` do not re-fire `session.created` for an existing session re-entry
+- `/new`, `/resume`, and `/fork` do not double-run `session.deleted` cleanup when PI emits both `session_before_switch` and `session_shutdown`
 
 ## Unsupported and advisory cases
 
