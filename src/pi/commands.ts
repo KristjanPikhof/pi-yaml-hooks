@@ -15,6 +15,7 @@ import {
   loadHooksFile,
   summarizeHookSources,
 } from "../core/load-hooks.js"
+import { sendHookDiagnostics } from "./diagnostics.js"
 
 export function registerCommands(pi: ExtensionAPI): void {
   pi.registerCommand("hooks-status", {
@@ -32,7 +33,18 @@ export function registerCommands(pi: ExtensionAPI): void {
       if (status.projectConfigExists && !status.projectTrusted) {
         lines.push("Project hooks exist but are not active until the project is trusted.")
       }
-      notifyCommand(ctx, lines.join("\n"), "info")
+      sendHookDiagnostics(pi, {
+        title: "Hook status",
+        level: "info",
+        content: lines.join("\n"),
+        sections: [
+          {
+            label: "Loaded sources",
+            lines: status.active.sources.map((source) => `${source.scope}: ${source.filePath} (${source.hookCount} hooks)`),
+          },
+        ],
+      })
+      notifyCommand(ctx, lines.join("\n"), "info", false)
     },
   })
 
@@ -60,11 +72,23 @@ export function registerCommands(pi: ExtensionAPI): void {
         }
       }
 
-      notifyCommand(
-        ctx,
-        lines.join("\n"),
-        validation.active.errors.length > 0 || validation.project.errors.length > 0 ? "warning" : "info",
-      )
+      const level = validation.active.errors.length > 0 || validation.project.errors.length > 0 ? "warning" : "info"
+      sendHookDiagnostics(pi, {
+        title: "Hook validation",
+        level,
+        content: lines.join("\n"),
+        sections: [
+          {
+            label: "Active validation errors",
+            lines: validation.active.errors.length > 0 ? validation.active.errors.map(formatValidationError) : ["None"],
+          },
+          {
+            label: "Project validation errors",
+            lines: validation.project.errors.length > 0 ? validation.project.errors.map(formatValidationError) : ["None"],
+          },
+        ],
+      })
+      notifyCommand(ctx, lines.join("\n"), level, false)
     },
   })
 
@@ -201,8 +225,9 @@ function notifyCommand(
   ctx: ExtensionCommandContext,
   message: string,
   level: "info" | "warning" | "error",
+  notifyUi = true,
 ): void {
-  if (ctx.hasUI) {
+  if (notifyUi && ctx.hasUI) {
     ctx.ui.notify(message, level)
   }
   // eslint-disable-next-line no-console
