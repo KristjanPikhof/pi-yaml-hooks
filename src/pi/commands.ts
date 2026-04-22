@@ -25,7 +25,7 @@ export function registerCommands(pi: ExtensionAPI): void {
         `Hooks status for ${status.projectDir}`,
         `Active summary: ${formatHookLoadSummary({ sources: status.active.sources })}`,
         `Global config: ${formatStatusPath(status.paths.global)}`,
-        `Project config: ${formatStatusPath(status.paths.project)}`,
+        `Project config: ${formatStatusPath(status.projectStatusPath)}`,
         `Project trusted: ${status.projectTrusted ? "yes" : "no"}`,
         `Hook log: ${status.logFilePath}`,
       ]
@@ -140,6 +140,7 @@ interface HooksStatus {
   readonly projectDir: string
   readonly projectTrusted: boolean
   readonly projectConfigExists: boolean
+  readonly projectStatusPath: string
   readonly paths: ReturnType<typeof resolveHookConfigPaths>
   readonly active: ReturnType<typeof loadDiscoveredHooksSnapshot>
   readonly logFilePath: string
@@ -150,13 +151,17 @@ function getHooksStatus(ctx: ExtensionCommandContext): HooksStatus {
   const paths = resolveHookConfigPaths({ projectDir })
   const active = loadDiscoveredHooksSnapshot({ projectDir })
   const project = resolveProjectHookResolution({ projectDir })
-  const projectConfigExists = Boolean(paths.project && existsSync(paths.project))
+  const projectStatusPath =
+    project?.projectConfigPath ??
+    path.join(project?.discoveredProjectRoot ?? project?.worktreeRoot ?? projectDir, ".pi", "hook", "hooks.yaml")
+  const projectConfigExists = existsSync(projectStatusPath)
   const projectTrusted = project?.trusted ?? false
 
   return {
     projectDir,
     projectTrusted,
     projectConfigExists,
+    projectStatusPath,
     paths,
     active,
     logFilePath: getPiHooksLogFilePath(),
