@@ -149,7 +149,8 @@ function getHooksStatus(ctx: ExtensionCommandContext): HooksStatus {
   const trustedProjects = readTrustedProjects(getTrustedProjectsFilePath())
   const projectConfigExists = Boolean(paths.project && existsSync(paths.project))
   const projectTrusted =
-    trustedProjects.ok && trustedProjects.entries.some((entry) => path.resolve(entry) === projectDir)
+    process.env.PI_HOOKS_TRUST_PROJECT === "1" ||
+    (trustedProjects.ok && trustedProjects.entries.some((entry) => path.resolve(entry) === projectDir))
 
   return {
     projectDir,
@@ -203,7 +204,8 @@ function notifyCommand(
 }
 
 function getTrustedProjectsFilePath(): string {
-  return path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
+  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir()
+  return path.join(homeDir, ".pi", "agent", "trusted-projects.json")
 }
 
 function readTrustedProjects(filePath: string):
