@@ -33,7 +33,7 @@ export interface DiscoveredHookConfigPath {
 export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {}): HookConfigPaths {
   const exists = options.exists ?? existsSync
   const platform = options.platform ?? process.platform
-  const homeDir = options.homeDir ?? os.homedir()
+  const homeDir = options.homeDir ?? resolveHomeDir()
   const appDataDir = options.appDataDir ?? process.env.APPDATA
   const projectDir = options.projectDir
 
@@ -61,7 +61,7 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
 export function discoverHookConfigEntries(options: HookConfigDiscoveryOptions = {}): DiscoveredHookConfigPath[] {
   const exists = options.exists ?? existsSync
   const platform = options.platform ?? process.platform
-  const homeDir = options.homeDir ?? os.homedir()
+  const homeDir = options.homeDir ?? resolveHomeDir()
   const appDataDir = options.appDataDir ?? process.env.APPDATA
   const projectDir = options.projectDir
 
@@ -180,4 +180,8 @@ function pickFirstExisting(
     }
   }
   return undefined
+}
+
+function resolveHomeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || os.homedir()
 }
