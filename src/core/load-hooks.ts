@@ -1,4 +1,6 @@
-import { readFileSync, statSync } from "node:fs"
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import path from "node:path"
+import { createRequire } from "node:module"
 
 import YAML from "yaml"
 
@@ -62,14 +64,34 @@ type DiscoveredHooksFileSnapshot =
   | { readonly scope: HookConfigSourceScope; readonly filePath: string; readonly content: string }
   | { readonly scope: HookConfigSourceScope; readonly filePath: string; readonly readError: string }
 
+interface ParsedHooksFileEnvelope {
+  readonly imports: string[]
+  readonly body?: Record<string, unknown>
+  readonly errors: HookValidationError[]
+}
+
+const nodeRequire = createRequire(import.meta.url)
+
 export function parseHooksFile(filePath: string, content: string): ParsedHooksFileResult {
-  const document = YAML.parseDocument(content)
-  if (document.errors.length > 0) {
+  const envelope = parseHooksFileEnvelope(filePath, content)
+  if (envelope.errors.length > 0 || !envelope.body) {
     return {
       hooks: new Map(),
       overrides: [],
-      errors: [{ code: "invalid_frontmatter", filePath, message: document.errors[0]?.message ?? "Failed to parse hooks.yaml." }],
+      errors: envelope.errors,
       files: [filePath],
+    }
+  }
+
+  return parseHooksObject(filePath, envelope.body)
+}
+
+function parseHooksFileEnvelope(filePath: string, content: string): ParsedHooksFileEnvelope {
+  const document = YAML.parseDocument(content)
+  if (document.errors.length > 0) {
+    return {
+      imports: [],
+      errors: [{ code: "invalid_frontmatter", filePath, message: document.errors[0]?.message ?? "Failed to parse hooks.yaml." }],
     }
   }
 
@@ -77,13 +99,20 @@ export function parseHooksFile(filePath: string, content: string): ParsedHooksFi
 
   if (!isRecord(parsed)) {
     return {
-      hooks: new Map(),
-      overrides: [],
+      imports: [],
       errors: [{ code: "invalid_frontmatter", filePath, message: "hooks.yaml must parse to an object." }],
-      files: [filePath],
     }
   }
 
+  const importsResult = parseImportsField(filePath, parsed.imports)
+  if (importsResult.error) {
+    return { imports: [], errors: [importsResult.error] }
+  }
+
+  return { imports: importsResult.imports, body: parsed, errors: [] }
+}
+
+function parseHooksObject(filePath: string, parsed: Record<string, unknown>): ParsedHooksFileResult {
   if (!Object.prototype.hasOwnProperty.call(parsed, "hooks")) {
     return {
       hooks: new Map(),
@@ -163,6 +192,30 @@ export function parseHooksFile(filePath: string, content: string): ParsedHooksFi
   }
 }
 
+function parseImportsField(
+  filePath: string,
+  imports: unknown,
+): { imports: string[]; error?: undefined } | { imports?: undefined; error: HookValidationError } {
+  if (imports === undefined) {
+    return { imports: [] }
+  }
+
+  if (!Array.isArray(imports)) {
+    return {
+      error: createError(filePath, "invalid_imports", "imports must be an array of non-empty strings.", "imports"),
+    }
+  }
+
+  const invalidIndex = imports.findIndex((entry) => !isNonEmptyString(entry))
+  if (invalidIndex >= 0) {
+    return {
+      error: createError(filePath, "invalid_imports", `imports[${invalidIndex}] must be a non-empty string.`, `imports[${invalidIndex}]`),
+    }
+  }
+
+  return { imports: [...imports] }
+}
+
 export function loadHooksFile(filePath: string, readFile: (filePath: string) => string = defaultReadFile): ParsedHooksFileResult {
   try {
     return parseHooksFile(filePath, readFile(filePath))
@@ -231,23 +284,133 @@ function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFil
   const hooks = new Map<HookConfig["event"], HookConfig[]>()
   const errors: HookValidationError[] = []
   const sources: HookSourceSummary[] = []
+  const files: string[] = []
+  const loadedFiles = new Set<string>()
 
   for (const snapshot of snapshots) {
-    const result = loadSnapshotHooksFile(snapshot)
-    const resolved = resolveOverrides(hooks, result.overrides)
-    hooks.clear()
-    mergeHookMapsInto(hooks, resolved.hooks)
-    mergeHookMapsInto(hooks, result.hooks)
-    errors.push(...resolved.errors)
-    errors.push(...result.errors)
-    sources.push({
-      scope: snapshot.scope,
-      filePath: snapshot.filePath,
-      hookCount: countHookConfigs(result.hooks),
-    })
+    const expanded = expandSnapshotImports(snapshot, loadedFiles)
+    errors.push(...expanded.errors)
+
+    for (const entry of expanded.snapshots) {
+      files.push(entry.filePath)
+      const result = loadSnapshotHooksFile(entry)
+      const resolved = resolveOverrides(hooks, result.overrides)
+      hooks.clear()
+      mergeHookMapsInto(hooks, resolved.hooks)
+      mergeHookMapsInto(hooks, result.hooks)
+      errors.push(...resolved.errors)
+      errors.push(...result.errors)
+      sources.push({
+        scope: entry.scope,
+        filePath: entry.filePath,
+        hookCount: countHookConfigs(result.hooks),
+      })
+    }
   }
 
-  return { hooks, errors, files: snapshots.map((snapshot) => snapshot.filePath), sources }
+  return { hooks, errors, files, sources }
+}
+
+function expandSnapshotImports(
+  snapshot: DiscoveredHooksFileSnapshot,
+  loadedFiles: Set<string>,
+): { snapshots: DiscoveredHooksFileSnapshot[]; errors: HookValidationError[] } {
+  const ordered: DiscoveredHooksFileSnapshot[] = []
+  const errors: HookValidationError[] = []
+  const visiting = new Set<string>()
+
+  const visit = (current: DiscoveredHooksFileSnapshot): void => {
+    const canonicalPath = canonicalizeHookPath(current.filePath)
+    if (loadedFiles.has(canonicalPath)) {
+      return
+    }
+    if (visiting.has(canonicalPath)) {
+      errors.push(createError(current.filePath, "invalid_imports", `Import cycle detected involving ${current.filePath}.`, "imports"))
+      return
+    }
+
+    visiting.add(canonicalPath)
+    const imports = readSnapshotImports(current, errors)
+    for (const imported of imports) {
+      visit(imported)
+    }
+    visiting.delete(canonicalPath)
+
+    if (!loadedFiles.has(canonicalPath)) {
+      loadedFiles.add(canonicalPath)
+      ordered.push(current)
+    }
+  }
+
+  visit(snapshot)
+  return { snapshots: ordered, errors }
+}
+
+function readSnapshotImports(snapshot: DiscoveredHooksFileSnapshot, errors: HookValidationError[]): DiscoveredHooksFileSnapshot[] {
+  if (!("content" in snapshot)) {
+    return []
+  }
+
+  const envelope = parseHooksFileEnvelope(snapshot.filePath, snapshot.content)
+  errors.push(...envelope.errors)
+  if (envelope.errors.length > 0) {
+    return []
+  }
+
+  const imports: DiscoveredHooksFileSnapshot[] = []
+  for (const specifier of envelope.imports) {
+    const resolved = resolveHookImportTargets(snapshot.filePath, specifier)
+    if (resolved.error) {
+      errors.push(resolved.error)
+      continue
+    }
+    for (const filePath of resolved.filePaths) {
+      try {
+        imports.push({ scope: snapshot.scope, filePath, content: defaultReadFile(filePath) })
+      } catch (error) {
+        imports.push({ scope: snapshot.scope, filePath, readError: formatHookReadError(error) })
+      }
+    }
+  }
+
+  return imports
+}
+
+function resolveHookImportTargets(
+  importerPath: string,
+  specifier: string,
+): { filePaths: string[]; error?: undefined } | { filePaths?: undefined; error: HookValidationError } {
+  try {
+    const resolvedPath = specifier.startsWith(".") || specifier.startsWith("/")
+      ? path.resolve(path.dirname(importerPath), specifier)
+      : createRequire(importerPath).resolve(specifier, { paths: [path.dirname(importerPath)] })
+    return { filePaths: expandHookImportPath(resolvedPath) }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      error: createError(importerPath, "invalid_imports", `Failed to resolve import ${JSON.stringify(specifier)}: ${detail}`, "imports"),
+    }
+  }
+}
+
+function expandHookImportPath(resolvedPath: string): string[] {
+  const stat = statSync(resolvedPath)
+  if (stat.isDirectory()) {
+    return readdirSync(resolvedPath)
+      .slice()
+      .sort((a, b) => a.localeCompare(b))
+      .map((entry) => path.join(resolvedPath, entry))
+      .filter((entryPath) => statSync(entryPath).isFile())
+  }
+  return [resolvedPath]
+}
+
+function canonicalizeHookPath(filePath: string): string {
+  try {
+    return realpathSync(filePath)
+  } catch {
+    return path.resolve(filePath)
+  }
 }
 
 function snapshotDiscoveredHookFiles(

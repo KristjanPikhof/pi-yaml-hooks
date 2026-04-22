@@ -133,6 +133,7 @@ export type HookMap = Map<HookEvent, HookConfig[]>
 
 export type HookValidationErrorCode =
   | "invalid_frontmatter"
+  | "invalid_imports"
   | "missing_hooks"
   | "invalid_hooks"
   | "invalid_hook"
