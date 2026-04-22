@@ -25,7 +25,7 @@ export function registerUserBashInterception(
 
     const runtime = options.getRuntimeFor(ctx.cwd)
     try {
-      await runtime["tool.execute.before"](
+      await runtime["user.bash.before"](
         {
           tool: "bash",
           sessionID: sessionId,
