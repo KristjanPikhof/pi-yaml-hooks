@@ -529,7 +529,7 @@ function parseHookDefinition(
     actions: actionsResult.actions,
     scope: scopeResult.scope,
     runIn: runInResult.runIn,
-    ...(asyncResult.async ? { async: true } : {}),
+    ...(asyncResult.async ? { async: asyncResult.async } : {}),
     ...(conditionsResult.conditions ? { conditions: conditionsResult.conditions } : {}),
     source: { filePath, index },
   }
