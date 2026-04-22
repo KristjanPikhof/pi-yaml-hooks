@@ -192,6 +192,16 @@ export function isHookBehavior(value: unknown): value is HookBehavior {
 // this surface so the core stays host-agnostic.
 import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
 
+export interface HostDeliveryResult {
+  /**
+   * `accepted` means the host API accepted the request without throwing.
+   * `degraded` means the action was intentionally skipped or downgraded.
+   */
+  readonly status: "accepted" | "degraded"
+  readonly reason?: string
+  readonly details?: Record<string, unknown>
+}
+
 export interface HostAdapter {
   /** Abort the given session (best-effort). Errors must be handled by the adapter. */
   abort(sessionId: string): void | Promise<void>
@@ -200,13 +210,13 @@ export interface HostAdapter {
   /** Execute a bash hook request; same contract as the node bash-executor. */
   runBash(request: BashExecutionRequest): Promise<BashHookResult>
   /** Queue a prompt in the current session; used as the fallback for `tool:` actions. */
-  sendPrompt(sessionId: string, text: string): void | Promise<void>
+  sendPrompt(sessionId: string, text: string): void | HostDeliveryResult | Promise<void | HostDeliveryResult>
   /**
    * Show a user-visible notification. Optional: hosts that do not implement
    * a UI surface (e.g. headless tests, non-PI embedders) may omit this; the
    * runtime degrades to a log + skip in that case.
    */
-  notify?(text: string, level?: HookNotifyLevel): void | Promise<void>
+  notify?(text: string, level?: HookNotifyLevel): void | HostDeliveryResult | Promise<void | HostDeliveryResult>
   /**
    * Prompt the user for confirmation. Must resolve to a boolean: `true` =
    * user approved, `false` = user rejected (treated as a blocking result
@@ -217,6 +227,5 @@ export interface HostAdapter {
    * Set a status-bar entry for the given hookId. Pass an empty string to
    * clear; hosts without a status surface may omit this.
    */
-  setStatus?(hookId: string, text: string): void | Promise<void>
+  setStatus?(hookId: string, text: string): void | HostDeliveryResult | Promise<void | HostDeliveryResult>
 }
-
