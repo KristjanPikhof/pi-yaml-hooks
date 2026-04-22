@@ -28,6 +28,7 @@
 
 These are the details that matter most when authoring hooks:
 
+- The current compatibility target is Pi 0.68.1.
 - Only one global config and one project config are loaded.
 - Both files stay active unless the later file explicitly overrides or disables earlier hooks by `id`.
 - Project hook files are ignored until the project is trusted.

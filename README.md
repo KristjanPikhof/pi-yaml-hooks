@@ -11,7 +11,7 @@ YAML-driven hooks for the [PI coding agent](https://www.npmjs.com/package/@mario
 - **macOS or Linux.** Windows is unsupported (the bash executor expects a POSIX `bash` on `$PATH`).
 - **Node.js ≥ 22.0.0.** Path conditions (`matchesAnyPath`, `matchesAllPaths`) use `node:path.matchesGlob`, which exists from Node 22.
 - **`bash` on `$PATH`** (override with `PI_HOOKS_BASH_EXECUTABLE`).
-- **`@mariozechner/pi-coding-agent ^0.67.0`** (peer dependency — installed alongside PI itself).
+- **`@mariozechner/pi-coding-agent ^0.68.1`** (peer dependency — installed alongside PI itself).
 
 ---
 
@@ -67,6 +67,15 @@ If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), start
 - [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) — practical rules for people and agents writing `hooks.yaml`
 - [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
 - [`docs/examples/`](./docs/examples/) — copy-paste examples for each major hook pattern
+
+---
+
+## Pi 0.68.1 compatibility update
+
+- `pi-hooks` now targets the Pi 0.68.1 extension surface and declares `@mariozechner/pi-coding-agent ^0.68.1` as its peer dependency.
+- The supported native surfaces are the current tool and session lifecycle events, `pi.sendUserMessage`, and `ctx.ui.notify` / `ctx.ui.confirm` / `ctx.ui.setStatus`.
+- Known PI limitations remain explicit: `command:` actions are still rejected, non-bash cross-session targeting is still unavailable, and `behavior: stop` only blocks pre-tool hooks.
+- This release also tightens default failure reporting so hook delivery and adapter dispatch problems are visible without requiring debug mode.
 
 ---
 

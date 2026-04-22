@@ -32,7 +32,7 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.67.0"
+    "@mariozechner/pi-coding-agent": "^0.68.1"
   },
   "dependencies": {
     "yaml": "^2.8.2"

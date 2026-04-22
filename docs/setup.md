@@ -7,9 +7,11 @@ This guide gets `pi-hooks` installed and gives you a safe place to put `hooks.ya
 - macOS or Linux
 - Node.js `>= 22.0.0`
 - `bash` on `PATH`
-- `@mariozechner/pi-coding-agent >= 0.67.0`
+- `@mariozechner/pi-coding-agent >= 0.68.1`
 
 Windows is currently a no-op because the hook runner expects a POSIX `bash`.
+
+This repository now treats Pi 0.68.1 as the compatibility target. Older 0.67-era installs are no longer the documented contract even if some behaviors still happen to work.
 
 ## Install the extension
 
