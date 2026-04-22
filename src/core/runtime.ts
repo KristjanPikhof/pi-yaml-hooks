@@ -166,6 +166,11 @@ interface DispatchRequest {
   readonly reject?: (error: unknown) => void
 }
 
+interface AsyncQueueState {
+  activeCount: number
+  pending: Array<() => Promise<void>>
+}
+
 type ExecuteBashHook = (request: BashExecutionRequest) => Promise<BashHookResult>
 
 export interface HooksRuntime {
