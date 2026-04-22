@@ -82,6 +82,8 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 
 `/hooks-status` and `/hooks-validate` now also emit structured in-session diagnostics messages. Hook-load validation problems do the same automatically when PI first loads a broken config and keeps the last valid hooks active.
 
+`pi-hooks` also appends a concise hook-awareness note before agent start so Pi can reason more accurately about loaded hooks, trust state, and PI-specific limitations. Set `PI_HOOKS_PROMPT_AWARENESS=0` to disable that prompt injection.
+
 ---
 
 ## Pi 0.68.1 compatibility update
