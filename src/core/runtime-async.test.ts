@@ -58,7 +58,7 @@ const cases: Case[] = [
   {
     name: "parser rejects async concurrency without a named group",
     run: async () => {
-      const filePath = "/virtual/hooks.yaml"
+      const filePath = "/home/tester/.pi/agent/hook/hooks.yaml"
       const loaded = loadDiscoveredHooks({
         homeDir: "/home/tester",
         projectDir: "/repo",
@@ -80,7 +80,7 @@ const cases: Case[] = [
   {
     name: "parser rejects conflicting concurrency in the same async group",
     run: async () => {
-      const filePath = "/virtual/hooks.yaml"
+      const filePath = "/home/tester/.pi/agent/hook/hooks.yaml"
       const loaded = loadDiscoveredHooks({
         homeDir: "/home/tester",
         projectDir: "/repo",
