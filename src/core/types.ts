@@ -19,6 +19,11 @@ export type HookScope = (typeof HOOK_SCOPES)[number]
 export type HookRunIn = (typeof HOOK_RUN_IN)[number]
 export type HookBehavior = (typeof HOOK_BEHAVIORS)[number]
 
+export interface HookAsyncConfig {
+  readonly group?: string
+  readonly concurrency?: number
+}
+
 export interface CreateFileChange {
   readonly operation: "create"
   readonly path: string
@@ -117,7 +122,7 @@ export interface HookConfig {
   readonly actions: HookAction[]
   readonly scope: HookScope
   readonly runIn: HookRunIn
-  readonly async?: boolean
+  readonly async?: true | HookAsyncConfig
   readonly conditions?: HookCondition[]
   readonly source: HookConfigSource
 }
