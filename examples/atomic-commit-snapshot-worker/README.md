@@ -279,11 +279,9 @@ Canonical handling rule:
 
 | Source | Capture fidelity | Notes |
 |------|------------------|-------|
-| OpenCode `file.changed` payloads with explicit `changes[]` | Exact for the structured entries the payload reports | This is the preferred OpenCode surface. With the `opencode-hooks` plugin, `file.changed` fires for supported mutation tools such as `write`, `edit`, `multiedit`, `patch`, and `apply_patch`. The payload names the changed paths directly, so the hook can snapshot those paths without guessing. If the payload also adds extra `files[]` entries, those extras are additive best-effort hints rather than part of the exact structured operation set. |
-| OpenCode `file.changed` payloads with `files[]` only and no structured `changes[]` | Best-effort | The event identifies candidate paths, but it does not preserve the exact operation set. |
-| Claude/OpenCode edit-style tool payloads (for example `Write`, `Edit`, `MultiEdit`, `NotebookEdit`) | Exact for the explicit target paths in the payload | Exactness is only for the paths the tool reports, and only if the hook is wired to receive those tool events. Claude Code documents `Write` and `Edit`; do not assume undocumented tool names. |
-| Generic payloads that expose only one path field (`file_path`, `path`, `files`, etc.) | Best-effort | The hook snapshots current contents of the discovered paths, but it cannot prove those paths are the complete edit set. |
-| Harnesses that do not report per-edit changed files reliably, such as shell-driven edit flows | Best-effort | The queue may coalesce or miss intermediate file states because the hook is inferring paths after the fact. |
+| `pi-hooks` `file.changed` payloads with explicit `changes[]` | Exact for the structured entries the payload reports | This is the preferred PI surface. The payload names the changed paths directly, so the hook can snapshot those paths without guessing. If the payload also adds extra `files[]` entries, those extras are additive best-effort hints rather than part of the exact structured operation set. |
+| `pi-hooks` `file.changed` payloads with `files[]` only and no structured `changes[]` | Best-effort | The event identifies candidate paths, but it does not preserve the exact operation set. |
+| Payloads that expose only inferred paths instead of a full structured edit set | Best-effort | The hook snapshots current contents of the discovered paths, but it cannot prove those paths are the complete edit set. |
 
 If a source is best-effort, the system should say that plainly. It should not
 claim exact per-edit replay semantics for that event.
@@ -325,8 +323,8 @@ trustworthy.
 ### Mixed-fidelity events
 
 One payload can mix exact structured operations and best-effort hints. For
-example, an OpenCode `file.changed` event may provide exact `changes[]` entries
-plus extra `files[]` entries that are only hints.
+example, a `file.changed` event may provide exact `changes[]` entries plus extra
+`files[]` entries that are only hints.
 
 Downstream schema work therefore needs fidelity metadata that can represent
 mixed events. The required contract is per-op fidelity (or an equivalent encoding
@@ -481,8 +479,8 @@ the base URL HTTPS-only, and do not try to be clever about redaction.
 ## Known limitations
 
 - Unix only. The worker uses advisory `fcntl` locks.
-- Some harnesses do not report exact changed files for every tool. In those
-  cases, capture is best-effort.
+- Some `file.changed` payloads report only inferred paths instead of a full
+  structured edit set. In those cases, capture is best-effort.
 - Exact autocommit still does not support multiple worktrees sharing the same
   branch. The shared branch registry exists to detect and reject or quarantine
   that topology, not to make it replayable.
