@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
@@ -68,7 +68,7 @@ function cleanup(dir: string): void {
 }
 
 function samePaths(actual: string[], expected: string[]): boolean {
-  return JSON.stringify(actual.map((entry) => path.resolve(entry))) === JSON.stringify(expected.map((entry) => path.resolve(entry)))
+  return JSON.stringify(actual.map((entry) => realpathSync.native(entry))) === JSON.stringify(expected.map((entry) => realpathSync.native(entry)))
 }
 
 const cases: Case[] = [
