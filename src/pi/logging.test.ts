@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { getPiHooksLogFilePath, resetPiHooksLoggerForTests } from "../core/logger.js"
+import { getPiHooksLogFilePath, getPiHooksLogger, resetPiHooksLoggerForTests } from "../core/logger.js"
 import { createHooksRuntime } from "../core/runtime.js"
 import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js"
-import type { HookAction, HookMap, HostAdapter } from "../core/types.js"
+import type { HookAction, HookMap, HostAdapter, HostDeliveryResult } from "../core/types.js"
+import { reportDispatchFailure } from "./adapter.js"
 
 interface Case {
   readonly name: string
@@ -144,6 +145,146 @@ const cases: Case[] = [
       const hit = lines.find((line) => line.includes("hook_skip") && line.includes("matchesAnyPath_failed"))
       return hit ? { ok: true } : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
     }),
+  },
+  {
+    name: "sendPrompt failure logs failure without logging success",
+    run: async () => withDebugLog(async (logFile) => {
+      const runtime = createHooksRuntime(
+        {
+          ...createFakeHost(),
+          sendPrompt: () => {
+            throw new Error("sendUserMessage exploded")
+          },
+        },
+        {
+          directory: "/repo",
+          hooks: buildHookMap(
+            [
+              {
+                tool: {
+                  name: "read",
+                  args: { path: "README.md" },
+                },
+              },
+            ],
+            "session.idle",
+          ),
+        },
+      )
+
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      const lines = readLogLines(logFile)
+      const sawFailure = lines.some(
+        (line) => line.includes("Tool action failed") && line.includes("sendUserMessage exploded"),
+      )
+      const sawSuccess = lines.some((line) => line.includes("Tool action queued a follow-up prompt"))
+      return sawFailure && !sawSuccess
+        ? { ok: true }
+        : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
+    }),
+  },
+  {
+    name: "notify degraded logs warning instead of delivery success",
+    run: async () => withDebugLog(async (logFile) => {
+      const runtime = createHooksRuntime(
+        {
+          ...createFakeHost(),
+          notify: () => ({ status: "degraded", reason: "ui_unavailable" satisfies HostDeliveryResult["reason"] }),
+        },
+        {
+          directory: "/repo",
+          hooks: buildHookMap([{ notify: "hi" }], "session.idle"),
+        },
+      )
+
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      const lines = readLogLines(logFile)
+      const sawWarning = lines.some(
+        (line) => line.includes("Notification action degraded before the host accepted it") && line.includes("ui_unavailable"),
+      )
+      const sawSuccess = lines.some((line) => line.includes("Notification action delivered"))
+      return sawWarning && !sawSuccess
+        ? { ok: true }
+        : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
+    }),
+  },
+  {
+    name: "setStatus degraded logs warning instead of success",
+    run: async () => withDebugLog(async (logFile) => {
+      const runtime = createHooksRuntime(
+        {
+          ...createFakeHost(),
+          setStatus: () => ({ status: "degraded", reason: "ui_unavailable" satisfies HostDeliveryResult["reason"] }),
+        },
+        {
+          directory: "/repo",
+          hooks: buildHookMap([{ setStatus: "busy" }], "session.idle"),
+        },
+      )
+
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      const lines = readLogLines(logFile)
+      const sawWarning = lines.some(
+        (line) => line.includes("Status action degraded before the host accepted it") && line.includes("ui_unavailable"),
+      )
+      const sawSuccess = lines.some((line) => line.includes("Status action updated the PI status surface"))
+      return sawWarning && !sawSuccess
+        ? { ok: true }
+        : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
+    }),
+  },
+  {
+    name: "legacy void notify still logs delivery success",
+    run: async () => withDebugLog(async (logFile) => {
+      const runtime = createHooksRuntime(createFakeHost(), {
+        directory: "/repo",
+        hooks: buildHookMap([{ notify: "hi" }], "session.idle"),
+      })
+
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      const lines = readLogLines(logFile)
+      const sawSuccess = lines.some((line) => line.includes("Notification action delivered"))
+      return sawSuccess ? { ok: true } : { ok: false, detail: `lines=${JSON.stringify(lines)}` }
+    }),
+  },
+  {
+    name: "adapter dispatch failures are visible without debug mode",
+    run: async () => {
+      const previousDebug = process.env.PI_HOOKS_DEBUG
+      const previousLevel = process.env.PI_HOOKS_LOG_LEVEL
+      const previousFile = process.env.PI_HOOKS_LOG_FILE
+      delete process.env.PI_HOOKS_DEBUG
+      delete process.env.PI_HOOKS_LOG_LEVEL
+      delete process.env.PI_HOOKS_LOG_FILE
+      resetPiHooksLoggerForTests()
+
+      const originalError = console.error
+      const calls: string[] = []
+      console.error = (...args: unknown[]) => {
+        calls.push(args.map(String).join(" "))
+      }
+
+      try {
+        reportDispatchFailure(getPiHooksLogger(), { cwd: "/repo", event: "session.idle", sessionId: "s1" }, new Error("boom"))
+      } finally {
+        console.error = originalError
+        if (previousDebug === undefined) delete process.env.PI_HOOKS_DEBUG
+        else process.env.PI_HOOKS_DEBUG = previousDebug
+        if (previousLevel === undefined) delete process.env.PI_HOOKS_LOG_LEVEL
+        else process.env.PI_HOOKS_LOG_LEVEL = previousLevel
+        if (previousFile === undefined) delete process.env.PI_HOOKS_LOG_FILE
+        else process.env.PI_HOOKS_LOG_FILE = previousFile
+        resetPiHooksLoggerForTests()
+      }
+
+      return calls.some((line) => line.includes("session.idle dispatch failed: boom"))
+        ? { ok: true }
+        : { ok: false, detail: `calls=${JSON.stringify(calls)}` }
+    },
   },
 ]
 
