@@ -1,31 +1,51 @@
 # pi-hooks
 
-Port of https://github.com/KristjanPikhof/OpenCode-Hooks to PI.
+`pi-hooks` adds YAML-driven hooks to the [PI coding agent](https://www.npmjs.com/package/@mariozechner/pi-coding-agent). You can run `bash` around tool calls and session events, block risky actions before they run, and surface PI-native notifications, confirmations, and status entries from `hooks.yaml`.
 
-YAML-driven hooks for the [PI coding agent](https://www.npmjs.com/package/@mariozechner/pi-coding-agent). Run bash scripts on tool calls and session lifecycle events; block dangerous commands; surface notifications, confirmations, and status-bar entries from your hook config.
+This repo is the PI port of OpenCode-Hooks. The hook model is familiar, but the runtime is PI-native and the limits are explicit.
 
----
+## What it does
+
+- Run hooks on `tool.before.*`, `tool.after.*`, `file.changed`, `session.created`, `session.idle`, and `session.deleted`
+- Use `bash`, `tool`, `notify`, `confirm`, and `setStatus` actions
+- Filter hooks with `matchesCodeFiles`, `matchesAnyPath`, and `matchesAllPaths`
+- Load one global root config and one trusted project root config, each with top-level `imports:`
+- Show built-in diagnostics with `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, and `/hooks-tail-log`
 
 ## Requirements
 
-- **macOS or Linux.** Windows is unsupported (the bash executor expects a POSIX `bash` on `$PATH`).
-- **Node.js ≥ 22.0.0.** Path conditions (`matchesAnyPath`, `matchesAllPaths`) use `node:path.matchesGlob`, which exists from Node 22.
-- **`bash` on `$PATH`** (override with `PI_HOOKS_BASH_EXECUTABLE`).
-- **`@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`** (peer dependency — installed alongside PI itself).
+- macOS or Linux
+- Node.js `>=22.0.0`
+- `bash` on `$PATH` (override with `PI_HOOKS_BASH_EXECUTABLE`)
+- `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`
 
----
+Windows is unsupported.
+
+## Install
+
+The recommended install is a symlink into PI's discovered extensions directory.
+
+```bash
+git clone https://github.com/KristjanPikhof/pi-hooks.git
+cd pi-hooks
+npm install
+
+ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
+```
+
+Other install paths:
+
+| Method | When to use |
+|---|---|
+| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | Recommended. Auto-discovered and reloadable. |
+| `pi -e /path/to/pi-hooks/src/index.ts` | One-off testing without touching global config. |
+| `<project>/.pi/extensions/pi-hooks.ts` | Project-local install. |
 
 ## Quick start
 
+Create a minimal global hook file so you can see the extension working right away.
+
 ```bash
-git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git
-cd pi-hooks
-npm install      # or: npm install
-
-# Make pi auto-discover the extension globally
-ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
-
-# Drop a minimal hooks.yaml so something happens
 mkdir -p ~/.pi/agent/hook
 cat > ~/.pi/agent/hook/hooks.yaml <<'YAML'
 hooks:
@@ -34,355 +54,116 @@ hooks:
       - notify: "Agent is idle"
 YAML
 
-# Run pi as usual; on session idle a notification fires.
 pi
-# expect: [pi-hooks] Loaded 1 hook (global: 1, project: 0).
 ```
 
-If a trusted project also has `.pi/hook/hooks.yaml` (or `.pi/hooks.yaml`), startup output looks like:
+Expected startup output:
+
+```text
+[pi-hooks] Loaded 1 hook (global: 1, project: 0).
+```
+
+If a trusted project also has project hooks, the summary includes both scopes.
 
 ```text
 [pi-hooks] Loaded 3 hooks (global: 1, project: 2).
 ```
 
-### Alternative installation paths
+## How it works
 
-| Method | When to use |
-|--------|-------------|
-| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | **Recommended.** PI auto-discovers, hot-reloadable via `/reload`. |
-| `pi -e /path/to/pi-hooks/src/index.ts` | One-off / testing without touching the global extensions dir. |
-| Drop in `<project>/.pi/extensions/pi-hooks.ts` | Project-local install. |
+`pi-hooks` discovers at most one global root config and one project root config. Each root file can import more hook files with top-level `imports:`. The project root is repo/worktree-aware, not exact-cwd-only, and project hooks load only when that repo or worktree anchor is trusted.
 
-Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if a reload fails, `pi-hooks` keeps the last known good hook set and logs the error.
+When an event matches, `pi-hooks` evaluates conditions and runs the configured actions. `bash` actions receive hook context JSON on stdin plus injected `PI_*` environment variables such as `PI_PROJECT_DIR`, `PI_WORKTREE_DIR`, `PI_SESSION_ID`, and `PI_GIT_COMMON_DIR`.
 
----
+## Native PI surface
 
-## Examples (opt-in via `hooks.yaml`)
+### Events
 
-- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — auto-commit every `write`/`edit` through a Python snapshot pipeline. Includes a ready-to-paste `hooks.yaml`.
-
-## Detailed docs
-
-- [`docs/README.md`](./docs/README.md) — documentation entry point
-- [`docs/setup.md`](./docs/setup.md) — installation, config paths, trust, reloads
-- [`docs/hooks-reference.md`](./docs/hooks-reference.md) — exact hook fields, events, conditions, actions, and PI-specific behavior
-- [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) — practical rules for people and agents writing `hooks.yaml`
-- [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
-- [`docs/examples/`](./docs/examples/) — copy-paste examples for each major hook pattern
-
-## Native /hooks commands
-
-`pi-hooks` now registers these PI slash commands:
-
-- `/hooks-status` — show the active hook summary, config paths, trust state, and log path
-- `/hooks-validate` — validate active hooks and explain whether a project hook file is valid but still untrusted
-- `/hooks-trust` — add the current project to `~/.pi/agent/trusted-projects.json`
-- `/hooks-reload` — reload extensions and command surfaces; edited `hooks.yaml` still auto-refreshes on the next event
-- `/hooks-tail-log` — show the log file path plus a ready-to-run `tail -F` command
-
-`/hooks-status` and `/hooks-validate` now also emit structured in-session diagnostics messages. Hook-load validation problems do the same automatically when PI first loads a broken config and keeps the last valid hooks active.
-
-`pi-hooks` also appends a concise hook-awareness note before agent start so Pi can reason more accurately about loaded hooks, trust state, and PI-specific limitations. Set `PI_HOOKS_PROMPT_AWARENESS=0` to disable that prompt injection.
-
----
-
-## Pi 0.68.1 / 0.69.0 compatibility update
-
-- `pi-hooks` now declares `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0` as its peer dependency so the current compatibility surface covers both Pi 0.68.1 and 0.69.0.
-- The supported native surfaces remain the current tool and session lifecycle events, `before_agent_start` prompt injection, `pi.sendUserMessage`, and `ctx.ui.notify` / `ctx.ui.confirm` / `ctx.ui.setStatus`.
-- Known PI limitations remain explicit: `command:` actions are still rejected, non-bash cross-session targeting is still unavailable, and `action: stop` only blocks pre-tool hooks.
-- Automated coverage in `src/pi/adapter.test.ts` exercises the two compatibility-sensitive surfaces for this pass: `before_agent_start` prompt awareness and lossy session lifecycle handling around `/new`, `/resume`, and `/fork`.
-
----
-
-## Configuration
-
-### hooks.yaml locations
-
-The extension resolves one global root config and one project-level root config.
-
-**Global:**
-1. `~/.pi/agent/hook/hooks.yaml` (preferred)
-2. `~/.pi/agent/hooks.yaml`
-3. `%APPDATA%/pi/agent/hook/hooks.yaml` (Windows only, preferred)
-4. `%APPDATA%/pi/agent/hooks.yaml` (Windows only)
-
-**Project-level** (resolved from `cwd` at first event, **only when the project is trusted** — see below):
-1. `<project>/.pi/hook/hooks.yaml` (preferred)
-2. `<project>/.pi/hooks.yaml`
-
-One global root config and one project root config are discovered at most. Within each scope, the first existing path wins. Each discovered root file can then compose additional hook files with a top-level `imports:` list. Imports load before the importing file's own `hooks:`, keep declared order, expand directories in lexical order, resolve package specifiers through Node module resolution, and dedupe repeated files by canonical path. Later hooks still win only through normal `override:` / `disable:` behavior.
-
-On first load, pi-hooks prints a short summary so you can see what was picked up:
-
-```text
-[pi-hooks] Loaded 3 hooks (global: 1, project: 2).
-```
-
-### Project hook trust (security)
-
-Project-scoped hook files contain `bash:` actions and run with your user's full permissions. To prevent a freshly cloned untrusted repo from executing arbitrary code the moment you `cd` in, **project hooks are only loaded for explicitly trusted directories**.
-
-Two ways to trust a project:
-
-1. **Per-session env var** — fast and ephemeral:
-   ```bash
-   PI_HOOKS_TRUST_PROJECT=1 pi
-   ```
-2. **Persistent trust list** — add the absolute project directory to `~/.pi/agent/trusted-projects.json`:
-   ```json
-   ["/Users/me/code/myproj", "/Users/me/code/another-proj"]
-   ```
-
-Untrusted project hook files trigger a one-time warning explaining how to opt in, and are then skipped. Global hooks (`~/.pi/agent/hook/hooks.yaml` or `~/.pi/agent/hooks.yaml`) are not gated — they're already in your home directory and under your direct control.
-
-### Minimal example
-
-```yaml
-imports:
-  - ./hooks.d
-  - my-shared-hooks
-
-hooks:
-  # Log every synthesized file.changed payload for later inspection.
-  - event: file.changed
-    actions:
-      - bash: 'mkdir -p .pi-hook-logs && cat >> .pi-hook-logs/file-changed.ndjson'
-
-  # Notify when the agent finishes a turn.
-  - event: session.idle
-    actions:
-      - notify: "Agent is idle"
-```
-
----
-
-## Supported features
-
-### Hook events
-
-| Event | When it fires |
-|-------|--------------|
-| `tool.before.<name>` | Before any tool call; `*` matches all tools |
-| `tool.before.*` | Before every tool call |
-| `tool.after.<name>` | After any tool call |
-| `tool.after.*` | After every tool call |
-| `file.changed` | Synthesized from recognized mutation tool results; on stock PI that includes `write`, `edit`, and some `bash` commands such as `mv`, `rm`, `cp`, `touch`, and `mkdir` |
-| `session.idle` | When the agent loop ends and no messages are pending |
-| `session.created` | On new session or PI startup |
-| `session.deleted` | On session shutdown or session switch (lossy — see Unsupported) |
-
-**PI built-in tool names:** `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`.
-
-### Conditions
-
-```yaml
-conditions:
-  - matchesCodeFiles          # matches source/config file extensions
-  - matchesAnyPath:
-      - "src/**/*.ts"
-      - "*.json"
-  - matchesAllPaths: "src/**"
-  - matchesAllPaths: "**/*.ts"
-```
+| Event | Meaning |
+|---|---|
+| `tool.before.*` | Before a tool call |
+| `tool.after.*` | After a tool call |
+| `file.changed` | Synthesized after recognized file mutations |
+| `session.created` | New session or PI startup |
+| `session.idle` | Agent turn finished and no messages are pending |
+| `session.deleted` | Session shutdown or switch, intentionally lossy |
 
 ### Actions
 
-| Action | Behavior on PI |
-|--------|---------------|
-| `bash` | Spawns bash with injected env vars; exit code 2 on `tool.before.*` blocks the tool |
-| `tool` | Sends a prompt to the current session via `pi.sendUserMessage`; cross-session targeting is advisory-only |
-| `notify` | Shows a UI notification; `success` level maps to `info` |
-| `confirm` | Shows a confirmation dialog; rejection blocks the tool on pre-tool hooks |
-| `setStatus` | Sets a status-bar entry keyed to the hook ID |
+| Action | PI behavior |
+|---|---|
+| `bash` | Runs a shell command with injected context |
+| `tool` | Sends a follow-up prompt into the current PI session |
+| `notify` | Shows a PI notification when a UI surface exists |
+| `confirm` | Shows a confirmation dialog before a tool runs |
+| `setStatus` | Sets a PI status-bar entry keyed to the hook |
 
-**`bash` action — injected environment variables:**
+### Slash commands
 
-| Variable | Alias | Value |
-|----------|-------|-------|
-| `PI_PROJECT_DIR` | `OPENCODE_PROJECT_DIR` | Current project directory |
-| `PI_WORKTREE_DIR` | `OPENCODE_WORKTREE_DIR` | Git worktree root |
-| `PI_SESSION_ID` | `OPENCODE_SESSION_ID` | Current session ID |
-| `PI_GIT_COMMON_DIR` | `OPENCODE_GIT_COMMON_DIR` | Git common directory (worktrees) |
+| Command | What it shows |
+|---|---|
+| `/hooks-status` | Active hooks, config paths, trust state, and log path |
+| `/hooks-validate` | Validation results for active hooks and skipped untrusted project hooks |
+| `/hooks-trust` | Adds the current repo/worktree anchor to `~/.pi/agent/trusted-projects.json` |
+| `/hooks-reload` | Reloads the extension and command surface |
+| `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command |
 
-Both `PI_*` (canonical) and `OPENCODE_*` (legacy alias) names are always set so scripts migrated from OpenCode work unchanged.
+## Important limitations
 
-The bash executable defaults to `bash`. Override with `PI_HOOKS_BASH_EXECUTABLE=/path/to/bash`.
+These are the PI-specific constraints that matter most:
 
-A bash action on a `tool.before.*` hook that exits with code 2 blocks the tool call. Any non-zero exit that is not code 2 is treated as a failed hook but does not block.
+- `command:` actions are unsupported on PI and are rejected at load time
+- `tool:` is prompt injection, not imperative tool execution
+- `action: stop` only has real effect on `tool.before.*`
+- `runIn: main` is unsupported for non-`bash` actions
+- `session.deleted` is intentionally lossy
+- `user_bash` interception is opt-in with `PI_HOOKS_ENABLE_USER_BASH=1`
 
-Hook context JSON is written to stdin of the bash process.
+If you are authoring hooks, keep those rules in mind first. They explain most surprising behavior.
 
-### async queue serialization
+## Config paths and trust
 
-```yaml
-- event: tool.after.write
-  async: true
-  actions:
-    - bash: ./commit.sh
+Global root config paths:
+
+1. `~/.pi/agent/hook/hooks.yaml`
+2. `~/.pi/agent/hooks.yaml`
+
+Project root config paths:
+
+1. `<project>/.pi/hook/hooks.yaml`
+2. `<project>/.pi/hooks.yaml`
+
+Project hooks are gated by trust because they can run arbitrary `bash` with your user permissions. Trust is evaluated against the repo/worktree anchor, not an arbitrary nested directory string.
+
+Two ways to trust a project:
+
+```bash
+PI_HOOKS_TRUST_PROJECT=1 pi
 ```
 
-Setting `async: true` enqueues the hook for serialized execution instead of running it inline.
+or use the built-in command:
 
-### scope
-
-```yaml
-scope: main    # fires only in the root/main session
-scope: child   # fires only in child sessions (filters via session ancestry)
-scope: all     # default — fires in all sessions
+```text
+/hooks-trust
 ```
-
-`scope` filters where the hook itself runs. This is separate from `runIn`, which is compatibility metadata for action targeting.
-
----
-
-## Unsupported / compatibility notes
-
-### `command:` actions — rejected at load time
-
-PI exposes no API to invoke slash commands from event handlers. Hooks that contain a `command:` action are **dropped from the active hook map at load time** with a clear error logged to stderr — they will not execute. Replace with `bash:` or `tool:`.
-
-```yaml
-# This hook is dropped at load time with an error:
-actions:
-  - command: /my-command
-
-# Replace with:
-actions:
-  - bash: pi --rpc my-command   # or whatever the bash equivalent is
-```
-
-### `session.deleted` is lossy
-
-PI fires `session_shutdown` and `session_before_switch` for graceful shutdown, `/new`, `/resume`, and `/fork` — there is no way to distinguish them. `session.deleted` fires for all of these. Do not use it as a reliable "session was closed" signal.
-
-## Manual PI 0.69 verification checklist
-
-Use this when smoke-testing against a real Pi 0.69.0 install:
-
-1. Start PI in a repo with a valid `hooks.yaml` and confirm `before_agent_start` adds the hook-awareness note to the effective system prompt behavior.
-2. Start PI in headless or print/RPC mode and confirm the injected note mentions UI degradation for `notify`, `confirm`, and `setStatus`.
-3. Run `/new` and verify `session.deleted` cleanup hooks run once for the old session while `session.created` fires for the fresh session.
-4. Run `/resume` and verify `session.deleted` may fire for the switched-away session, but `session.created` does not re-fire for the resumed session.
-5. Run `/fork` and verify `session.deleted` may fire for the switched-away session, but `session.created` does not treat the fork switch as a fresh startup/reload of the old session.
-
-### Tool names that never match
-
-The following tool names from OpenCode have no PI equivalent and will never match:
-
-- `multiedit`
-- `patch`
-- `apply_patch`
-
-PI built-ins are: `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`. Hooks on `tool.before.multiedit` etc. are loaded with an advisory warning, not a hard error.
-
-### `runIn: main` on non-bash actions — rejected at load time
-
-Hooks with `runIn: main` paired with a `tool:`, `notify:`, `confirm:`, or `setStatus:` action are dropped at load with an error.
-
-`runIn` is compatibility metadata, not a strong cross-session execution guarantee on PI. For the exact current behavior, see [`docs/hooks-reference.md`](./docs/hooks-reference.md).
-
-### `tool:` action — advisory only
-
-For valid PI configurations, `tool:` actions run as current-session follow-up prompts via `pi.sendUserMessage`. If a different target session is ever requested, the adapter degrades to the current session and records that mismatch in logs.
-
-If `pi.sendUserMessage` fails, the hook now reports a normal error to stderr by default. `PI_HOOKS_DEBUG=1` is only needed for deeper trace-level diagnostics.
-
-### `action: stop` — only for pre-tool hooks
-
-PI does not expose an extension-side abort outside `tool_call`. `action: stop` on a `tool.before.*` hook reaches PI as a `block: true` response (the tool does not run). On `tool.after.*` or `session.idle`, abort is a no-op (logged when `PI_HOOKS_DEBUG=1`).
-
-### `confirm:` fails closed in headless mode
-
-If PI is running without a UI surface (print/RPC mode), `confirm:` actions return `false` (deny) instead of silently approving. This protects destructive operations behind a confirm gate from auto-running where no human can answer. Set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to opt into the previous fail-open behavior.
-
-### Optional `user_bash` interception
-
-Set `PI_HOOKS_ENABLE_USER_BASH=1` to route human `!` / `!!` shell commands through `tool.before.bash` hooks before PI executes them.
-
-- this is opt-in and disabled by default
-- only pre-bash safety hooks are applied; it does not synthesize `tool.after.*` or `file.changed`
-- blocking semantics match normal pre-tool bash hooks, so `confirm:` can stop destructive commands
-- in headless mode, `confirm:` still fails closed
-
----
 
 ## Examples
 
-- [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/) — Python-based atomic-commit pipeline. Wire it up via `hooks.yaml`; see the example's README for setup, env vars, and verification.
+Example workflows live under [`examples/`](./examples/). The main one today is [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/).
 
----
+That snapshot worker is an opt-in example, not a built-in PI feature.
 
-## Troubleshooting
+## Docs
 
-**First failure — work through this list:**
+If you want the full reference, start here:
 
-1. Confirm Node version: `node --version` → must be ≥ 22.0.0. Older Node disables path-conditioned hooks silently (now hard-fails at startup with an error in the latest version).
-2. Confirm `bash` is on `$PATH`: `which bash`. Override with `PI_HOOKS_BASH_EXECUTABLE=/path/to/bash`.
-3. Start PI and look for the startup summary: `[pi-hooks] Loaded N hooks (global: G, project: P).`
-4. If you need deeper diagnostics, run with debug logging: `PI_HOOKS_DEBUG=1 pi`.
-5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the repo/worktree trust anchor is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
-6. If a `notify:` / `confirm:` / `setStatus:` action is degraded, PI is in headless mode (`ctx.hasUI === false`). `notify` and `setStatus` warn once per adapter/runtime instance; `confirm` fails closed. Bash actions still run.
-
-**Windows:** Unsupported. The extension logs one warning and registers no handlers (the bash executor requires a POSIX `bash`).
-
-**Timed-out bash hooks on macOS/Linux:** `pi-hooks` now signals the whole spawned process group, not just the top-level shell, so backgrounded descendants are cleaned up as part of timeout handling. Timeout logs include the SIGTERM/SIGKILL cleanup path and final result.
-
-**Debug logging:**
-```bash
-PI_HOOKS_DEBUG=1 pi
-```
-Normal hook execution failures and adapter dispatch failures already print concise stderr errors without debug mode. Debug logging adds persistent structured traces.
-
-Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, abort no-ops, UI surface warnings, and Python-bridge failures (when an example pipes into Python).
-
-**Override the bash executable:**
-```bash
-PI_HOOKS_BASH_EXECUTABLE=/opt/homebrew/bin/bash
-```
-
-**Override the bash output cap (default 1 MiB per hook):**
-```bash
-PI_HOOKS_MAX_OUTPUT_BYTES=4194304
-```
-
-**GUI-launched PI inherits a different environment.** When you launch PI from a terminal, hooks see your shell's `$PATH`, `OPENAI_API_KEY`, etc. When PI launches from Spotlight / the Dock / an IDE extension on macOS, it inherits `launchd`'s environment instead — your `~/.zshrc` exports do **not** reach hooks. Either launch PI from a terminal, wrap the hook command in `/bin/zsh -ilc "..."`, or `launchctl setenv KEY value` for system-wide propagation.
-
-**No UI surface:** If `notify`, `confirm`, or `setStatus` actions do not reach the PI UI, PI is running in print/RPC mode where `ctx.hasUI` is false. `notify` and `setStatus` degrade to a warned no-op (one warning per adapter/runtime instance), while structured logs record that degraded outcome when logging is enabled. `confirm` fails *closed* (returns `false`) — set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to keep the old auto-approve behavior. Bash actions always run.
-
----
-
-## Migration from OpenCode
-
-OpenCode hook paths are no longer discovered automatically. Move your config to the PI-native locations instead:
-
-- global: `~/.pi/agent/hook/hooks.yaml` or `~/.pi/agent/hooks.yaml`
-- project: `<project>/.pi/hook/hooks.yaml` or `<project>/.pi/hooks.yaml`
-
-If both PI-native variants exist in the same scope, the `hook/hooks.yaml` location wins.
-
-**What carries over unchanged:**
-- All hook events: `tool.before.*`, `tool.after.*`, `file.changed`, `session.*`
-- Conditions: `matchesCodeFiles`, `matchesAnyPath`, `matchesAllPaths`
-- Bash actions, including the snapshot-hook bash invocations
-- `scope`, `async`, `runIn: current`
-
-**Env var changes:** `PI_*` names are now canonical. `OPENCODE_*` names are kept as aliases and are always injected alongside `PI_*`, so existing bash scripts work unchanged.
-
-**Things to rewrite:**
-
-| Was | Replace with |
-|-----|-------------|
-| `command:` actions | `bash:` or `tool:` |
-| `runIn: main` on non-bash actions | `bash:` equivalent or remove `runIn` |
-| `tool.before.multiedit` / `patch` / `apply_patch` events | `tool.before.edit` or `tool.before.write` |
-
-**New in PI:** `notify:`, `confirm:`, and `setStatus:` actions are wired to `ctx.ui`; `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, and `/hooks-tail-log` are built in; hook diagnostics can render as structured in-session messages. The snapshot worker remains an opt-in example, not a native slash-command feature.
-
----
+- [`docs/README.md`](./docs/README.md) for the docs entry point and reading order
+- [`docs/setup.md`](./docs/setup.md) for install, config paths, trust, reloads, and environment variables
+- [`docs/hooks-reference.md`](./docs/hooks-reference.md) for the hook schema, events, conditions, actions, and PI behavior
+- [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) for practical authoring rules
+- [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) for logs and troubleshooting
+- [`docs/examples/README.md`](./docs/examples/README.md) for copy-paste example patterns
 
 ## License
 
 MIT.
-
-Source: https://github.com/KristjanPikhof/OpenCode-Hooks
