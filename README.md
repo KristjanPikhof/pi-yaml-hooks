@@ -11,7 +11,7 @@ YAML-driven hooks for the [PI coding agent](https://www.npmjs.com/package/@mario
 - **macOS or Linux.** Windows is unsupported (the bash executor expects a POSIX `bash` on `$PATH`).
 - **Node.js ≥ 22.0.0.** Path conditions (`matchesAnyPath`, `matchesAllPaths`) use `node:path.matchesGlob`, which exists from Node 22.
 - **`bash` on `$PATH`** (override with `PI_HOOKS_BASH_EXECUTABLE`).
-- **`@mariozechner/pi-coding-agent ^0.68.1`** (peer dependency — installed alongside PI itself).
+- **`@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`** (peer dependency — installed alongside PI itself).
 
 ---
 
@@ -86,12 +86,12 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 
 ---
 
-## Pi 0.68.1 compatibility update
+## Pi 0.68.1 / 0.69.0 compatibility update
 
-- `pi-hooks` now targets the Pi 0.68.1 extension surface and declares `@mariozechner/pi-coding-agent ^0.68.1` as its peer dependency.
-- The supported native surfaces are the current tool and session lifecycle events, `pi.sendUserMessage`, and `ctx.ui.notify` / `ctx.ui.confirm` / `ctx.ui.setStatus`.
+- `pi-hooks` now declares `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0` as its peer dependency so the current compatibility surface covers both Pi 0.68.1 and 0.69.0.
+- The supported native surfaces remain the current tool and session lifecycle events, `before_agent_start` prompt injection, `pi.sendUserMessage`, and `ctx.ui.notify` / `ctx.ui.confirm` / `ctx.ui.setStatus`.
 - Known PI limitations remain explicit: `command:` actions are still rejected, non-bash cross-session targeting is still unavailable, and `action: stop` only blocks pre-tool hooks.
-- This release also tightens default failure reporting so hook delivery and adapter dispatch problems are visible without requiring debug mode.
+- Automated coverage in `src/pi/adapter.test.ts` exercises the two compatibility-sensitive surfaces for this pass: `before_agent_start` prompt awareness and lossy session lifecycle handling around `/new`, `/resume`, and `/fork`.
 
 ---
 
@@ -255,6 +255,16 @@ actions:
 ### `session.deleted` is lossy
 
 PI fires `session_shutdown` and `session_before_switch` for graceful shutdown, `/new`, `/resume`, and `/fork` — there is no way to distinguish them. `session.deleted` fires for all of these. Do not use it as a reliable "session was closed" signal.
+
+## Manual PI 0.69 verification checklist
+
+Use this when smoke-testing against a real Pi 0.69.0 install:
+
+1. Start PI in a repo with a valid `hooks.yaml` and confirm `before_agent_start` adds the hook-awareness note to the effective system prompt behavior.
+2. Start PI in headless or print/RPC mode and confirm the injected note mentions UI degradation for `notify`, `confirm`, and `setStatus`.
+3. Run `/new` and verify `session.deleted` cleanup hooks run once for the old session while `session.created` fires for the fresh session.
+4. Run `/resume` and verify `session.deleted` may fire for the switched-away session, but `session.created` does not re-fire for the resumed session.
+5. Run `/fork` and verify `session.deleted` may fire for the switched-away session, but `session.created` does not treat the fork switch as a fresh startup/reload of the old session.
 
 ### Tool names that never match
 
