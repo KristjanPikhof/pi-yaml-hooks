@@ -15,23 +15,53 @@ This repository documents the peer support range exactly as `^0.68.1 || ^0.69.0`
 
 ## Install the extension
 
-### Recommended: global extension symlink
+`pi-hooks` is installable as a PI package straight from git. That should be your default unless you are actively editing a local checkout.
+
+### Recommended: `pi install`
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git pi-hooks
-cd pi-hooks
-npm install
-ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
+# SSH
+pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks
+
+# HTTPS
+pi install https://github.com/KristjanPikhof/pi-yaml-hooks
 ```
 
-This lets PI auto-discover the extension.
+By default this writes to `~/.pi/agent/settings.json`. Add `-l` to install into `.pi/settings.json` for the current project instead.
+
+### Add it through `packages`
+
+If you prefer to edit settings directly, add the git source to the `packages` array.
+
+**Global**, in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "packages": [
+    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+  ]
+}
+```
+
+**Project-local**, in `.pi/settings.json`:
+
+```json
+{
+  "packages": [
+    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+  ]
+}
+```
+
+Project settings override global ones, and PI installs missing project packages automatically on startup.
 
 ### Other install options
 
 | Method | Use when |
 |---|---|
-| `pi -e /path/to/pi-hooks/src/index.ts` | You want a one-off test without changing your global setup |
-| `<project>/.pi/extensions/pi-hooks.ts` | You want a project-local install |
+| `pi -e git:git@github.com:KristjanPikhof/pi-yaml-hooks` | You want a one-off run without writing settings |
+| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | You are editing a local checkout and want PI to load that working tree |
+| `<project>/.pi/extensions/pi-hooks.ts` | You want a project-local local-dev install from a checkout |
 
 ## Create your first hook file
 

@@ -25,23 +25,61 @@ Windows is unsupported.
 
 ## Install
 
-The recommended install is a symlink into PI's discovered extensions directory.
+`pi-hooks` is installable as a PI package straight from git. That is the recommended path. PI clones the repo, installs dependencies, and loads the extension declared in `package.json`.
+
+### Option 1: `pi install` (recommended)
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git pi-hooks
-cd pi-hooks
-npm install
+# SSH
+pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks
 
-ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
+# HTTPS
+pi install https://github.com/KristjanPikhof/pi-yaml-hooks
 ```
 
-Other install paths:
+This writes to global settings at `~/.pi/agent/settings.json`. Add `-l` to write to project settings at `.pi/settings.json` instead.
+
+### Option 2: edit `settings.json` by hand
+
+Add the package source to the `packages` array. PI auto-installs missing project packages on startup.
+
+**Global**, in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "packages": [
+    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+  ]
+}
+```
+
+**Project-local**, in `.pi/settings.json`:
+
+```json
+{
+  "packages": [
+    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+  ]
+}
+```
+
+### Option 3: one-off trial
+
+```bash
+pi -e git:git@github.com:KristjanPikhof/pi-yaml-hooks
+```
+
+This loads `pi-hooks` for the current run only. Nothing is written to settings.
+
+### Local development from a checkout
+
+If you are editing this repo locally, the symlink workflow is still useful:
 
 | Method | When to use |
 |---|---|
-| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | Recommended. Auto-discovered and reloadable. |
-| `pi -e /path/to/pi-hooks/src/index.ts` | One-off testing without touching global config. |
-| `<project>/.pi/extensions/pi-hooks.ts` | Project-local install. |
+| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | Local development with a checked-out repo. |
+| `pi -e /path/to/pi-hooks/src/index.ts` | One-off local testing from a checkout. |
+| `<project>/.pi/extensions/pi-hooks.ts` | Project-local local-dev install from a checkout. |
 
 ## Quick start
 
