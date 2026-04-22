@@ -177,15 +177,22 @@ export interface HooksRuntime {
 export interface CreateHooksRuntimeOptions {
   readonly directory: string
   readonly hooks?: HookMap
+  readonly initialSignature?: string
+  readonly reloadDiscoveredHooks?: boolean
   readonly executeBash?: ExecuteBashHook
 }
 
 export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntimeOptions): HooksRuntime {
   const projectDir = options.directory
   const logger = getPiHooksLogger()
+  const shouldReloadDiscoveredHooks = options.reloadDiscoveredHooks === true
 
   let loaded = options.hooks
-    ? { hooks: options.hooks, errors: [] as HookValidationError[], signature: "manual" }
+    ? {
+        hooks: options.hooks,
+        errors: [] as HookValidationError[],
+        signature: options.initialSignature ?? "manual",
+      }
     : loadDiscoveredHooksSnapshot({ projectDir })
   if (loaded.errors.length > 0) {
     console.error(formatHookLoadErrors(loaded.errors))
@@ -211,7 +218,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   const actionRecursionGuards = new AsyncLocalStorage<Set<string>>()
 
   function refreshHooks(): HookMap {
-    if (options.hooks) {
+    if (options.hooks && !shouldReloadDiscoveredHooks) {
       return hooks
     }
 
