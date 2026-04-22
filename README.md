@@ -18,9 +18,9 @@ YAML-driven hooks for the [PI coding agent](https://www.npmjs.com/package/@mario
 ## Quick start
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-hooks
+git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git
 cd pi-hooks
-bun install      # or: npm install
+npm install      # or: npm install
 
 # Make pi auto-discover the extension globally
 ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
