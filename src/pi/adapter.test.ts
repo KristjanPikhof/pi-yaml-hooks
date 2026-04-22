@@ -10,39 +10,88 @@ interface Case {
   readonly run: () => Promise<{ ok: boolean; detail?: string }>
 }
 
-type AgentEndHandler = (event: unknown, ctx: unknown) => Promise<void> | void
+type PiHandler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown
 
-function createFakePi(): {
-  readonly pi: Parameters<typeof registerAdapter>[0]
-  readonly handlers: Map<string, AgentEndHandler>
-} {
-  const handlers = new Map<string, AgentEndHandler>()
-  const pi = {
-    on: (event: string, handler: AgentEndHandler) => {
-      handlers.set(event, handler)
-    },
-    sendUserMessage: () => {},
-  } as unknown as Parameters<typeof registerAdapter>[0]
+class FakePiHarness {
+  readonly projectDir: string
+  readonly notifications: string[] = []
+  readonly statusUpdates: Array<{ hookId: string; text?: string }> = []
+  readonly confirms: Array<{ title: string; message: string }> = []
+  readonly userMessages: Array<{ text: string; options?: unknown }> = []
+  readonly handlers = new Map<string, PiHandler>()
+  readonly sessionId: string
+  hasUI = true
+  confirmResult = true
 
-  return { pi, handlers }
-}
+  constructor(projectDir: string, sessionId = "session-1") {
+    this.projectDir = projectDir
+    this.sessionId = sessionId
+  }
 
-function createContext(cwd: string, notifications: string[]) {
-  return {
-    cwd,
-    hasUI: true,
-    ui: {
-      notify: (text: string) => {
-        notifications.push(text)
+  register(): void {
+    const pi = {
+      on: (event: string, handler: PiHandler) => {
+        this.handlers.set(event, handler)
       },
-    },
-    sessionManager: {
-      getSessionId: () => "session-1",
-      getHeader: () => ({}),
-    },
-    isIdle: () => true,
-    hasPendingMessages: () => false,
-  } as never
+      sendUserMessage: (text: string, options?: unknown) => {
+        this.userMessages.push({ text, options })
+      },
+    } as unknown as Parameters<typeof registerAdapter>[0]
+
+    registerAdapter(pi)
+  }
+
+  createContext(): unknown {
+    return {
+      cwd: this.projectDir,
+      hasUI: this.hasUI,
+      ui: this.hasUI
+        ? {
+            notify: (text: string) => {
+              this.notifications.push(text)
+            },
+            confirm: async (title: string, message: string) => {
+              this.confirms.push({ title, message })
+              return this.confirmResult
+            },
+            setStatus: (hookId: string, text?: string) => {
+              this.statusUpdates.push({ hookId, text })
+            },
+          }
+        : undefined,
+      sessionManager: {
+        getSessionId: () => this.sessionId,
+        getHeader: () => ({}),
+      },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+    } as never
+  }
+
+  async emit(eventName: string, event: unknown = {}): Promise<unknown> {
+    const handler = this.handlers.get(eventName)
+    if (!handler) {
+      throw new Error(`${eventName} handler was not registered`)
+    }
+
+    return await handler(event, this.createContext())
+  }
+
+  async sessionStart(reason: "new" | "startup" | "resume" = "new"): Promise<void> {
+    await this.emit("session_start", { reason })
+  }
+
+  async agentEnd(): Promise<void> {
+    await this.emit("agent_end")
+  }
+
+  async toolCall(toolName: string, toolCallId: string, input: Record<string, unknown> = {}): Promise<unknown> {
+    return await this.emit("tool_call", { toolName, toolCallId, input })
+  }
+
+  async toolResult(toolName: string, toolCallId: string, input: Record<string, unknown> = {}): Promise<void> {
+    await this.emit("tool_result", { toolName, toolCallId, input })
+  }
 }
 
 function writeProjectHooks(projectDir: string, content: string): void {
@@ -51,33 +100,155 @@ function writeProjectHooks(projectDir: string, content: string): void {
   writeFileSync(filePath, content, "utf8")
 }
 
-async function dispatchIdle(handlers: Map<string, AgentEndHandler>, ctx: unknown): Promise<void> {
-  const handler = handlers.get("agent_end")
-  if (!handler) {
-    throw new Error("agent_end handler was not registered")
-  }
+function withTrust<T>(trusted: boolean, run: () => Promise<T>): Promise<T> {
+  const previousTrust = process.env.PI_HOOKS_TRUST_PROJECT
+  if (trusted) process.env.PI_HOOKS_TRUST_PROJECT = "1"
+  else delete process.env.PI_HOOKS_TRUST_PROJECT
+  return run().finally(() => {
+    if (previousTrust === undefined) delete process.env.PI_HOOKS_TRUST_PROJECT
+    else process.env.PI_HOOKS_TRUST_PROJECT = previousTrust
+  })
+}
 
-  await handler({}, ctx)
+async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string) => Promise<T>): Promise<T> {
+  const projectDir = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-adapter-"))
+  const previousWarn = console.warn
+  const previousInfo = console.info
+  const previousError = console.error
+  resetPiHooksLoggerForTests()
+  console.warn = () => {}
+  console.info = () => {}
+  console.error = () => {}
+
+  return withTrust(trusted, async () => {
+    try {
+      return await run(projectDir)
+    } finally {
+      console.warn = previousWarn
+      console.info = previousInfo
+      console.error = previousError
+      resetPiHooksLoggerForTests()
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
 }
 
 const cases: Case[] = [
   {
-    name: "adapter reloads edited hooks and keeps the last known good config on invalid edits",
-    run: async () => {
-      const tempProject = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-adapter-"))
-      const previousTrust = process.env.PI_HOOKS_TRUST_PROJECT
-      const previousWarn = console.warn
-      const previousInfo = console.info
-      const previousError = console.error
-      process.env.PI_HOOKS_TRUST_PROJECT = "1"
-      resetPiHooksLoggerForTests()
-      console.warn = () => {}
-      console.info = () => {}
-      console.error = () => {}
-
-      try {
+    name: "trusted project hooks load through PI session lifecycle events",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
         writeProjectHooks(
-          tempProject,
+          projectDir,
+          `hooks:
+  - event: session.created
+    actions:
+      - notify: "trusted-created"
+  - event: session.idle
+    actions:
+      - notify: "trusted-idle"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionStart("new")
+        await harness.agentEnd()
+
+        const expected = JSON.stringify(["trusted-created", "trusted-idle"])
+        return JSON.stringify(harness.notifications) === expected
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "untrusted project hooks do not load through the lifecycle harness",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.created
+    actions:
+      - notify: "should-not-run"
+  - event: session.idle
+    actions:
+      - notify: "should-not-run"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionStart("new")
+        await harness.agentEnd()
+
+        return harness.notifications.length === 0
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "tool actions queue PI follow-up prompts through sendUserMessage",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: tool.after.write
+    actions:
+      - tool:
+          name: grep
+          args:
+            pattern: TODO
+            path: src
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.toolResult("write", "call-1", { path: path.join(projectDir, "src", "file.ts"), content: "ok" })
+
+        if (harness.userMessages.length !== 1) {
+          return { ok: false, detail: `userMessages=${JSON.stringify(harness.userMessages)}` }
+        }
+
+        const [{ text, options }] = harness.userMessages
+        return text.includes("Use the grep tool") && JSON.stringify(options) === JSON.stringify({ deliverAs: "followUp" })
+          ? { ok: true }
+          : { ok: false, detail: `userMessages=${JSON.stringify(harness.userMessages)}` }
+      }),
+  },
+  {
+    name: "headless confirm denies tool execution by default",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: tool.before.bash
+    actions:
+      - confirm:
+          title: "Approval required"
+          message: "Run command?"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.hasUI = false
+        harness.register()
+        const result = await harness.toolCall("bash", "call-2", { command: "echo hi" })
+
+        return JSON.stringify(result) === JSON.stringify({ block: true, reason: "Blocked by confirm action" }) && harness.confirms.length === 0
+          ? { ok: true }
+          : { ok: false, detail: `result=${JSON.stringify(result)}, confirms=${JSON.stringify(harness.confirms)}` }
+      }),
+  },
+  {
+    name: "edited hooks reload through PI events and invalid edits keep last known good config",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
           `hooks:
   - event: session.idle
     actions:
@@ -85,46 +256,38 @@ const cases: Case[] = [
 `,
         )
 
-        const notifications: string[] = []
-        const { pi, handlers } = createFakePi()
-        registerAdapter(pi)
-        const ctx = createContext(tempProject, notifications)
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
 
-        await dispatchIdle(handlers, ctx)
+        await harness.agentEnd()
 
         writeProjectHooks(
-          tempProject,
+          projectDir,
           `hooks:
   - event: session.idle
     actions:
-      - notify: "idle-version-two"
+      - notify: "idle-v2"
 `,
         )
-        await dispatchIdle(handlers, ctx)
+        await harness.toolResult("edit", "call-3", { path: path.join(projectDir, ".pi", "hook", "hooks.yaml") })
+        await harness.agentEnd()
 
         writeProjectHooks(
-          tempProject,
+          projectDir,
           `hooks:
   - event: session.idle
     actions:
       - notify:
 `,
         )
-        await dispatchIdle(handlers, ctx)
+        await harness.toolResult("edit", "call-4", { path: path.join(projectDir, ".pi", "hook", "hooks.yaml") })
+        await harness.agentEnd()
 
-        return JSON.stringify(notifications) === JSON.stringify(["idle-v1", "idle-version-two", "idle-version-two"])
+        const expected = JSON.stringify(["idle-v1", "idle-v2", "idle-v2"])
+        return JSON.stringify(harness.notifications) === expected
           ? { ok: true }
-          : { ok: false, detail: `notifications=${JSON.stringify(notifications)}` }
-      } finally {
-        console.warn = previousWarn
-        console.info = previousInfo
-        console.error = previousError
-        if (previousTrust === undefined) delete process.env.PI_HOOKS_TRUST_PROJECT
-        else process.env.PI_HOOKS_TRUST_PROJECT = previousTrust
-        resetPiHooksLoggerForTests()
-        rmSync(tempProject, { recursive: true, force: true })
-      }
-    },
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
   },
 ]
 
