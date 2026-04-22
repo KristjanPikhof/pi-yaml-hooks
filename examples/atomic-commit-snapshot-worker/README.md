@@ -18,10 +18,15 @@ yourself by adding the snippet below to your `hooks.yaml`.
 
 ### 2. Wire it from `hooks.yaml`
 
-Drop this into `~/.pi/agent/hook/hooks.yaml` (global, preferred),
-`~/.pi/agent/hooks.yaml`, `<project>/.pi/hook/hooks.yaml` (project-local,
-preferred), or `<project>/.pi/hooks.yaml`. Replace `/abs/path/to/pi-hooks`
-with where you cloned this repo.
+Use this example as a project-local hook unless you really want automatic
+commits in every trusted repo session. Put it in `<project>/.pi/hook/hooks.yaml`
+(preferred) or `<project>/.pi/hooks.yaml`, and make sure that repo/worktree is
+trusted before you expect the hook to load.
+
+You also need a real checkout or copied script directory on disk. `pi install`
+by itself does not give you a stable `/abs/path/to/pi-hooks/...` path to point
+at. Replace `/abs/path/to/pi-hooks` below with the actual path where these
+example scripts live.
 
 ```yaml
 hooks:

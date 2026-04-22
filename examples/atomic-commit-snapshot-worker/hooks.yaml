@@ -1,9 +1,8 @@
 # pi-hooks example: atomic-commit-snapshot-worker
 #
-# Drop these two hooks into ~/.pi/agent/hook/hooks.yaml (global, preferred),
-# ~/.pi/agent/hooks.yaml, <project>/.pi/hook/hooks.yaml (project-local,
-# preferred), or <project>/.pi/hooks.yaml. Replace the absolute path with
-# where you cloned this repo.
+# Drop these two hooks into <project>/.pi/hook/hooks.yaml (preferred) or
+# <project>/.pi/hooks.yaml. Trust that repo/worktree first, then replace the
+# absolute path with where these example scripts live on disk.
 #
 # See the README in this directory for prerequisites and verification steps.
 

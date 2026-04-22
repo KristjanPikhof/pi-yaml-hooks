@@ -12,6 +12,9 @@ This is an opt-in example, not a built-in `pi-hooks` feature.
 
 ## Hook snippet
 
+Use this as a project-local hook. It is a repo-specific workflow, and project
+hooks only load after the repo/worktree anchor is trusted.
+
 ```yaml
 hooks:
   - id: snapshot-autocommit
@@ -26,7 +29,9 @@ hooks:
       - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
 ```
 
-Replace `/abs/path/to/pi-hooks` with the actual clone path.
+Replace `/abs/path/to/pi-hooks` with the actual path where you checked out or
+copied these example scripts. `pi install` alone does not give you a stable
+working-tree path for this snippet.
 
 ## When to use it
 
