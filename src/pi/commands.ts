@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-cod
 
 import { getPiHooksLogFilePath } from "../core/logger.js"
 import {
+  resolveProjectHookResolution,
   resolveHookConfigPaths,
 } from "../core/config-paths.js"
 import {
@@ -71,11 +72,11 @@ export function registerCommands(pi: ExtensionAPI): void {
     description: "Trust the current project hook file",
     handler: async (_args, ctx) => {
       const projectDir = path.resolve(ctx.cwd)
-      const paths = resolveHookConfigPaths({ projectDir })
-      if (!paths.project || !existsSync(paths.project)) {
+      const project = resolveProjectHookResolution({ projectDir })
+      if (!project?.projectConfigPath || !existsSync(project.projectConfigPath)) {
         notifyCommand(
           ctx,
-          `No project hook file was found for ${projectDir}. Create ${paths.project ?? path.join(projectDir, ".pi", "hook", "hooks.yaml")} first, then run /hooks-trust again.`,
+          `No project hook file was found for ${projectDir}. Create ${project?.projectConfigPath ?? path.join(projectDir, ".pi", "hook", "hooks.yaml")} first, then run /hooks-trust again.`,
           "warning",
         )
         return
@@ -92,14 +93,16 @@ export function registerCommands(pi: ExtensionAPI): void {
         return
       }
 
-      if (!current.entries.includes(projectDir)) {
+      const trustAnchor = project.canonicalAnchorDir
+      const normalizedCurrent = new Set(current.entries.map((entry) => path.resolve(entry)))
+      if (!normalizedCurrent.has(trustAnchor)) {
         mkdirSync(path.dirname(trustFile), { recursive: true })
-        writeFileSync(trustFile, JSON.stringify([...current.entries, projectDir], null, 2) + "\n", "utf8")
+        writeFileSync(trustFile, JSON.stringify([...current.entries, trustAnchor], null, 2) + "\n", "utf8")
       }
 
       notifyCommand(
         ctx,
-        `Trusted project hooks for ${projectDir}. Run /hooks-validate or trigger another PI event to confirm the active hook set.`,
+        `Trusted project hooks for ${project.anchorDir}. Run /hooks-validate or trigger another PI event to confirm the active hook set.`,
         "info",
       )
     },
@@ -146,11 +149,9 @@ function getHooksStatus(ctx: ExtensionCommandContext): HooksStatus {
   const projectDir = path.resolve(ctx.cwd)
   const paths = resolveHookConfigPaths({ projectDir })
   const active = loadDiscoveredHooksSnapshot({ projectDir })
-  const trustedProjects = readTrustedProjects(getTrustedProjectsFilePath())
+  const project = resolveProjectHookResolution({ projectDir })
   const projectConfigExists = Boolean(paths.project && existsSync(paths.project))
-  const projectTrusted =
-    process.env.PI_HOOKS_TRUST_PROJECT === "1" ||
-    (trustedProjects.ok && trustedProjects.entries.some((entry) => path.resolve(entry) === projectDir))
+  const projectTrusted = project?.trusted ?? false
 
   return {
     projectDir,
