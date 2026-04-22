@@ -1201,7 +1201,7 @@ async function executeAction(
     try {
       const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
       if (typeof host.setStatus === "function") {
-        const statusHookId = `${sourceFilePath}#${event}`
+        const statusHookId = `pi-hooks:${hookId}`
         const delivery = normalizeHostDeliveryResult(await host.setStatus(statusHookId, config.text))
         const deliveryDetails = {
           statusHookId,
