@@ -28,7 +28,7 @@ export function registerCommands(pi: ExtensionAPI): void {
         `Project trusted: ${status.projectTrusted ? "yes" : "no"}`,
         `Hook log: ${status.logFilePath}`,
       ]
-      if (!status.projectTrusted && status.paths.project) {
+      if (status.projectConfigExists && !status.projectTrusted) {
         lines.push("Project hooks exist but are not active until the project is trusted.")
       }
       notifyCommand(ctx, lines.join("\n"), "info")
@@ -71,11 +71,30 @@ export function registerCommands(pi: ExtensionAPI): void {
     description: "Trust the current project hook file",
     handler: async (_args, ctx) => {
       const projectDir = path.resolve(ctx.cwd)
+      const paths = resolveHookConfigPaths({ projectDir })
+      if (!paths.project || !existsSync(paths.project)) {
+        notifyCommand(
+          ctx,
+          `No project hook file was found for ${projectDir}. Create ${paths.project ?? path.join(projectDir, ".pi", "hook", "hooks.yaml")} first, then run /hooks-trust again.`,
+          "warning",
+        )
+        return
+      }
+
       const trustFile = getTrustedProjectsFilePath()
       const current = readTrustedProjects(trustFile)
-      if (!current.includes(projectDir)) {
+      if (!current.ok) {
+        notifyCommand(
+          ctx,
+          `Cannot update ${trustFile} because it is not valid JSON. Fix or remove that file, then run /hooks-trust again.`,
+          "error",
+        )
+        return
+      }
+
+      if (!current.entries.includes(projectDir)) {
         mkdirSync(path.dirname(trustFile), { recursive: true })
-        writeFileSync(trustFile, JSON.stringify([...current, projectDir], null, 2) + "\n", "utf8")
+        writeFileSync(trustFile, JSON.stringify([...current.entries, projectDir], null, 2) + "\n", "utf8")
       }
 
       notifyCommand(
@@ -117,6 +136,7 @@ export function registerCommands(pi: ExtensionAPI): void {
 interface HooksStatus {
   readonly projectDir: string
   readonly projectTrusted: boolean
+  readonly projectConfigExists: boolean
   readonly paths: ReturnType<typeof resolveHookConfigPaths>
   readonly active: ReturnType<typeof loadDiscoveredHooksSnapshot>
   readonly logFilePath: string
@@ -126,11 +146,15 @@ function getHooksStatus(ctx: ExtensionCommandContext): HooksStatus {
   const projectDir = path.resolve(ctx.cwd)
   const paths = resolveHookConfigPaths({ projectDir })
   const active = loadDiscoveredHooksSnapshot({ projectDir })
-  const projectTrusted = active.sources.some((source) => source.scope === "project")
+  const trustedProjects = readTrustedProjects(getTrustedProjectsFilePath())
+  const projectConfigExists = Boolean(paths.project && existsSync(paths.project))
+  const projectTrusted =
+    trustedProjects.ok && trustedProjects.entries.some((entry) => path.resolve(entry) === projectDir)
 
   return {
     projectDir,
     projectTrusted,
+    projectConfigExists,
     paths,
     active,
     logFilePath: getPiHooksLogFilePath(),
@@ -182,15 +206,20 @@ function getTrustedProjectsFilePath(): string {
   return path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
 }
 
-function readTrustedProjects(filePath: string): string[] {
+function readTrustedProjects(filePath: string):
+  | { readonly ok: true; readonly entries: string[] }
+  | { readonly ok: false } {
   try {
     if (!existsSync(filePath)) {
-      return []
+      return { ok: true, entries: [] }
     }
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown
-    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []
+    if (!Array.isArray(parsed)) {
+      return { ok: false }
+    }
+    return { ok: true, entries: parsed.filter((entry): entry is string => typeof entry === "string") }
   } catch {
-    return []
+    return { ok: false }
   }
 }
 
