@@ -309,6 +309,22 @@ const runtimeCases: RuntimeCase[] = [
     },
   },
   {
+    name: "adapter sendPrompt reports degraded when PI can only target the current session",
+    run: async () => {
+      const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(
+        pi,
+        "/tmp",
+        () => ({ getSessionId: () => "current-session" } as never),
+        () => undefined,
+      )
+      const result = host.sendPrompt("root-session", "hello")
+      return result && typeof result === "object" && "status" in result && result.status === "degraded"
+        ? { ok: true }
+        : { ok: false, detail: `result=${JSON.stringify(result)}` }
+    },
+  },
+  {
     name: "adapter setStatus throws when PI UI status update fails",
     run: async () => {
       const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
