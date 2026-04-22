@@ -132,9 +132,14 @@ function withTrust<T>(trusted: boolean, run: () => Promise<T>): Promise<T> {
 
 async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string) => Promise<T>): Promise<T> {
   const projectDir = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-adapter-"))
+  const homeDir = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-home-"))
   const previousWarn = console.warn
   const previousInfo = console.info
   const previousError = console.error
+  const previousHome = process.env.HOME
+  const previousUserProfile = process.env.USERPROFILE
+  process.env.HOME = homeDir
+  process.env.USERPROFILE = homeDir
   resetPiHooksLoggerForTests()
   console.warn = () => {}
   console.info = () => {}
@@ -147,8 +152,13 @@ async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string
       console.warn = previousWarn
       console.info = previousInfo
       console.error = previousError
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = previousUserProfile
       resetPiHooksLoggerForTests()
       rmSync(projectDir, { recursive: true, force: true })
+      rmSync(homeDir, { recursive: true, force: true })
     }
   })
 }
