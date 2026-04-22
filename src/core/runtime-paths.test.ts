@@ -47,6 +47,31 @@ function createFakeHost(records: string[]): HostAdapter {
   }
 }
 
+function createDelayedNotifyHost(records: string[], delayMs: number): HostAdapter {
+  return {
+    abort: () => {},
+    getRootSessionId: (id) => id,
+    runBash: async (req: BashExecutionRequest): Promise<BashHookResult> => ({
+      command: req.command,
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      blocking: false,
+      status: "success",
+      durationMs: 0,
+      signal: null,
+    }),
+    sendPrompt: () => {},
+    notify: async (text) => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+      records.push(text)
+    },
+    confirm: async () => true,
+    setStatus: () => {},
+  }
+}
+
 const cases: Case[] = [
   {
     name: "buildPathMatchContext normalizes change paths once per dispatch shape",
@@ -121,6 +146,35 @@ const cases: Case[] = [
       })
 
       return JSON.stringify(records) === JSON.stringify(["code-file-match"])
+        ? { ok: true }
+        : { ok: false, detail: `records=${JSON.stringify(records)}` }
+    },
+  },
+  {
+    name: "queued dispatches compute path match context per request",
+    run: async () => {
+      const records: string[] = []
+      const runtime = createHooksRuntime(createDelayedNotifyHost(records, 25), {
+        directory: "/repo",
+        hooks: buildHookMap([{ notify: "queued-match" }], "tool.after.write", [{ matchesAnyPath: ["src/**"] }]),
+      })
+
+      await Promise.all([
+        runtime["tool.execute.after"]({
+          tool: "write",
+          sessionID: "s1",
+          callID: "c4",
+          args: { path: "/repo/docs/readme.md", content: "docs" },
+        }),
+        runtime["tool.execute.after"]({
+          tool: "write",
+          sessionID: "s1",
+          callID: "c5",
+          args: { path: "/repo/src/queued.ts", content: "code" },
+        }),
+      ])
+
+      return JSON.stringify(records) === JSON.stringify(["queued-match"])
         ? { ok: true }
         : { ok: false, detail: `records=${JSON.stringify(records)}` }
     },
