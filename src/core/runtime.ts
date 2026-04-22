@@ -11,6 +11,7 @@ import type {
   FileChange,
   HookAction,
   HookConfig,
+  HostDeliveryResult,
   HookEvent,
   HookMap,
   HookRunIn,
@@ -1008,19 +1009,40 @@ async function executeAction(
 
       const prompt = `Use the ${action.tool.name} tool with these arguments: ${JSON.stringify(action.tool.args ?? {})}`
       const actionKey = `${event}:${targetSessionID}:tool:${sourceFilePath}:${JSON.stringify(action.tool)}`
+      let delivery: HostDeliveryResult = { status: "accepted" }
       await withActionRecursionGuard(actionRecursionGuards, actionKey, async () => {
-        await host.sendPrompt(targetSessionID, prompt)
+        delivery = normalizeHostDeliveryResult(await host.sendPrompt(targetSessionID, prompt))
       })
-      logger.info("action_result", "Tool action queued a follow-up prompt.", {
-        cwd: projectDir,
-        event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: sourceFilePath,
-        action: actionType,
-        toolName: action.tool.name,
-        details: { targetSessionID, prompt, args: action.tool.args ?? {} },
-      })
+      const deliveryDetails = {
+        targetSessionID,
+        prompt,
+        args: action.tool.args ?? {},
+        ...(delivery.reason ? { reason: delivery.reason } : {}),
+        ...(delivery.details ? delivery.details : {}),
+      }
+      if (delivery.status === "degraded") {
+        logger.warn("action_result", "Tool action degraded before the follow-up prompt was accepted.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          toolName: action.tool.name,
+          details: deliveryDetails,
+        })
+      } else {
+        logger.info("action_result", "Tool action queued a follow-up prompt.", {
+          cwd: projectDir,
+          event,
+          sessionId: sessionID,
+          hookId,
+          hookSource: sourceFilePath,
+          action: actionType,
+          toolName: action.tool.name,
+          details: deliveryDetails,
+        })
+      }
     } catch (error) {
       logger.error("action_result", "Tool action failed.", {
         cwd: projectDir,
@@ -1042,16 +1064,34 @@ async function executeAction(
       const config = typeof action.notify === "string" ? { text: action.notify } : action.notify
       const level = config.level ?? "info"
       if (typeof host.notify === "function") {
-        await host.notify(config.text, level)
-        logger.info("action_result", "Notification action delivered.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { text: config.text, level },
-        })
+        const delivery = normalizeHostDeliveryResult(await host.notify(config.text, level))
+        const deliveryDetails = {
+          text: config.text,
+          level,
+          ...(delivery.reason ? { reason: delivery.reason } : {}),
+          ...(delivery.details ? delivery.details : {}),
+        }
+        if (delivery.status === "degraded") {
+          logger.warn("action_result", "Notification action degraded before the host accepted it.", {
+            cwd: projectDir,
+            event,
+            sessionId: sessionID,
+            hookId,
+            hookSource: sourceFilePath,
+            action: actionType,
+            details: deliveryDetails,
+          })
+        } else {
+          logger.info("action_result", "Notification action delivered.", {
+            cwd: projectDir,
+            event,
+            sessionId: sessionID,
+            hookId,
+            hookSource: sourceFilePath,
+            action: actionType,
+            details: deliveryDetails,
+          })
+        }
       } else {
         console.warn(`[pi-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
         logger.warn("action_result", "Notification action skipped because host.notify is unavailable.", {
@@ -1130,16 +1170,34 @@ async function executeAction(
       const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
       if (typeof host.setStatus === "function") {
         const statusHookId = `${sourceFilePath}#${event}`
-        await host.setStatus(statusHookId, config.text)
-        logger.info("action_result", "Status action updated the PI status surface.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { statusHookId, text: config.text },
-        })
+        const delivery = normalizeHostDeliveryResult(await host.setStatus(statusHookId, config.text))
+        const deliveryDetails = {
+          statusHookId,
+          text: config.text,
+          ...(delivery.reason ? { reason: delivery.reason } : {}),
+          ...(delivery.details ? delivery.details : {}),
+        }
+        if (delivery.status === "degraded") {
+          logger.warn("action_result", "Status action degraded before the host accepted it.", {
+            cwd: projectDir,
+            event,
+            sessionId: sessionID,
+            hookId,
+            hookSource: sourceFilePath,
+            action: actionType,
+            details: deliveryDetails,
+          })
+        } else {
+          logger.info("action_result", "Status action updated the PI status surface.", {
+            cwd: projectDir,
+            event,
+            sessionId: sessionID,
+            hookId,
+            hookSource: sourceFilePath,
+            action: actionType,
+            details: deliveryDetails,
+          })
+        }
       } else {
         console.warn(`[pi-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
         logger.warn("action_result", "Status action skipped because host.setStatus is unavailable.", {
@@ -1337,6 +1395,18 @@ function logHookFailure(event: HookEvent, filePath: string, error: unknown): voi
     details: { error: message },
   })
   console.error(`[pi-hooks] ${event} hook from ${filePath} failed: ${message}`)
+}
+
+function normalizeHostDeliveryResult(result: void | HostDeliveryResult | undefined): HostDeliveryResult {
+  if (
+    result &&
+    typeof result === "object" &&
+    (result.status === "accepted" || result.status === "degraded")
+  ) {
+    return result
+  }
+
+  return { status: "accepted" }
 }
 
 async function withActionRecursionGuard<T>(
