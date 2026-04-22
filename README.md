@@ -28,7 +28,7 @@ Windows is unsupported.
 The recommended install is a symlink into PI's discovered extensions directory.
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-hooks.git
+git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git pi-hooks
 cd pi-hooks
 npm install
 

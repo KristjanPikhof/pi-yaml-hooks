@@ -18,7 +18,7 @@ This repository documents the peer support range exactly as `^0.68.1 || ^0.69.0`
 ### Recommended: global extension symlink
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-hooks.git
+git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git pi-hooks
 cd pi-hooks
 npm install
 ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
