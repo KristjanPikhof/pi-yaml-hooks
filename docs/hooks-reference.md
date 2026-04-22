@@ -4,9 +4,13 @@ This document describes the current `pi-hooks` behavior as implemented in this r
 
 ## Hook file shape
 
-A hook file must parse to an object with a top-level `hooks:` array.
+A hook file must parse to an object with a top-level `hooks:` array. It may also define an optional top-level `imports:` array.
 
 ```yaml
+imports:
+  - ./hooks.d
+  - my-shared-hooks
+
 hooks:
   - id: example
     event: session.idle
@@ -20,17 +24,29 @@ hooks:
 
 Each action entry must define exactly one action key.
 
+## `imports`
+
+`imports` composes hook files before the current file's own hooks are merged.
+
+- imports load before local hooks
+- import order is preserved
+- directory imports expand files in lexical order
+- package imports use Node module resolution from the importing file
+- duplicate imports are skipped by canonical path
+- cycles and missing imports produce load errors
+- imported files inherit the importing root scope (`global` or `project`)
+
 ## Load order and precedence
 
-`pi-hooks` loads at most:
+`pi-hooks` discovers at most:
 
-- one global hook file
-- one trusted project hook file
+- one global root hook file
+- one trusted project root hook file
 
 The order is always:
 
-1. global
-2. project
+1. global imports, then global root hooks
+2. project imports, then project root hooks
 
 Without overrides, hooks from both files stay active.
 

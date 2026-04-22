@@ -95,7 +95,7 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 
 ### hooks.yaml locations
 
-The extension resolves one global config and one project-level config.
+The extension resolves one global root config and one project-level root config.
 
 **Global:**
 1. `~/.pi/agent/hook/hooks.yaml` (preferred)
@@ -107,7 +107,7 @@ The extension resolves one global config and one project-level config.
 1. `<project>/.pi/hook/hooks.yaml` (preferred)
 2. `<project>/.pi/hooks.yaml`
 
-One global config and one project config are loaded at most. Within each scope, the first existing path wins. Both files stay active unless the later file explicitly replaces or disables earlier hooks by `id` with `override:` / `disable:`.
+One global root config and one project root config are discovered at most. Within each scope, the first existing path wins. Each discovered root file can then compose additional hook files with a top-level `imports:` list. Imports load before the importing file's own `hooks:`, keep declared order, expand directories in lexical order, resolve package specifiers through Node module resolution, and dedupe repeated files by canonical path. Later hooks still win only through normal `override:` / `disable:` behavior.
 
 On first load, pi-hooks prints a short summary so you can see what was picked up:
 
@@ -135,6 +135,10 @@ Untrusted project hook files trigger a one-time warning explaining how to opt in
 ### Minimal example
 
 ```yaml
+imports:
+  - ./hooks.d
+  - my-shared-hooks
+
 hooks:
   # Log every synthesized file.changed payload for later inspection.
   - event: file.changed

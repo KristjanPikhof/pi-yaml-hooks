@@ -68,7 +68,7 @@ You should see a startup summary like:
 
 ## Hook file locations
 
-`pi-hooks` checks at most one global file and one project file.
+`pi-hooks` checks at most one global root file and one project root file.
 
 ### Global locations
 
@@ -87,6 +87,30 @@ Checked in this order:
 2. `<project>/.pi/hooks.yaml`
 
 Within each scope, the first existing path wins.
+
+Each discovered root file may also declare top-level imports:
+
+```yaml
+imports:
+  - ./hooks.d
+  - ./base.yaml
+  - my-shared-hooks
+hooks:
+  - event: session.created
+    actions:
+      - notify: "ready"
+```
+
+Import rules:
+
+- imports load before the importing file's own hooks
+- relative imports resolve from the importing file
+- non-relative imports resolve through Node module resolution
+- directory imports expand files in stable lexical order
+- repeated imports are deduped by canonical path
+- import cycles and missing imports are load errors
+- imported files inherit the root file scope (`global` or `project`)
+- trust is still decided only at the discovered project root file
 
 ## Trust project hooks
 
@@ -120,13 +144,13 @@ If a project hook file exists but the project is not trusted, `pi-hooks` prints 
 
 The load order is:
 
-1. global hooks
-2. trusted project hooks
+1. global root file imports, then global root hooks
+2. trusted project root file imports, then project root hooks
 
 That means:
 
-- both files can contribute active hooks
-- the project file does not automatically replace the global file
+- both roots and their imports can contribute active hooks
+- the project root does not automatically replace the global root
 - replacement only happens when the later file uses `override:` against a hook `id`
 
 For exact override behavior, see [`hooks-reference.md`](./hooks-reference.md).
