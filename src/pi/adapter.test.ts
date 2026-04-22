@@ -208,6 +208,17 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "registers the hook diagnostics message renderer",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        return harness.messageRenderers.has("pi-hooks-diagnostics")
+          ? { ok: true }
+          : { ok: false, detail: `renderers=${JSON.stringify(Array.from(harness.messageRenderers.keys()))}` }
+      }),
+  },
+  {
     name: "untrusted project hooks do not load through the lifecycle harness",
     run: async () =>
       await withIsolatedProject(false, async (projectDir) => {
@@ -418,10 +429,10 @@ hooks: []
         harness.register()
         await harness.command("hooks-status")
 
-        return harness.notifications.some((message) => message.includes("Project trusted: yes")) &&
-            harness.notifications.some((message) => message.includes("Active summary:"))
+        return harness.customMessages.some((message) => message.customType === "pi-hooks-diagnostics") &&
+            harness.customMessages.some((message) => JSON.stringify(message.content).includes("Project trusted: yes"))
           ? { ok: true }
-          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+          : { ok: false, detail: `messages=${JSON.stringify(harness.customMessages)}` }
       }),
   },
   {
@@ -455,10 +466,10 @@ hooks: []
         harness.register()
         await harness.command("hooks-validate")
 
-        return harness.notifications.some((message) => message.includes("valid but untrusted")) &&
-            harness.notifications.some((message) => message.includes("/hooks-trust"))
+        return harness.customMessages.some((message) => JSON.stringify(message.content).includes("valid but untrusted")) &&
+            harness.customMessages.some((message) => JSON.stringify(message.content).includes("/hooks-trust"))
           ? { ok: true }
-          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+          : { ok: false, detail: `messages=${JSON.stringify(harness.customMessages)}` }
       }),
   },
   {
@@ -585,6 +596,29 @@ hooks: []
         return harness.notifications.some((message) => message.includes("tail -F"))
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "hook load validation errors emit a structured diagnostics message",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify:
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.agentEnd()
+
+        return harness.customMessages.some((message) => message.customType === "pi-hooks-diagnostics") &&
+            harness.customMessages.some((message) => JSON.stringify(message.content).includes("validation issue"))
+          ? { ok: true }
+          : { ok: false, detail: `messages=${JSON.stringify(harness.customMessages)}` }
       }),
   },
 ]
