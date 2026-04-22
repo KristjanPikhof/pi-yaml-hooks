@@ -246,16 +246,15 @@ const snapshotCache = new Map<string, CachedSnapshot>()
 
 export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): HookLoadSnapshot {
   const entries = discoverHookConfigEntries(options)
-  const files = entries.map((entry) => entry.filePath)
-  const fingerprintSignature = computeFingerprintSignature(files)
-  const cacheKey = files.join("\0")
+  const snapshots = snapshotDiscoveredHookFiles(entries, options.readFile ?? defaultReadFile)
+  const result = loadDiscoveredHooksFromSnapshots(snapshots)
+  const fingerprintSignature = computeFingerprintSignature(result.files)
+  const cacheKey = entries.map((entry) => entry.filePath).join("\0")
   const cached = snapshotCache.get(cacheKey)
   if (cached && cached.signature === fingerprintSignature) {
     return { ...cached.result, signature: cached.signature }
   }
 
-  const snapshots = snapshotDiscoveredHookFiles(entries, options.readFile ?? defaultReadFile)
-  const result = loadDiscoveredHooksFromSnapshots(snapshots)
   snapshotCache.set(cacheKey, { signature: fingerprintSignature, result })
   return { ...result, signature: fingerprintSignature }
 }
