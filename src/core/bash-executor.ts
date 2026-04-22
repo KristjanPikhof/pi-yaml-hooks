@@ -23,6 +23,17 @@ const SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL = process.platform !== "win32"
 // into the host process. Override via PI_HOOKS_MAX_OUTPUT_BYTES.
 const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
 const TRUNCATION_MARKER = "\n…[pi-hooks: output truncated]"
+const executionContextCache = new Map<string, ExecutionContext>()
+
+interface ExecutionContext {
+  worktreeDir: string
+  gitCommonDir?: string
+  resolvedFromGit: boolean
+}
+
+interface ExecutionContextResolver {
+  execFileSync(command: string, args: string[], options: { cwd: string; encoding: "utf8"; stdio: ["ignore", "pipe", "ignore"] }): string
+}
 
 function parseMaxOutputBytes(raw: string | undefined): number | undefined {
   if (!raw) return undefined
@@ -307,28 +318,71 @@ function redactSensitiveContent(value: string): string {
     )
 }
 
-function resolveExecutionContext(projectDir: string): { worktreeDir: string; gitCommonDir?: string; resolvedFromGit: boolean } {
+export function resetExecutionContextCacheForTests(): void {
+  executionContextCache.clear()
+}
+
+export function resolveExecutionContext(
+  projectDir: string,
+  resolver: ExecutionContextResolver = { execFileSync },
+): ExecutionContext {
+  const normalizedProjectDir = path.resolve(projectDir)
+  const cached = getCachedExecutionContext(normalizedProjectDir)
+  if (cached) {
+    return cached
+  }
+
   try {
-    const output = execFileSync("git", ["rev-parse", "--show-toplevel", "--git-common-dir"], {
-      cwd: projectDir,
+    const output = resolver.execFileSync("git", ["rev-parse", "--show-toplevel", "--git-common-dir"], {
+      cwd: normalizedProjectDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim()
 
     const [worktreeDirLine, gitCommonDirLine] = output.split(/\r?\n/)
-    const worktreeDir = worktreeDirLine?.trim() || projectDir
+    const worktreeDir = path.resolve(worktreeDirLine?.trim() || normalizedProjectDir)
     const gitCommonDir = gitCommonDirLine?.trim()
 
-    return {
+    const context = {
       worktreeDir,
       resolvedFromGit: true,
       ...(gitCommonDir
         ? {
-            gitCommonDir: path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(projectDir, gitCommonDir),
+            gitCommonDir: path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(normalizedProjectDir, gitCommonDir),
           }
         : {}),
     }
+    cacheExecutionContext(normalizedProjectDir, context)
+    return context
   } catch {
-    return { worktreeDir: projectDir, resolvedFromGit: false }
+    const context = { worktreeDir: normalizedProjectDir, resolvedFromGit: false }
+    cacheExecutionContext(normalizedProjectDir, context)
+    return context
   }
+}
+
+function getCachedExecutionContext(projectDir: string): ExecutionContext | undefined {
+  const direct = executionContextCache.get(projectDir)
+  if (direct) {
+    return direct
+  }
+
+  for (const context of executionContextCache.values()) {
+    if (context.resolvedFromGit && isWithinDir(projectDir, context.worktreeDir)) {
+      executionContextCache.set(projectDir, context)
+      return context
+    }
+  }
+
+  return undefined
+}
+
+function cacheExecutionContext(projectDir: string, context: ExecutionContext): void {
+  executionContextCache.set(projectDir, context)
+  executionContextCache.set(context.worktreeDir, context)
+}
+
+function isWithinDir(candidate: string, dir: string): boolean {
+  const relativePath = path.relative(dir, candidate)
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
 }
