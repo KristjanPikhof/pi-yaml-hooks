@@ -133,6 +133,12 @@ interface RuntimeActionContext {
   readonly toolArgs?: Record<string, unknown>
   readonly sourceSessionID?: string
   readonly targetSessionID?: string
+  readonly pathMatchContext?: PathMatchContext
+}
+
+export interface PathMatchContext {
+  readonly changedPaths: readonly string[]
+  readonly hasCodeFiles: boolean
 }
 
 interface HookExecutionResult {
@@ -603,6 +609,7 @@ async function dispatchHooks(
   })
 
   const hooksForEvent = eventHooks
+  const preparedContext = prepareRuntimeActionContext(projectDir, context)
 
   const dispatchKey = `${event}:${sessionID}`
   const dispatchState = dispatchStates.get(dispatchKey)
@@ -658,7 +665,7 @@ async function dispatchHooks(
         projectDir,
         runBashHook,
         sessionID,
-        request.context,
+        request.context.pathMatchContext ? request.context : preparedContext,
         request.options,
         actionRecursionGuards,
         asyncQueues,
@@ -860,7 +867,8 @@ async function shouldRunHook(
   sessionID: string,
   context: RuntimeActionContext,
 ): Promise<HookMatchDecision> {
-  const changedPaths = getFinalChangedPaths(projectDir, context)
+  const pathMatchContext = context.pathMatchContext ?? buildPathMatchContext(projectDir, context)
+  const changedPaths = pathMatchContext.changedPaths
 
   if (!(await state.evaluateScope(sessionID, hook.scope, (currentSessionID) => resolveParentSessionID(host, currentSessionID)))) {
     return {
@@ -873,13 +881,12 @@ async function shouldRunHook(
 
   for (const condition of hook.conditions ?? []) {
     if (condition === "matchesCodeFiles") {
-      const files = context.files ?? []
-      if (!files.some(hasCodeExtension)) {
+      if (!pathMatchContext.hasCodeFiles) {
         return {
           matched: false,
           reason: "matchesCodeFiles_failed",
           changedPaths,
-          details: { files },
+          details: { files: context.files ?? [] },
         }
       }
 
@@ -928,6 +935,25 @@ async function shouldRunHook(
   }
 
   return { matched: true, reason: "matched", changedPaths }
+}
+
+export function buildPathMatchContext(projectDir: string, context: RuntimeActionContext): PathMatchContext {
+  const changedPaths = getFinalChangedPaths(projectDir, context)
+  return {
+    changedPaths,
+    hasCodeFiles: changedPaths.some(hasCodeExtension),
+  }
+}
+
+function prepareRuntimeActionContext(projectDir: string, context: RuntimeActionContext): RuntimeActionContext {
+  if (context.pathMatchContext) {
+    return context
+  }
+
+  return {
+    ...context,
+    pathMatchContext: buildPathMatchContext(projectDir, context),
+  }
 }
 
 function getFinalChangedPaths(projectDir: string, context: RuntimeActionContext): readonly string[] {
