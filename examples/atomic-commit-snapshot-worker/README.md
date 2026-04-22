@@ -1,6 +1,6 @@
 # Snapshot autocommit (pi-hooks example)
 
-A YAML-driven pi-hooks example that auto-commits every `write` / `edit`. One hook, one
+A YAML-driven pi-hooks example that auto-commits every recognized `file.changed` event. One hook, one
 worker, one SQLite queue per worktree. Captures file edits, snapshots them into git
 objects, and replays them as real commits after a short quiet window.
 
@@ -12,7 +12,7 @@ yourself by adding the snippet below to your `hooks.yaml`.
 ### 1. Prerequisites
 
 - macOS or Linux (the worker uses `fcntl` locks and POSIX signals — Windows is unsupported)
-- `python3` 3.x on `$PATH` (override with `PI_HOOKS_PYTHON`)
+- `python3` 3.x on `$PATH`
 - `git` 2.x
 - `sqlite3` (only needed if you want to inspect the queue manually)
 
@@ -31,7 +31,7 @@ hooks:
     actions:
       - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-hook.py'
 
-  # Drain the queue when the session ends so commits don't trail.
+  # Best-effort flush on shutdown or session switch so commits do not trail too far behind.
   - id: snapshot-flush-on-exit
     event: session.deleted
     actions:
@@ -80,7 +80,7 @@ real commits after a short quiet window.
 
 If you want the short version:
 
-- `snapshot-hook.py` captures file changes and queues them.
+- `snapshot-hook.py` captures `file.changed` payloads and queues them.
 - `snapshot-worker.py` drains the queue and publishes commits.
 - `snapshot_shared.py` coordinates branch generation and same-branch ownership
   through repo-common-dir shared state.
@@ -206,6 +206,12 @@ alone.
    - `branch_generation`
 5. Local shadow state such as `path_tail` is also keyed by branch generation, so
    old shadow state cannot be reused after a rewrite unnoticed.
+
+### PI-specific caveat about the flush hook
+
+The example uses `session.deleted` for the flush path. On PI that event is intentionally lossy: it fires on real shutdown, but also before session switches such as `/new`, `/resume`, and `/fork`.
+
+That means the flush hook is best-effort. It is useful for reducing trailing commits, but it is not a strict "flush only on final session exit" guarantee.
 
 ### 2. Replay path
 
