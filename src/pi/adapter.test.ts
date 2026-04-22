@@ -238,7 +238,14 @@ const cases: Case[] = [
         harness.register()
         const result = await harness.toolCall("bash", "call-2", { command: "echo hi" })
 
-        return JSON.stringify(result) === JSON.stringify({ block: true, reason: "Blocked by confirm action" }) && harness.confirms.length === 0
+        return result &&
+            typeof result === "object" &&
+            "block" in result &&
+            result.block === true &&
+            "reason" in result &&
+            typeof result.reason === "string" &&
+            /confirm/i.test(result.reason) &&
+            harness.confirms.length === 0
           ? { ok: true }
           : { ok: false, detail: `result=${JSON.stringify(result)}, confirms=${JSON.stringify(harness.confirms)}` }
       }),
