@@ -228,6 +228,45 @@ const runtimeCases: RuntimeCase[] = [
     },
   },
   {
+    name: "setStatus uses stable per-hook keys so hooks in one file do not collide",
+    run: async () => {
+      const { host, records } = createFakeHost()
+      const hooks: HookMap = new Map()
+      hooks.set("tool.after.write", [
+        {
+          id: "build-status",
+          event: "tool.after.write",
+          actions: [{ setStatus: "building" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 0 },
+        },
+        {
+          id: "test-status",
+          event: "tool.after.write",
+          actions: [{ setStatus: "testing" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 1 },
+        },
+      ])
+      const runtime = createHooksRuntime(host, { directory: "/tmp", hooks })
+      await runtime["tool.execute.after"]({
+        tool: "write",
+        sessionID: "s1",
+        callID: "c1",
+        args: { path: "/tmp/x.txt", content: "ok" },
+      })
+      const statuses = records.filter((r) => r.kind === "setStatus").map((r) => r.args as { hookId: string; text: string })
+      return statuses.length === 2 &&
+          statuses[0]?.hookId !== statuses[1]?.hookId &&
+          statuses[0]?.hookId === "pi-hooks:build-status" &&
+          statuses[1]?.hookId === "pi-hooks:test-status"
+        ? { ok: true }
+        : { ok: false, detail: `statuses=${JSON.stringify(statuses)}` }
+    },
+  },
+  {
     name: "confirm=false on tool.before.* blocks the tool call",
     run: async () => {
       const { host, records } = createFakeHost({ confirmReturn: false })
