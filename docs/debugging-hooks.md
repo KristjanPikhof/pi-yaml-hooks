@@ -6,6 +6,8 @@
 PI_HOOKS_DEBUG=1 pi
 ```
 
+Even without debug logging, hook execution failures and adapter dispatch failures still print concise stderr errors by default. Debug mode adds persistent NDJSON traces and action-level detail.
+
 ## Log file
 
 Default path:
@@ -71,6 +73,7 @@ When debug logging is enabled, `pi-hooks` logs:
 - bash result status, exit code, duration, stdout, and stderr
 - exact skip reasons such as `matchesAnyPath_failed` or `scope_mismatch`
 - target session ids and prompt text for `tool:` follow-up injections
+- whether `tool:`, `notify:`, and `setStatus:` actions were accepted, degraded, or failed
 
 ## Important note
 
