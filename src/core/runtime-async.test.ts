@@ -107,6 +107,35 @@ const cases: Case[] = [
     },
   },
   {
+    name: "parser normalizes async group names before validating shared concurrency",
+    run: async () => {
+      const filePath = "/home/tester/.pi/agent/hook/hooks.yaml"
+      const loaded = loadDiscoveredHooks({
+        homeDir: "/home/tester",
+        projectDir: "/repo",
+        exists: (candidate) => candidate === filePath,
+        readFile: () => `hooks:
+  - event: tool.after.write
+    async:
+      group: uploads
+      concurrency: 2
+    actions:
+      - bash: "echo one"
+  - event: tool.after.write
+    async:
+      group: " uploads "
+      concurrency: 3
+    actions:
+      - bash: "echo two"
+`,
+      })
+
+      return loaded.errors.some((error) => error.code === "invalid_async" && /must match earlier hooks/i.test(error.message))
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(loaded.errors) }
+    },
+  },
+  {
     name: "default async behavior remains serialized per event and session",
     run: async () => {
       const activeCounts: number[] = []
