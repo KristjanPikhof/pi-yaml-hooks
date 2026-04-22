@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -94,7 +94,7 @@ export function registerCommands(pi: ExtensionAPI): void {
       }
 
       const trustAnchor = project.canonicalAnchorDir
-      const normalizedCurrent = new Set(current.entries.map((entry) => path.resolve(entry)))
+      const normalizedCurrent = new Set(current.entries.map(canonicalizeForTrust))
       if (!normalizedCurrent.has(trustAnchor)) {
         mkdirSync(path.dirname(trustFile), { recursive: true })
         writeFileSync(trustFile, JSON.stringify([...current.entries, trustAnchor], null, 2) + "\n", "utf8")
@@ -235,4 +235,12 @@ function formatStatusPath(filePath: string | undefined): string {
     return "not applicable"
   }
   return existsSync(filePath) ? filePath : `${filePath} (missing)`
+}
+
+function canonicalizeForTrust(filePath: string): string {
+  try {
+    return path.resolve(realpathSync.native(filePath))
+  } catch {
+    return path.resolve(filePath)
+  }
 }
