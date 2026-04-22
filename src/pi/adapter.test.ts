@@ -358,6 +358,20 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "hooks-status does not claim project hooks exist when no project file is present",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-status")
+
+        return harness.notifications.some((message) => message.includes("Project config:") && message.includes("(missing)")) &&
+            harness.notifications.every((message) => !message.includes("Project hooks exist but are not active"))
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
     name: "hooks-validate command explains untrusted project hooks",
     run: async () =>
       await withIsolatedProject(false, async (projectDir) => {
@@ -392,6 +406,52 @@ const cases: Case[] = [
         return trustedProjects.includes(projectDir)
           ? { ok: true }
           : { ok: false, detail: `trustedProjects=${JSON.stringify(trustedProjects)}` }
+      }),
+  },
+  {
+    name: "hooks-trust warns when no project hook file exists",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-trust")
+
+        return harness.notifications.some((message) => message.includes("No project hook file was found")) &&
+            readTrustedProjectsFile().length === 0
+          ? { ok: true }
+          : {
+              ok: false,
+              detail: `notifications=${JSON.stringify(harness.notifications)}, trusted=${JSON.stringify(readTrustedProjectsFile())}`,
+            }
+      }),
+  },
+  {
+    name: "hooks-trust refuses to overwrite malformed trusted-projects.json",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+        const trustFile = path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
+        mkdirSync(path.dirname(trustFile), { recursive: true })
+        writeFileSync(trustFile, "{not-json", "utf8")
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-trust")
+
+        return harness.notifications.some((message) => message.includes("not valid JSON")) &&
+            readFileSync(trustFile, "utf8") === "{not-json"
+          ? { ok: true }
+          : {
+              ok: false,
+              detail: `notifications=${JSON.stringify(harness.notifications)}, trustFile=${JSON.stringify(readFileSync(trustFile, "utf8"))}`,
+            }
       }),
   },
   {
