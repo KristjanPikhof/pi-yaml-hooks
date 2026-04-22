@@ -225,7 +225,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   const state = new SessionStateStore()
   const runBashHook: ExecuteBashHook = options.executeBash ?? ((request) => host.runBash(request))
   const dispatchStates = new Map<string, DispatchState>()
-  const asyncQueues = new Map<string, Promise<void>>()
+  const asyncQueues = new Map<string, AsyncQueueState>()
   const actionRecursionGuards = new AsyncLocalStorage<Set<string>>()
 
   function refreshHooks(): HookMap {
