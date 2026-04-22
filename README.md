@@ -11,6 +11,8 @@ This repo is the PI port of OpenCode-Hooks. The hook model is familiar, but the 
 - Filter hooks with `matchesCodeFiles`, `matchesAnyPath`, and `matchesAllPaths`
 - Load one global root config and one trusted project root config, each with top-level `imports:`
 - Show built-in diagnostics with `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, and `/hooks-tail-log`
+- Emit structured in-session diagnostics when PI supports custom messages
+- Inject a short hook-awareness note before agent start (disable with `PI_HOOKS_PROMPT_AWARENESS=0`)
 
 ## Requirements
 
@@ -73,7 +75,7 @@ If a trusted project also has project hooks, the summary includes both scopes.
 
 `pi-hooks` discovers at most one global root config and one project root config. Each root file can import more hook files with top-level `imports:`. The project root is repo/worktree-aware, not exact-cwd-only, and project hooks load only when that repo or worktree anchor is trusted.
 
-When an event matches, `pi-hooks` evaluates conditions and runs the configured actions. `bash` actions receive hook context JSON on stdin plus injected `PI_*` environment variables such as `PI_PROJECT_DIR`, `PI_WORKTREE_DIR`, `PI_SESSION_ID`, and `PI_GIT_COMMON_DIR`.
+When an event matches, `pi-hooks` evaluates conditions and runs the configured actions. `bash` actions receive hook context JSON on stdin plus injected `PI_*` environment variables such as `PI_PROJECT_DIR`, `PI_WORKTREE_DIR`, `PI_SESSION_ID`, and `PI_GIT_COMMON_DIR`. At agent start, the extension also appends a short hook-awareness note to the system prompt so PI has the current hook and trust context while it works.
 
 ## Native PI surface
 
@@ -84,7 +86,7 @@ When an event matches, `pi-hooks` evaluates conditions and runs the configured a
 | `tool.before.*` | Before a tool call |
 | `tool.after.*` | After a tool call |
 | `file.changed` | Synthesized after recognized file mutations |
-| `session.created` | New session or PI startup |
+| `session.created` | PI startup or a genuinely new session |
 | `session.idle` | Agent turn finished and no messages are pending |
 | `session.deleted` | Session shutdown or switch, intentionally lossy |
 
@@ -107,6 +109,8 @@ When an event matches, `pi-hooks` evaluates conditions and runs the configured a
 | `/hooks-trust` | Adds the current repo/worktree anchor to `~/.pi/agent/trusted-projects.json` |
 | `/hooks-reload` | Reloads the extension and command surface |
 | `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command |
+
+`/hooks-status`, `/hooks-validate`, and hook-load validation errors also emit structured in-session diagnostics when PI supports custom messages.
 
 ## Important limitations
 
