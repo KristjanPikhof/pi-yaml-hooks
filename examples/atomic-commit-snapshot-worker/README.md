@@ -85,11 +85,11 @@ If you want the short version:
 - `snapshot_shared.py` coordinates branch generation and same-branch ownership
   through repo-common-dir shared state.
 - Each worktree gets its own isolated state under its private git dir.
-- Target contract: exact capture is guaranteed only for supported hook surfaces
-  and supported worktree or branch topologies.
-- Target contract: incomplete payload surfaces are best-effort. Unsupported
-  branch or worktree topologies should be rejected early or quarantined later,
-  not replayed in a degraded mode.
+- Exact capture is guaranteed only for supported hook surfaces and supported
+  worktree or branch topologies.
+- Incomplete payload surfaces are best-effort. Unsupported branch or worktree
+  topologies are rejected early or quarantined later, not replayed in a
+  degraded mode.
 - Built-in AI commit messages are optional. If AI is off or skipped, the worker
   uses `SNAPSHOTD_COMMIT_MESSAGE_CMD` if configured, otherwise deterministic
   commit messages.
@@ -164,10 +164,10 @@ The hook and worker create these paths automatically:
 
 This isolation matters. Five projects with three worktrees each means fifteen
 independent queues and fifteen independent workers, not one shared bottleneck.
-It also means branch ownership is **not** repo-global today. A worktree-local
-queue can be exact for its own supported edit surfaces, but it must not pretend
-to coordinate the same branch across multiple worktrees unless future work adds
-explicit shared branch coordination.
+The queue is still worktree-local, but branch ownership and branch generation
+are now coordinated through repo-common-dir shared state. That shared registry
+exists to keep replay safe, not to make same-branch multi-worktree replay a
+supported topology.
 
 ### Local versus shared state
 
@@ -239,9 +239,9 @@ layer needed to keep the existing local queue model safe.
 
 ## Event states
 
-Current code already uses these states today. The broader topology and
-branch-generation quarantine meanings below describe the target semantics that
-future implementation is intended to add.
+Current code already uses these states today. `blocked_conflict` is the settled
+state for rows that no longer replay safely, including stale branch-generation
+or unsupported-topology cases.
 
 | State | Meaning |
 |------|---------|
@@ -260,10 +260,9 @@ commit made it into history and fixes the state from there.
 The system has to be explicit about when a queued event is exact, when it is
 best-effort, and when it must be quarantined instead of replayed.
 
-This section defines the target contract for the concurrency-hardening work in
-this example. The current code already has per-worktree queues and serialized
-same-path capture, but future implementation still needs to enforce the explicit
-branch-generation and same-branch multi-worktree guards described below.
+This section defines the operating contract for this example. The queue is still
+per-worktree, but replay safety depends on shared branch ownership and branch
+generation checks in addition to local serialized same-path capture.
 
 Best-effort applies only to incomplete source payloads. Unsupported branch or
 worktree topology is **not** best-effort; it is a quarantine case.
@@ -318,11 +317,10 @@ claim exact per-edit replay semantics for that event.
   `blocked_conflict` with an explicit generation or topology reason. They must
   not be silently retried against the new branch incarnation.
 
-This is the contract the current implementation is working toward enforcing:
-exact
-capture only in supported modes, explicit best-effort labeling for inferred
-paths, and quarantine instead of opportunistic replay when branch identity is
-no longer trustworthy.
+This is the contract the current implementation enforces: exact capture only in
+supported modes, explicit best-effort labeling for inferred paths, and
+quarantine instead of opportunistic replay when branch identity is no longer
+trustworthy.
 
 ### Mixed-fidelity events
 
@@ -347,7 +345,7 @@ fidelity is not sufficient.
   - If another worker starts, it exits.
   - The hook prefers signalling a live worker over spawning a new one.
 
-- **Worktrees stay isolated, but branch ownership does not**
+- **Worktrees stay isolated, with shared branch coordination layered on top**
   - Different git dirs mean different DBs, locks, logs, and workers.
   - That isolation is safe for different branches.
   - It is **not** enough to make same-branch multi-worktree replay exact.
@@ -593,8 +591,9 @@ the base URL HTTPS-only, and do not try to be clever about redaction.
 - Unix only. The worker uses advisory `fcntl` locks.
 - Some harnesses do not report exact changed files for every tool. In those
   cases, capture is best-effort.
-- Exact autocommit does not support multiple worktrees sharing the same branch
-  unless later work adds explicit repo-global branch coordination.
+- Exact autocommit still does not support multiple worktrees sharing the same
+  branch. The shared branch registry exists to detect and reject or quarantine
+  that topology, not to make it replayable.
 - Branch rewrites are not safe to auto-replay across generations. Stale pending
   work must be quarantined instead.
 - `blocked_conflict` events are recorded, not auto-retried.

@@ -7,18 +7,18 @@ This guide gets `pi-hooks` installed and gives you a safe place to put `hooks.ya
 - macOS or Linux
 - Node.js `>= 22.0.0`
 - `bash` on `PATH`
-- `@mariozechner/pi-coding-agent >= 0.68.1`
+- `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`
 
-Windows is currently a no-op because the hook runner expects a POSIX `bash`.
+Windows is unsupported because the hook runner expects a POSIX `bash`.
 
-This repository now treats Pi 0.68.1 and 0.69.0 as the documented compatibility target. Older 0.67-era installs are no longer the documented contract even if some behaviors still happen to work.
+This repository documents the peer support range exactly as `^0.68.1 || ^0.69.0`. Older 0.67-era installs are no longer part of the documented contract, even if some behavior still happens to work.
 
 ## Install the extension
 
 ### Recommended: global extension symlink
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git
+git clone https://github.com/KristjanPikhof/pi-hooks.git
 cd pi-hooks
 npm install
 ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
@@ -76,8 +76,8 @@ Checked in this order:
 
 1. `~/.pi/agent/hook/hooks.yaml`
 2. `~/.pi/agent/hooks.yaml`
-3. `%APPDATA%/pi/agent/hook/hooks.yaml` on Windows
-4. `%APPDATA%/pi/agent/hooks.yaml` on Windows
+
+The codebase still knows about Windows-style paths internally, but Windows is not a supported runtime for `pi-hooks` today.
 
 ### Project locations
 

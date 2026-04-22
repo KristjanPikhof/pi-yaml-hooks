@@ -18,7 +18,7 @@
 - Show UI notifications and status-bar entries when PI has a UI surface
 - Send follow-up prompts back into the current PI session with `tool:` actions
 - React to session lifecycle events: `session.created`, `session.idle`, and `session.deleted`
-- React to `file.changed`, which PI synthesizes after recognized file mutations, including `cp`/`git cp`
+- React to `file.changed`, which PI synthesizes after recognized file mutations, including `cp`/`git cp`, `mv`/`git mv`, `rm`/`git rm`, `touch`, and `mkdir`
 - Filter hooks by file extension or glob patterns
 - Restrict hooks to `all`, `main`, or `child` sessions
 - Queue selected hooks asynchronously so they do not block the agent turn
@@ -28,7 +28,7 @@
 
 These are the details that matter most when authoring hooks:
 
-- The current compatibility target is Pi 0.68.1 and 0.69.0.
+- The documented support range is `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`.
 - Only one global root config and one project root config are discovered.
 - Each root can import more hook files before its own hooks load.
 - Later files stay compatible with the same explicit `override:` / `disable:` behavior by `id`.

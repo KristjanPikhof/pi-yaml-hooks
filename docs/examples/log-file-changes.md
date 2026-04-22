@@ -41,4 +41,4 @@ On stock PI, `file.changed` can be synthesized from:
 
 - `write`
 - `edit`
-- recognized `bash` mutation commands such as `mv`, `rm`, `touch`, and `mkdir`
+- recognized `bash` mutation commands such as `cp`/`git cp`, `mv`/`git mv`, `rm`/`git rm`, `touch`, and `mkdir`

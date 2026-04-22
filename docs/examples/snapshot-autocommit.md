@@ -2,7 +2,9 @@
 
 This repository includes a full Python example that auto-commits recognized file changes through a snapshot worker.
 
-## Use the npmdled example
+This is an opt-in example, not a built-in `pi-hooks` feature.
+
+## Use the bundled example
 
 - example directory: [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/)
 - detailed setup: [`../../examples/atomic-commit-snapshot-worker/README.md`](../../examples/atomic-commit-snapshot-worker/README.md)
@@ -33,3 +35,5 @@ Use this example when you want:
 - automatic git commits after edits settle
 - a per-worktree queue and worker
 - a more advanced example of `file.changed`, `async`, and `session.deleted`
+
+The `session.deleted` flush path is best-effort on PI because that event is intentionally lossy.
