@@ -6,6 +6,7 @@ import YAML from "yaml"
 
 import {
   type HookAction,
+  type HookAsyncConfig,
   type HookBashActionConfig,
   type HookBehavior,
   type HookCommandActionConfig,
@@ -619,36 +620,97 @@ function parseRunIn(filePath: string, runIn: unknown, index: number): { runIn: H
   return { runIn, errors: [] }
 }
 
-function parseAsync(filePath: string, async_: unknown, event: unknown, actions: unknown, index: number): { async?: boolean; errors: HookValidationError[] } {
+function parseAsync(
+  filePath: string,
+  async_: unknown,
+  event: unknown,
+  actions: unknown,
+  index: number,
+): { async?: true | HookAsyncConfig; errors: HookValidationError[] } {
   if (async_ === undefined) {
     return { errors: [] }
   }
 
-  if (typeof async_ !== "boolean") {
+  const normalized = normalizeAsyncConfig(filePath, async_, index)
+  if (normalized.errors.length > 0 || !normalized.enabled) {
     return {
-      errors: [createError(filePath, "invalid_async", `hooks[${index}].async must be a boolean.`, `hooks[${index}].async`)],
+      errors: normalized.errors,
     }
   }
 
-  if (async_ && typeof event === "string" && event.startsWith("tool.before")) {
+  if (typeof event === "string" && event.startsWith("tool.before")) {
     return {
       errors: [createError(filePath, "invalid_async", `hooks[${index}].async cannot be true for tool.before events because blocking requires synchronous execution.`, `hooks[${index}].async`)],
     }
   }
 
-  if (async_ && typeof event === "string" && event === "session.idle") {
+  if (typeof event === "string" && event === "session.idle") {
     return {
       errors: [createError(filePath, "invalid_async", `hooks[${index}].async cannot be true for session.idle events because idle dispatch must complete before tracked changes are consumed.`, `hooks[${index}].async`)],
     }
   }
 
-  if (async_ && Array.isArray(actions) && actions.some((a) => typeof a === "object" && a !== null && ("command" in a || "tool" in a))) {
+  if (Array.isArray(actions) && actions.some((a) => typeof a === "object" && a !== null && ("command" in a || "tool" in a))) {
     return {
       errors: [createError(filePath, "invalid_async", `hooks[${index}].async hooks must use only bash actions. command and tool actions have no timeout and can stall the async queue.`, `hooks[${index}].async`)],
     }
   }
 
-  return { async: async_ === true ? true : undefined, errors: [] }
+  return { async: normalized.config, errors: [] }
+}
+
+function normalizeAsyncConfig(
+  filePath: string,
+  value: unknown,
+  index: number,
+): { enabled: boolean; config?: true | HookAsyncConfig; errors: HookValidationError[] } {
+  if (value === false) {
+    return { enabled: false, errors: [] }
+  }
+
+  if (value === true) {
+    return { enabled: true, config: true, errors: [] }
+  }
+
+  if (!isRecord(value)) {
+    return {
+      enabled: false,
+      errors: [createError(filePath, "invalid_async", `hooks[${index}].async must be a boolean or { group?, concurrency? }.`, `hooks[${index}].async`)],
+    }
+  }
+
+  const group = value.group
+  if (group !== undefined && !isNonEmptyString(group)) {
+    return {
+      enabled: false,
+      errors: [createError(filePath, "invalid_async", `hooks[${index}].async.group must be a non-empty string.`, `hooks[${index}].async.group`)],
+    }
+  }
+
+  const concurrency = value.concurrency
+  if (
+    concurrency !== undefined &&
+    (typeof concurrency !== "number" || !Number.isInteger(concurrency) || concurrency <= 0)
+  ) {
+    return {
+      enabled: false,
+      errors: [createError(filePath, "invalid_async", `hooks[${index}].async.concurrency must be a positive integer.`, `hooks[${index}].async.concurrency`)],
+    }
+  }
+
+  if (Object.keys(value).some((key) => key !== "group" && key !== "concurrency")) {
+    return {
+      enabled: false,
+      errors: [createError(filePath, "invalid_async", `hooks[${index}].async only supports group and concurrency.`, `hooks[${index}].async`)],
+    }
+  }
+
+  const config: HookAsyncConfig = {
+    ...(group !== undefined ? { group } : {}),
+    ...(concurrency !== undefined ? { concurrency } : {}),
+  }
+
+  return { enabled: true, config: Object.keys(config).length > 0 ? config : true, errors: [] }
 }
 
 function parseHookAction(
