@@ -375,18 +375,38 @@ export function createHostAdapter(
     getRootSessionId: (sessionId: string): string => getRootSessionId(sessionId, getSessionManager()),
     runBash: (request: BashExecutionRequest): Promise<BashHookResult> =>
       executeBashHook({ ...request, projectDir: request.projectDir || projectDir }),
-    sendPrompt: (_sessionId: string, text: string): HostDeliveryResult => {
+    sendPrompt: (sessionId: string, text: string): HostDeliveryResult => {
       // PI's sendUserMessage always targets the current session. For tool:
       // actions runIn: "current" this matches the runtime's intent; runIn:
       // "main" cannot be honoured from a subprocess-less extension and is
       // treated the same as "current".
       try {
+        const currentSessionId = safeGetSessionId(getSessionManager());
         pi.sendUserMessage(text, { deliverAs: "followUp" });
-        logger.info("host_send_prompt", "Queued follow-up prompt in the current PI session.", {
+        if (currentSessionId && currentSessionId === sessionId) {
+          logger.info("host_send_prompt", "Queued follow-up prompt in the current PI session.", {
+            cwd: projectDir,
+            details: { sessionId, text },
+          });
+          return { status: "accepted" };
+        }
+
+        logger.warn("host_send_prompt", "Queued follow-up prompt, but PI can only target the current session.", {
           cwd: projectDir,
-          details: { text },
+          details: {
+            requestedSessionId: sessionId,
+            ...(currentSessionId ? { currentSessionId } : {}),
+            text,
+          },
         });
-        return { status: "accepted" };
+        return {
+          status: "degraded",
+          reason: "current_session_only",
+          details: {
+            requestedSessionId: sessionId,
+            ...(currentSessionId ? { currentSessionId } : {}),
+          },
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("host_send_prompt", "sendUserMessage failed.", {
