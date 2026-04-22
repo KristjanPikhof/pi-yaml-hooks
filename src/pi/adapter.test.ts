@@ -164,7 +164,7 @@ async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string
 }
 
 function readTrustedProjectsFile(): string[] {
-  const filePath = path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
+  const filePath = path.join(process.env.HOME || process.env.USERPROFILE || os.homedir(), ".pi", "agent", "trusted-projects.json")
   if (!existsSync(filePath)) {
     return []
   }
@@ -437,7 +437,7 @@ const cases: Case[] = [
       - notify: "idle"
 `,
         )
-        const trustFile = path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
+        const trustFile = path.join(process.env.HOME || process.env.USERPROFILE || os.homedir(), ".pi", "agent", "trusted-projects.json")
         mkdirSync(path.dirname(trustFile), { recursive: true })
         writeFileSync(trustFile, "{not-json", "utf8")
 
