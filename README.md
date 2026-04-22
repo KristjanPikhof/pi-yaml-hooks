@@ -247,6 +247,8 @@ Hooks with `runIn: main` paired with a `tool:`, `notify:`, `confirm:`, or `setSt
 
 `tool:` actions run as current-session prompts via `pi.sendUserMessage`. Cross-session targeting is not supported. The action works but always targets the current session, regardless of `runIn`.
 
+If `pi.sendUserMessage` fails, the hook now reports a normal error to stderr by default. `PI_HOOKS_DEBUG=1` is only needed for deeper trace-level diagnostics.
+
 ### `behavior: stop` — only for pre-tool hooks
 
 PI does not expose an extension-side abort outside `tool_call`. `action: stop` on a `tool.before.*` hook reaches PI as a `block: true` response (the tool does not run). On `tool.after.*` or `session.idle`, abort is a no-op (logged when `PI_HOOKS_DEBUG=1`).
@@ -272,7 +274,7 @@ If PI is running without a UI surface (print/RPC mode), `confirm:` actions retur
 3. Start PI and look for the startup summary: `[pi-hooks] Loaded N hooks (global: G, project: P).`
 4. If you need deeper diagnostics, run with debug logging: `PI_HOOKS_DEBUG=1 pi`.
 5. If a project hook isn't firing, check the trust gate: `cat ~/.pi/agent/trusted-projects.json` and confirm the project path is listed (or use `PI_HOOKS_TRUST_PROJECT=1`).
-6. If a `notify:` / `confirm:` / `setStatus:` action does nothing, PI is in headless mode (`ctx.hasUI === false`). Bash actions still run.
+6. If a `notify:` / `confirm:` / `setStatus:` action is degraded, PI is in headless mode (`ctx.hasUI === false`). `notify` and `setStatus` warn once per process; `confirm` fails closed. Bash actions still run.
 
 **Windows:** Unsupported. The extension logs one warning and registers no handlers (the bash executor requires a POSIX `bash`).
 
@@ -280,6 +282,8 @@ If PI is running without a UI surface (print/RPC mode), `confirm:` actions retur
 ```bash
 PI_HOOKS_DEBUG=1 pi
 ```
+Normal hook execution failures and adapter dispatch failures already print concise stderr errors without debug mode. Debug logging adds persistent structured traces.
+
 Logs `[pi-hooks] …` lines to stderr for event dispatch, block decisions, abort no-ops, UI surface warnings, and Python-bridge failures (when an example pipes into Python).
 
 **Override the bash executable:**
@@ -294,7 +298,7 @@ PI_HOOKS_MAX_OUTPUT_BYTES=4194304
 
 **GUI-launched PI inherits a different environment.** When you launch PI from a terminal, hooks see your shell's `$PATH`, `OPENAI_API_KEY`, etc. When PI launches from Spotlight / the Dock / an IDE extension on macOS, it inherits `launchd`'s environment instead — your `~/.zshrc` exports do **not** reach hooks. Either launch PI from a terminal, wrap the hook command in `/bin/zsh -ilc "..."`, or `launchctl setenv KEY value` for system-wide propagation.
 
-**No UI surface:** If `notify`, `confirm`, or `setStatus` actions are silently skipped, PI is running in print/RPC mode where `ctx.hasUI` is false. `notify` and `setStatus` no-op (one warning per process lifetime). `confirm` fails *closed* (returns `false`) — set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to keep the old auto-approve behavior. Bash actions always run.
+**No UI surface:** If `notify`, `confirm`, or `setStatus` actions do not reach the PI UI, PI is running in print/RPC mode where `ctx.hasUI` is false. `notify` and `setStatus` degrade to a warned no-op (one warning per process lifetime), while structured logs record that degraded outcome when logging is enabled. `confirm` fails *closed* (returns `false`) — set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to keep the old auto-approve behavior. Bash actions always run.
 
 ---
 
