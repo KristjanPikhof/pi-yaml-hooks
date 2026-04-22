@@ -156,6 +156,8 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
     hooks.set(parsedHook.hook.event, [...existing, parsedHook.hook])
   })
 
+  errors.push(...validateAsyncQueueConfigs(hooks))
+
   const piDiagnostics = collectUnsupportedDiagnostics(hooks)
   for (const message of piDiagnostics.errors) {
     errors.push({ code: "unsupported_on_pi", filePath, message })
