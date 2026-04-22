@@ -56,6 +56,51 @@ const cases: Case[] = [
     },
   },
   {
+    name: "parser rejects async concurrency without a named group",
+    run: async () => {
+      const parsed = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - event: tool.after.write
+    async:
+      concurrency: 2
+    actions:
+      - bash: "echo ok"
+`,
+      )
+
+      return parsed.errors.some((error) => error.code === "invalid_async" && /requires async\.group/i.test(error.message))
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(parsed.errors) }
+    },
+  },
+  {
+    name: "parser rejects conflicting concurrency in the same async group",
+    run: async () => {
+      const parsed = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - event: tool.after.write
+    async:
+      group: uploads
+      concurrency: 2
+    actions:
+      - bash: "echo one"
+  - event: tool.after.write
+    async:
+      group: uploads
+      concurrency: 3
+    actions:
+      - bash: "echo two"
+`,
+      )
+
+      return parsed.errors.some((error) => error.code === "invalid_async" && /must match earlier hooks/i.test(error.message))
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(parsed.errors) }
+    },
+  },
+  {
     name: "default async behavior remains serialized per event and session",
     run: async () => {
       const activeCounts: number[] = []
