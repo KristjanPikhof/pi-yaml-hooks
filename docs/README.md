@@ -28,7 +28,7 @@
 
 These are the details that matter most when authoring hooks:
 
-- The current compatibility target is Pi 0.68.1.
+- The current compatibility target is Pi 0.68.1 and 0.69.0.
 - Only one global root config and one project root config are discovered.
 - Each root can import more hook files before its own hooks load.
 - Later files stay compatible with the same explicit `override:` / `disable:` behavior by `id`.
