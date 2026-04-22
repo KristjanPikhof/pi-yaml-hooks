@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -411,7 +411,7 @@ const cases: Case[] = [
         await harness.command("hooks-trust")
 
         const trustedProjects = readTrustedProjectsFile()
-        return trustedProjects.includes(projectDir)
+        return trustedProjects.includes(realpathSync.native(projectDir))
           ? { ok: true }
           : { ok: false, detail: `trustedProjects=${JSON.stringify(trustedProjects)}` }
       }),
