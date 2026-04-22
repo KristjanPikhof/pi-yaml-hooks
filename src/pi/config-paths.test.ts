@@ -151,7 +151,7 @@ const cases: Case[] = [
         writeTrustedProjects(homeDir, [realRepoDir])
         const resolution = resolveProjectHookResolution({ homeDir, projectDir: nestedLinkDir })
         const paths = discoverHookConfigPaths({ homeDir, projectDir: nestedLinkDir })
-        return resolution?.trusted && JSON.stringify(paths) === JSON.stringify([configPath])
+        return resolution?.trusted && samePaths(paths, [configPath])
           ? { ok: true }
           : { ok: false, detail: JSON.stringify({ resolution, paths }) }
       } finally {
