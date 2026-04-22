@@ -1,6 +1,6 @@
 {
   "name": "pi-hooks",
-  "version": "0.1.0",
+  "version": "2026-04-22",
   "description": "Port of OpenCode-Hooks to the PI harness: YAML-driven hooks for PI sessions.",
   "type": "module",
   "engines": {
@@ -32,7 +32,7 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.68.1"
+    "@mariozechner/pi-coding-agent": "^0.68.1 || ^0.69.0"
   },
   "dependencies": {
     "yaml": "^2.8.2"
