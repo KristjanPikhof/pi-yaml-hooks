@@ -96,8 +96,16 @@ class FakePiHarness {
     return await handler(event, this.createContext())
   }
 
-  async sessionStart(reason: "new" | "startup" | "resume" = "new"): Promise<void> {
+  async sessionStart(reason: "new" | "startup" | "resume" | "fork" = "new"): Promise<void> {
     await this.emit("session_start", { reason })
+  }
+
+  async sessionBeforeSwitch(): Promise<void> {
+    await this.emit("session_before_switch")
+  }
+
+  async sessionShutdown(): Promise<void> {
+    await this.emit("session_shutdown")
   }
 
   async beforeAgentStart(prompt = "hi", systemPrompt = "base system prompt"): Promise<unknown> {
@@ -358,6 +366,56 @@ const cases: Case[] = [
         await harness.agentEnd()
 
         return harness.notifications.length === 0
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "session.created only fires for new/startup, not resume or fork",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.created
+    actions:
+      - notify: "created"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionStart("new")
+        await harness.sessionStart("startup")
+        await harness.sessionStart("resume")
+        await harness.sessionStart("fork")
+
+        const expected = JSON.stringify(["created", "created"])
+        return JSON.stringify(harness.notifications) === expected
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "session.deleted cleanup runs once across before_switch and shutdown",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.deleted
+    actions:
+      - notify: "deleted"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionBeforeSwitch()
+        await harness.sessionShutdown()
+
+        const expected = JSON.stringify(["deleted"])
+        return JSON.stringify(harness.notifications) === expected
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
       }),
