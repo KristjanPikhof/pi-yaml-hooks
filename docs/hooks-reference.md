@@ -61,7 +61,7 @@ Without overrides, hooks from both files stay active.
 | `conditions` | no | array | Additional filters. All conditions must pass. |
 | `scope` | no | `all`, `main`, `child` | Filters which session lineage the hook itself runs in. Defaults to `all`. |
 | `runIn` | no | `current`, `main` | Compatibility field for action targeting. Defaults to `current`. See the PI-specific notes below before relying on it. |
-| `async` | no | boolean | Queues the hook for serialized background execution. Only allowed on non-`tool.before` hooks, not on `session.idle`, and only for `bash`-only hooks. |
+| `async` | no | boolean or object | Queues the hook for background execution. `true` keeps serialized per-event behavior. `{ group?, concurrency? }` lets hooks share a named async queue with optional bounded concurrency. Only allowed on non-`tool.before` hooks, not on `session.idle`, and only for `bash`-only hooks. |
 | `override` | no | string | Replaces a previously loaded hook with the given `id`. |
 | `disable` | no | boolean | When used with `override`, removes the targeted earlier hook instead of replacing it. |
 
@@ -347,7 +347,9 @@ Exact rules:
 - `async: true` is allowed only for non-`tool.before` hooks
 - `async: true` is not allowed on `session.idle`
 - async hooks must contain only `bash` actions
-- hooks are serialized per `event + session`
+- `async: true` keeps the legacy serialized `event + session` queue
+- `async: { group: <name> }` makes hooks in the same session share a named queue
+- `async: { concurrency: N }` allows up to `N` hooks from that queue to run at once; omit it to keep serialized behavior
 
 Use async for slow post-processing that should not block the agent turn.
 

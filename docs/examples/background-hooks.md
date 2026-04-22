@@ -17,6 +17,21 @@ hooks:
 
 After a file change event, the hook is queued and runs in the background for that session and event key.
 
+## Named groups and bounded concurrency
+
+```yaml
+hooks:
+  - id: async-upload
+    event: tool.after.write
+    async:
+      group: uploads
+      concurrency: 2
+    actions:
+      - bash: './scripts/upload-artifact.sh'
+```
+
+Hooks in the same session and async `group` share a queue. `concurrency: 2` allows two of them to run at once; omit it to keep the old serialized behavior.
+
 ## Quick test
 
 1. Add the hook
@@ -29,6 +44,8 @@ After a file change event, the hook is queued and runs in the background for tha
 - async hooks must be `bash`-only
 - async is not allowed on `tool.before.*`
 - async is not allowed on `session.idle`
+- `async: true` keeps one serialized queue per event and session
+- named `group` queues can run independently from other groups in the same session
 
 ## Good uses
 
