@@ -58,21 +58,21 @@ const cases: Case[] = [
         )
         writeYaml(
           path.join(packageRoot, "hooks.yaml"),
-          `hooks:\n  - id: layered\n    event: session.created\n    actions:\n      - notify: package\n`,
+          `hooks:\n  - id: package-layer\n    override: base-layer\n    event: session.created\n    actions:\n      - notify: package\n`,
         )
         writeYaml(
           path.join(projectRoot, "shared", "base.yaml"),
-          `hooks:\n  - id: layered\n    event: session.created\n    actions:\n      - notify: base\n`,
+          `hooks:\n  - id: base-layer\n    event: session.created\n    actions:\n      - notify: base\n`,
         )
         writeYaml(
           path.join(projectRoot, ".pi", "hook", "hooks.yaml"),
-          `imports:\n  - ../../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: layered\n    override: layered\n    event: session.created\n    actions:\n      - notify: root\n`,
+          `imports:\n  - ../../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: root-layer\n    override: package-layer\n    event: session.created\n    actions:\n      - notify: root\n`,
         )
 
         const result = loadTrustedProject(projectRoot, homeDir)
         const hooks = result.hooks.get("session.created") ?? []
         const notify = hooks[0]?.actions[0]
-        return hooks.length === 1 && notify && "notify" in notify && notify.notify === "root"
+        return hooks.length === 1 && hooks[0]?.id === "root-layer" && notify && "notify" in notify && notify.notify === "root"
           ? { ok: true }
           : { ok: false, detail: JSON.stringify({ ids: getHookIds(result, "session.created"), errors: result.errors, files: result.files }) }
       } finally {
