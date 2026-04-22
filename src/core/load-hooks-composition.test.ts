@@ -66,7 +66,7 @@ const cases: Case[] = [
         )
         writeYaml(
           path.join(projectRoot, ".pi", "hook", "hooks.yaml"),
-          `imports:\n  - ../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: layered\n    override: layered\n    event: session.created\n    actions:\n      - notify: root\n`,
+          `imports:\n  - ../../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: layered\n    override: layered\n    event: session.created\n    actions:\n      - notify: root\n`,
         )
 
         const result = loadTrustedProject(projectRoot, homeDir)
@@ -90,7 +90,7 @@ const cases: Case[] = [
         writeYaml(path.join(projectRoot, "shared", "base.yaml"), `hooks:\n  - id: imported\n    event: session.created\n    actions:\n      - notify: base\n`)
         writeYaml(
           path.join(projectRoot, ".pi", "hook", "hooks.yaml"),
-          `imports:\n  - ../shared/base.yaml\nhooks:\n  - override: imported\n    disable: true\n`,
+          `imports:\n  - ../../shared/base.yaml\nhooks:\n  - override: imported\n    disable: true\n`,
         )
 
         const result = loadTrustedProject(projectRoot, homeDir)
@@ -111,7 +111,7 @@ const cases: Case[] = [
         const projectRoot = path.join(sandbox, "project")
         writeYaml(path.join(projectRoot, "shared", "hooks.d", "20-second.yaml"), `hooks:\n  - id: second\n    event: session.created\n    actions:\n      - notify: second\n`)
         writeYaml(path.join(projectRoot, "shared", "hooks.d", "10-first.yaml"), `hooks:\n  - id: first\n    event: session.created\n    actions:\n      - notify: first\n`)
-        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../shared/hooks.d\nhooks: []\n`)
+        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../../shared/hooks.d\nhooks: []\n`)
 
         const result = loadTrustedProject(projectRoot, homeDir)
         const ids = getHookIds(result, "session.created")
@@ -151,7 +151,7 @@ const cases: Case[] = [
         const projectRoot = path.join(sandbox, "project")
         writeYaml(path.join(projectRoot, "shared", "a.yaml"), `imports:\n  - ./b.yaml\nhooks: []\n`)
         writeYaml(path.join(projectRoot, "shared", "b.yaml"), `imports:\n  - ./a.yaml\nhooks: []\n`)
-        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../shared/a.yaml\nhooks: []\n`)
+        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../../shared/a.yaml\nhooks: []\n`)
 
         const result = loadTrustedProject(projectRoot, homeDir)
         return result.errors.some((error) => error.code === "invalid_imports" && error.message.includes("cycle"))
@@ -172,7 +172,7 @@ const cases: Case[] = [
         writeYaml(path.join(projectRoot, "shared", "leaf.yaml"), `hooks:\n  - id: leaf\n    event: session.created\n    actions:\n      - notify: leaf\n`)
         writeYaml(path.join(projectRoot, "shared", "a.yaml"), `imports:\n  - ./leaf.yaml\nhooks: []\n`)
         writeYaml(path.join(projectRoot, "shared", "b.yaml"), `imports:\n  - ./leaf.yaml\nhooks: []\n`)
-        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../shared/a.yaml\n  - ../shared/b.yaml\nhooks: []\n`)
+        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../../shared/a.yaml\n  - ../../shared/b.yaml\nhooks: []\n`)
 
         const result = loadTrustedProject(projectRoot, homeDir)
         const occurrences = result.files.filter((filePath) => filePath.endsWith("leaf.yaml")).length
@@ -192,7 +192,7 @@ const cases: Case[] = [
         const homeDir = path.join(sandbox, "home")
         const projectRoot = path.join(sandbox, "project")
         writeYaml(path.join(projectRoot, "shared", "leaf.yaml"), `hooks:\n  - id: leaf\n    event: session.created\n    actions:\n      - notify: leaf\n`)
-        const rootPath = writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../shared/leaf.yaml\nhooks: []\n`)
+        const rootPath = writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../../shared/leaf.yaml\nhooks: []\n`)
 
         const result = loadDiscoveredHooks({ homeDir, projectDir: projectRoot })
         return result.files.length === 0 && (result.hooks.get("session.created") ?? []).length === 0
@@ -210,7 +210,7 @@ const cases: Case[] = [
       try {
         const homeDir = path.join(sandbox, "home")
         const projectRoot = path.join(sandbox, "project")
-        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../shared/missing.yaml\nhooks: []\n`)
+        writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - ../../shared/missing.yaml\nhooks: []\n`)
 
         const result = loadTrustedProject(projectRoot, homeDir)
         return result.errors.some((error) => error.code === "invalid_imports" && error.message.includes("missing.yaml"))
