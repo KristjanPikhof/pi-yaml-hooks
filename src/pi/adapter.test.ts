@@ -19,8 +19,10 @@ class FakePiHarness {
   readonly statusUpdates: Array<{ hookId: string; text?: string }> = []
   readonly confirms: Array<{ title: string; message: string }> = []
   readonly userMessages: Array<{ text: string; options?: unknown }> = []
+  readonly customMessages: Array<{ customType: string; content: unknown; display: boolean; details?: unknown }> = []
   readonly handlers = new Map<string, PiHandler>()
   readonly commands = new Map<string, CommandHandler>()
+  readonly messageRenderers = new Map<string, unknown>()
   readonly sessionId: string
   hasUI = true
   confirmResult = true
@@ -40,8 +42,14 @@ class FakePiHarness {
       registerCommand: (name: string, options: { handler: CommandHandler }) => {
         this.commands.set(name, options.handler)
       },
+      registerMessageRenderer: (customType: string, renderer: unknown) => {
+        this.messageRenderers.set(customType, renderer)
+      },
       sendUserMessage: (text: string, options?: unknown) => {
         this.userMessages.push({ text, options })
+      },
+      sendMessage: (message: { customType: string; content: unknown; display: boolean; details?: unknown }) => {
+        this.customMessages.push(message)
       },
     } as unknown as Parameters<typeof piHooksExtension>[0]
 
