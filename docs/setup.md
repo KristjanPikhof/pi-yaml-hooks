@@ -11,7 +11,7 @@ This guide gets `pi-hooks` installed and gives you a safe place to put `hooks.ya
 
 Windows is currently a no-op because the hook runner expects a POSIX `bash`.
 
-This repository now treats Pi 0.68.1 as the compatibility target. Older 0.67-era installs are no longer the documented contract even if some behaviors still happen to work.
+This repository now treats Pi 0.68.1 and 0.69.0 as the documented compatibility target. Older 0.67-era installs are no longer the documented contract even if some behaviors still happen to work.
 
 ## Install the extension
 
