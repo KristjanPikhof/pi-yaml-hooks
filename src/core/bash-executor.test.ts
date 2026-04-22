@@ -31,12 +31,12 @@ const cases: Case[] = [
       const resolver = {
         execFileSync: (_command: string, _args: string[], options: { cwd: string }) => {
           calls += 1
-          return `/repo\n${options.cwd === "/repo" ? ".git" : "../.git"}`
+          return `/repo\n${options.cwd === "/repo" ? ".git" : "../../.git"}`
         },
       }
 
       const first = resolveExecutionContext("/repo/packages/a", resolver as never)
-      const second = resolveExecutionContext("/repo/packages/b", resolver as never)
+      const second = resolveExecutionContext("/repo/packages/a", resolver as never)
 
       return calls === 1 && first.worktreeDir === "/repo" && second.worktreeDir === "/repo"
         ? { ok: true }
@@ -44,23 +44,47 @@ const cases: Case[] = [
     },
   },
   {
-    name: "execution context cache reuses non-git fallback for the same project directory",
+    name: "execution context does not reuse a parent repo cache for nested repos",
+    run: async () => {
+      resetExecutionContextCacheForTests()
+      let calls = 0
+      const resolver = {
+        execFileSync: (_command: string, _args: string[], options: { cwd: string }) => {
+          calls += 1
+          return options.cwd.startsWith("/repo/submodule") ? "/repo/submodule\n.git" : "/repo\n.git"
+        },
+      }
+
+      const parent = resolveExecutionContext("/repo", resolver as never)
+      const nested = resolveExecutionContext("/repo/submodule", resolver as never)
+
+      return calls === 2 && parent.worktreeDir === "/repo" && nested.worktreeDir === "/repo/submodule"
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify({ calls, parent, nested }) }
+    },
+  },
+  {
+    name: "execution context retries git resolution after a transient failure",
     run: async () => {
       resetExecutionContextCacheForTests()
       let calls = 0
       const resolver = {
         execFileSync: () => {
           calls += 1
-          throw new Error("not a git repo")
+          if (calls === 1) {
+            throw new Error("temporary failure")
+          }
+          return "/repo\n.git"
         },
       }
 
-      const first = resolveExecutionContext("/tmp/no-git", resolver as never)
-      const second = resolveExecutionContext("/tmp/no-git", resolver as never)
+      const first = resolveExecutionContext("/repo", resolver as never)
+      const second = resolveExecutionContext("/repo", resolver as never)
 
-      return calls === 1 && !first.resolvedFromGit && second.worktreeDir === "/tmp/no-git"
+      return calls === 2 && !first.resolvedFromGit && second.resolvedFromGit && second.worktreeDir === "/repo"
         ? { ok: true }
         : { ok: false, detail: JSON.stringify({ calls, first, second }) }
+      }
     },
   },
   {
