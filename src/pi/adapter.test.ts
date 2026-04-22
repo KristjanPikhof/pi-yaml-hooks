@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
 import { resetPiHooksLoggerForTests } from "../core/logger.js"
-import { registerAdapter } from "./adapter.js"
+import piHooksExtension from "../index.js"
 
 interface Case {
   readonly name: string
@@ -11,6 +11,7 @@ interface Case {
 }
 
 type PiHandler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown
+type CommandHandler = (args: string, ctx: unknown) => Promise<void>
 
 class FakePiHarness {
   readonly projectDir: string
@@ -19,9 +20,12 @@ class FakePiHarness {
   readonly confirms: Array<{ title: string; message: string }> = []
   readonly userMessages: Array<{ text: string; options?: unknown }> = []
   readonly handlers = new Map<string, PiHandler>()
+  readonly commands = new Map<string, CommandHandler>()
   readonly sessionId: string
   hasUI = true
   confirmResult = true
+  reloads = 0
+  notificationsWithLevel: Array<{ message: string; type?: string }> = []
 
   constructor(projectDir: string, sessionId = "session-1") {
     this.projectDir = projectDir
@@ -33,12 +37,15 @@ class FakePiHarness {
       on: (event: string, handler: PiHandler) => {
         this.handlers.set(event, handler)
       },
+      registerCommand: (name: string, options: { handler: CommandHandler }) => {
+        this.commands.set(name, options.handler)
+      },
       sendUserMessage: (text: string, options?: unknown) => {
         this.userMessages.push({ text, options })
       },
-    } as unknown as Parameters<typeof registerAdapter>[0]
+    } as unknown as Parameters<typeof piHooksExtension>[0]
 
-    registerAdapter(pi)
+    piHooksExtension(pi)
   }
 
   createContext(): unknown {
@@ -47,8 +54,9 @@ class FakePiHarness {
       hasUI: this.hasUI,
       ui: this.hasUI
         ? {
-            notify: (text: string) => {
+            notify: (text: string, type?: string) => {
               this.notifications.push(text)
+              this.notificationsWithLevel.push({ message: text, type })
             },
             confirm: async (title: string, message: string) => {
               this.confirms.push({ title, message })
@@ -65,6 +73,9 @@ class FakePiHarness {
       },
       isIdle: () => true,
       hasPendingMessages: () => false,
+      reload: async () => {
+        this.reloads += 1
+      },
     } as never
   }
 
@@ -91,6 +102,15 @@ class FakePiHarness {
 
   async toolResult(toolName: string, toolCallId: string, input: Record<string, unknown> = {}): Promise<void> {
     await this.emit("tool_result", { toolName, toolCallId, input })
+  }
+
+  async command(name: string, args = ""): Promise<void> {
+    const handler = this.commands.get(name)
+    if (!handler) {
+      throw new Error(`${name} command was not registered`)
+    }
+
+    await handler(args, this.createContext())
   }
 }
 
@@ -131,6 +151,14 @@ async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string
       rmSync(projectDir, { recursive: true, force: true })
     }
   })
+}
+
+function readTrustedProjectsFile(): string[] {
+  const filePath = path.join(os.homedir(), ".pi", "agent", "trusted-projects.json")
+  if (!existsSync(filePath)) {
+    return []
+  }
+  return JSON.parse(readFileSync(filePath, "utf8")) as string[]
 }
 
 const cases: Case[] = [
@@ -292,6 +320,92 @@ const cases: Case[] = [
 
         const expected = JSON.stringify(["idle-v1", "idle-v2", "idle-v2"])
         return JSON.stringify(harness.notifications) === expected
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "hooks-status command reports active hooks and trust state",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-status")
+
+        return harness.notifications.some((message) => message.includes("Project trusted: yes")) &&
+            harness.notifications.some((message) => message.includes("Active summary:"))
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "hooks-validate command explains untrusted project hooks",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-validate")
+
+        return harness.notifications.some((message) => message.includes("valid but untrusted")) &&
+            harness.notifications.some((message) => message.includes("/hooks-trust"))
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    name: "hooks-trust command writes the current project to trusted-projects.json",
+    run: async () =>
+      await withIsolatedProject(false, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-trust")
+
+        const trustedProjects = readTrustedProjectsFile()
+        return trustedProjects.includes(projectDir)
+          ? { ok: true }
+          : { ok: false, detail: `trustedProjects=${JSON.stringify(trustedProjects)}` }
+      }),
+  },
+  {
+    name: "hooks-reload command triggers PI extension reload",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-reload")
+
+        return harness.reloads === 1
+          ? { ok: true }
+          : { ok: false, detail: `reloads=${harness.reloads}` }
+      }),
+  },
+  {
+    name: "hooks-tail-log command shows the tail command",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.command("hooks-tail-log")
+
+        return harness.notifications.some((message) => message.includes("tail -F"))
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
       }),
