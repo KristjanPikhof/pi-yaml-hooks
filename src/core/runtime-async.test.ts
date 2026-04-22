@@ -1,4 +1,4 @@
-import { parseHooksFile } from "./load-hooks.js"
+import { loadDiscoveredHooks, parseHooksFile } from "./load-hooks.js"
 import { createHooksRuntime } from "./runtime.js"
 import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
 import type { HookMap, HostAdapter } from "./types.js"
@@ -58,28 +58,34 @@ const cases: Case[] = [
   {
     name: "parser rejects async concurrency without a named group",
     run: async () => {
-      const parsed = parseHooksFile(
-        "/virtual/hooks.yaml",
-        `hooks:
+      const filePath = "/virtual/hooks.yaml"
+      const loaded = loadDiscoveredHooks({
+        homeDir: "/home/tester",
+        projectDir: "/repo",
+        exists: (candidate) => candidate === filePath,
+        readFile: () => `hooks:
   - event: tool.after.write
     async:
       concurrency: 2
     actions:
       - bash: "echo ok"
 `,
-      )
+      })
 
-      return parsed.errors.some((error) => error.code === "invalid_async" && /requires async\.group/i.test(error.message))
+      return loaded.errors.some((error) => error.code === "invalid_async" && /requires async\.group/i.test(error.message))
         ? { ok: true }
-        : { ok: false, detail: JSON.stringify(parsed.errors) }
+        : { ok: false, detail: JSON.stringify(loaded.errors) }
     },
   },
   {
     name: "parser rejects conflicting concurrency in the same async group",
     run: async () => {
-      const parsed = parseHooksFile(
-        "/virtual/hooks.yaml",
-        `hooks:
+      const filePath = "/virtual/hooks.yaml"
+      const loaded = loadDiscoveredHooks({
+        homeDir: "/home/tester",
+        projectDir: "/repo",
+        exists: (candidate) => candidate === filePath,
+        readFile: () => `hooks:
   - event: tool.after.write
     async:
       group: uploads
@@ -93,11 +99,11 @@ const cases: Case[] = [
     actions:
       - bash: "echo two"
 `,
-      )
+      })
 
-      return parsed.errors.some((error) => error.code === "invalid_async" && /must match earlier hooks/i.test(error.message))
+      return loaded.errors.some((error) => error.code === "invalid_async" && /must match earlier hooks/i.test(error.message))
         ? { ok: true }
-        : { ok: false, detail: JSON.stringify(parsed.errors) }
+        : { ok: false, detail: JSON.stringify(loaded.errors) }
     },
   },
   {
