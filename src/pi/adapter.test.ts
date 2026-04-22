@@ -100,6 +100,10 @@ class FakePiHarness {
     await this.emit("session_start", { reason })
   }
 
+  async beforeAgentStart(prompt = "hi", systemPrompt = "base system prompt"): Promise<unknown> {
+    return await this.emit("before_agent_start", { type: "before_agent_start", prompt, systemPrompt })
+  }
+
   async agentEnd(): Promise<void> {
     await this.emit("agent_end")
   }
@@ -216,6 +220,60 @@ const cases: Case[] = [
         return harness.messageRenderers.has("pi-hooks-diagnostics")
           ? { ok: true }
           : { ok: false, detail: `renderers=${JSON.stringify(Array.from(harness.messageRenderers.keys()))}` }
+      }),
+  },
+  {
+    name: "before_agent_start injects concise hook awareness into the system prompt",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        const result = await harness.beforeAgentStart("help me write hooks", "base system prompt")
+
+        return result &&
+            typeof result === "object" &&
+            "systemPrompt" in result &&
+            typeof result.systemPrompt === "string" &&
+            result.systemPrompt.includes("Hook-awareness for this session:") &&
+            result.systemPrompt.includes("pi-hooks loaded 1 hooks")
+          ? { ok: true }
+          : { ok: false, detail: `result=${JSON.stringify(result)}` }
+      }),
+  },
+  {
+    name: "before_agent_start mentions UI degradation in headless mode",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: "idle"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.hasUI = false
+        harness.register()
+        const result = await harness.beforeAgentStart()
+
+        return result &&
+            typeof result === "object" &&
+            "systemPrompt" in result &&
+            typeof result.systemPrompt === "string" &&
+            result.systemPrompt.includes("UI is unavailable in this mode")
+          ? { ok: true }
+          : { ok: false, detail: `result=${JSON.stringify(result)}` }
       }),
   },
   {
