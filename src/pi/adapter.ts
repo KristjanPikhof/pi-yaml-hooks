@@ -45,6 +45,7 @@ import {
 import type { HookNotifyLevel, HostAdapter, HostDeliveryResult } from "../core/types.js";
 import { sendHookDiagnostics } from "./diagnostics.js";
 import { getRootSessionId } from "./session-lineage.js";
+import { registerUserBashInterception } from "./user-bash.js";
 
 /**
  * Register the PI adapter on the given extension API.
@@ -185,6 +186,12 @@ export function registerAdapter(pi: ExtensionAPI): void {
     runtimes.set(cwd, runtime);
     return runtime;
   }
+
+  registerUserBashInterception(pi, {
+    getRuntimeFor,
+    rememberContext,
+    getSessionId: (ctx) => safeGetSessionId(ctx.sessionManager),
+  });
 
   // ---- tool_call ----
   // PI's tool_call handler may return { block: true, reason } to stop
