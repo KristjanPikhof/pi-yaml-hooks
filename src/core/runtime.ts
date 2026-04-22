@@ -609,7 +609,6 @@ async function dispatchHooks(
   })
 
   const hooksForEvent = eventHooks
-  const preparedContext = prepareRuntimeActionContext(projectDir, context)
 
   const dispatchKey = `${event}:${sessionID}`
   const dispatchState = dispatchStates.get(dispatchKey)
@@ -665,7 +664,7 @@ async function dispatchHooks(
         projectDir,
         runBashHook,
         sessionID,
-        request.context.pathMatchContext ? request.context : preparedContext,
+        prepareRuntimeActionContext(projectDir, request.context),
         request.options,
         actionRecursionGuards,
         asyncQueues,
