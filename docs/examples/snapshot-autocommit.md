@@ -2,7 +2,7 @@
 
 This repository includes a full Python example that auto-commits recognized file changes through a snapshot worker.
 
-## Use the bundled example
+## Use the npmdled example
 
 - example directory: [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/)
 - detailed setup: [`../../examples/atomic-commit-snapshot-worker/README.md`](../../examples/atomic-commit-snapshot-worker/README.md)
