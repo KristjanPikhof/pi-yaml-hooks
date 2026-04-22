@@ -186,6 +186,7 @@ Once the extension is loaded, PI exposes these helper commands:
 | `PI_HOOKS_MAX_OUTPUT_BYTES=4194304` | Raise the per-hook stdout/stderr capture cap |
 | `PI_HOOKS_DEBUG=1` | Print extra debug logging |
 | `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` | In headless mode, auto-approve `confirm:` instead of denying |
+| `PI_HOOKS_ENABLE_USER_BASH=1` | Route human `!` / `!!` shell commands through `tool.before.bash` hooks |
 
 ## First troubleshooting steps
 

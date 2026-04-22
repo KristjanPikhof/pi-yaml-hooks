@@ -286,6 +286,15 @@ PI does not expose an extension-side abort outside `tool_call`. `action: stop` o
 
 If PI is running without a UI surface (print/RPC mode), `confirm:` actions return `false` (deny) instead of silently approving. This protects destructive operations behind a confirm gate from auto-running where no human can answer. Set `PI_HOOKS_CONFIRM_AUTO_APPROVE=1` to opt into the previous fail-open behavior.
 
+### Optional `user_bash` interception
+
+Set `PI_HOOKS_ENABLE_USER_BASH=1` to route human `!` / `!!` shell commands through `tool.before.bash` hooks before PI executes them.
+
+- this is opt-in and disabled by default
+- only pre-bash safety hooks are applied; it does not synthesize `tool.after.*` or `file.changed`
+- blocking semantics match normal pre-tool bash hooks, so `confirm:` can stop destructive commands
+- in headless mode, `confirm:` still fails closed
+
 ---
 
 ## Examples

@@ -30,6 +30,15 @@ At agent start, `pi-hooks` appends a short hook-awareness note to the system pro
 
 Set `PI_HOOKS_PROMPT_AWARENESS=0` to disable this prompt injection.
 
+## Optional `user_bash` interception
+
+Set `PI_HOOKS_ENABLE_USER_BASH=1` to run human `!` / `!!` shell commands through `tool.before.bash` hooks before PI executes them.
+
+- this mode is opt-in and disabled by default
+- it applies only pre-bash safety hooks
+- it does not synthesize `tool.after.*` or `file.changed` for `user_bash`
+- headless confirm behavior stays fail-closed
+
 ## `imports`
 
 `imports` composes hook files before the current file's own hooks are merged.
