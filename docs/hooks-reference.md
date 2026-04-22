@@ -349,7 +349,8 @@ Exact rules:
 - async hooks must contain only `bash` actions
 - `async: true` keeps the legacy serialized `event + session` queue
 - `async: { group: <name> }` makes hooks in the same session share a named queue
-- `async: { concurrency: N }` allows up to `N` hooks from that queue to run at once; omit it to keep serialized behavior
+- `async: { group: <name>, concurrency: N }` allows up to `N` hooks from that named queue to run at once; omit it to keep serialized behavior
+- `concurrency` requires `group`, and every hook in the same group must use the same concurrency value
 
 Use async for slow post-processing that should not block the agent turn.
 
