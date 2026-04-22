@@ -430,6 +430,39 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "allowed user_bash commands can run repeatedly without stale pre-hook state",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const previous = process.env.PI_HOOKS_ENABLE_USER_BASH
+        process.env.PI_HOOKS_ENABLE_USER_BASH = "1"
+        try {
+          writeProjectHooks(
+            projectDir,
+            `hooks:
+  - event: tool.before.bash
+    actions:
+      - notify: "checking user bash"
+`,
+          )
+
+          const harness = new FakePiHarness(projectDir)
+          harness.register()
+          const first = await harness.userBash("echo one")
+          const second = await harness.userBash("echo two")
+
+          return first === undefined && second === undefined && harness.notifications.length === 2
+            ? { ok: true }
+            : {
+                ok: false,
+                detail: `first=${JSON.stringify(first)}, second=${JSON.stringify(second)}, notifications=${JSON.stringify(harness.notifications)}`,
+              }
+        } finally {
+          if (previous === undefined) delete process.env.PI_HOOKS_ENABLE_USER_BASH
+          else process.env.PI_HOOKS_ENABLE_USER_BASH = previous
+        }
+      }),
+  },
+  {
     name: "tool actions queue PI follow-up prompts through sendUserMessage",
     run: async () =>
       await withIsolatedProject(true, async (projectDir) => {
