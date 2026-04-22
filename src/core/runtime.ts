@@ -531,7 +531,7 @@ async function dispatchToolHooks(
   runBashHook: ExecuteBashHook,
   dispatchStates: Map<string, DispatchState>,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, Promise<void>>,
+  asyncQueues: Map<string, AsyncQueueState>,
   phase: "before" | "after",
   toolName: string,
   sessionID: string,
@@ -593,7 +593,7 @@ async function dispatchHooks(
   options: { canBlock?: boolean } = {},
   dispatchStates: Map<string, DispatchState>,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, Promise<void>>,
+  asyncQueues: Map<string, AsyncQueueState>,
 ): Promise<HookExecutionResult> {
   const eventHooks = hooks.get(event)
   if (!eventHooks || eventHooks.length === 0) {
@@ -712,7 +712,7 @@ async function executeHook(
   context: RuntimeActionContext,
   options: { canBlock?: boolean },
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, Promise<void>>,
+  asyncQueues: Map<string, AsyncQueueState>,
 ): Promise<HookExecutionResult> {
   const logger = getPiHooksLogger()
   const hookId = getHookIdentifier(hook)
