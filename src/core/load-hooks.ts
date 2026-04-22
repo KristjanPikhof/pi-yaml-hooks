@@ -308,7 +308,54 @@ function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFil
     }
   }
 
+  errors.push(...validateAsyncQueueConfigs(hooks))
+
   return { hooks, errors, files, sources }
+}
+
+function validateAsyncQueueConfigs(hooks: HookMap): HookValidationError[] {
+  const errors: HookValidationError[] = []
+  const concurrencyByGroup = new Map<string, number>()
+
+  for (const hook of flattenHookMap(hooks)) {
+    if (!hook.async || hook.async === true) {
+      continue
+    }
+
+    const pathBase = `hooks[${hook.source.index}].async`
+    if (hook.async.concurrency !== undefined && hook.async.group === undefined) {
+      errors.push(
+        createError(
+          hook.source.filePath,
+          "invalid_async",
+          `${pathBase}.concurrency requires async.group so legacy per-event async queues stay serialized by default.`,
+          `${pathBase}.concurrency`,
+        ),
+      )
+    }
+
+    if (!hook.async.group) {
+      continue
+    }
+
+    const expected = concurrencyByGroup.get(hook.async.group)
+    const actual = hook.async.concurrency ?? 1
+    if (expected !== undefined && expected !== actual) {
+      errors.push(
+        createError(
+          hook.source.filePath,
+          "invalid_async",
+          `${pathBase}.concurrency for group ${JSON.stringify(hook.async.group)} must match earlier hooks in that group (${expected}).`,
+          `${pathBase}.concurrency`,
+        ),
+      )
+      continue
+    }
+
+    concurrencyByGroup.set(hook.async.group, actual)
+  }
+
+  return errors
 }
 
 function expandSnapshotImports(
