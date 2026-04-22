@@ -8,6 +8,16 @@ PI_HOOKS_DEBUG=1 pi
 
 Even without debug logging, hook execution failures and adapter dispatch failures still print concise stderr errors by default. Debug mode adds persistent NDJSON traces and action-level detail.
 
+## Structured in-session diagnostics
+
+`pi-hooks` also emits structured PI-native diagnostics messages for:
+
+- `/hooks-status`
+- `/hooks-validate`
+- hook-load validation problems detected while loading a config
+
+These appear inline in the session when PI supports custom messages. In print/RPC or other non-rendered contexts, the same message content still degrades to plain text plus the existing logs.
+
 ## Log file
 
 Default path:

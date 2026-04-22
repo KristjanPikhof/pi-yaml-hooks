@@ -80,6 +80,8 @@ Editing a discovered `hooks.yaml` is picked up on the next relevant PI event; if
 - `/hooks-reload` — reload extensions and command surfaces; edited `hooks.yaml` still auto-refreshes on the next event
 - `/hooks-tail-log` — show the log file path plus a ready-to-run `tail -F` command
 
+`/hooks-status` and `/hooks-validate` now also emit structured in-session diagnostics messages. Hook-load validation problems do the same automatically when PI first loads a broken config and keeps the last valid hooks active.
+
 ---
 
 ## Pi 0.68.1 compatibility update
