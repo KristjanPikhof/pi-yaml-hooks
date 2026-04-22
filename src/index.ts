@@ -11,8 +11,10 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { registerAdapter } from "./pi/adapter.js";
 import { registerCommands } from "./pi/commands.js";
+import { registerHookDiagnostics } from "./pi/diagnostics.js";
 
 export default function piHooksExtension(pi: ExtensionAPI): void {
+  registerHookDiagnostics(pi);
   registerCommands(pi);
   registerAdapter(pi);
 }
