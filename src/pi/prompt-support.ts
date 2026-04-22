@@ -33,13 +33,18 @@ function buildHookAwarenessSystemPrompt(ctx: ExtensionContext): string | undefin
       : "- project hooks exist but are currently untrusted"
     : "- no project hook file is present for this repo/worktree scope"
 
-  const lines = [
-    "Hook-awareness for this session:",
-    `- pi-hooks loaded ${summary.total} hooks (${summary.global} global, ${summary.project} project)` ,
-    trustLine,
-    "- command actions are unsupported on PI; prefer bash or native /hooks commands",
-    "- cross-session targeting for non-bash actions is limited; tool prompts still target the current session",
-  ]
+  const lines = ["Hook-awareness for this session:"]
+
+  if (loaded.errors.length > 0) {
+    lines.push(`- current hook files have ${loaded.errors.length} validation issue(s); the runtime may be using the valid subset or a last known good hook set`)
+    lines.push("- use /hooks-validate for the exact validation errors and active trust state")
+  } else {
+    lines.push(`- pi-hooks loaded ${summary.total} hooks (${summary.global} global, ${summary.project} project)`)
+    lines.push(trustLine)
+  }
+
+  lines.push("- command actions are unsupported on PI; prefer bash-backed hooks or user-invoked /hooks commands")
+  lines.push("- cross-session targeting for non-bash actions is limited; tool prompts still target the current session")
 
   if (!ctx.hasUI) {
     lines.push("- UI is unavailable in this mode: notify/setStatus degrade and confirm denies by default")
