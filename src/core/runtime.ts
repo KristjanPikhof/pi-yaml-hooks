@@ -780,10 +780,11 @@ async function executeHook(
   })
 
   if (hook.async) {
-    const queueKey = `${hook.event}:${sessionID}`
-    const previous = asyncQueues.get(queueKey) ?? Promise.resolve()
-    const next = previous
-      .then(async () => {
+    const asyncConfig = resolveAsyncExecutionConfig(hook, sessionID)
+    enqueueAsyncHook(
+      asyncQueues,
+      asyncConfig,
+      async () => {
         for (const action of hook.actions) {
           await executeAction(
             action,
@@ -800,8 +801,8 @@ async function executeHook(
             actionRecursionGuards,
           )
         }
-      })
-      .catch((error) => {
+      },
+      (error) => {
         logger.error("hook_async", "Async hook execution failed.", {
           cwd: projectDir,
           event: hook.event,
@@ -811,20 +812,15 @@ async function executeHook(
           details: { error: error instanceof Error ? error.message : String(error) },
         })
         logHookFailure(hook.event, hook.source.filePath, error)
-      })
-      .finally(() => {
-        if (asyncQueues.get(queueKey) === next) {
-          asyncQueues.delete(queueKey)
-        }
-      })
-    asyncQueues.set(queueKey, next)
+      },
+    )
     logger.debug("hook_async", "Queued hook for asynchronous execution.", {
       cwd: projectDir,
       event: hook.event,
       sessionId: sessionID,
       hookId,
       hookSource: formatHookSource(hook),
-      details: { queueKey },
+      details: { queueKey: asyncConfig.queueKey, concurrency: asyncConfig.concurrency },
     })
     return { blocked: false }
   }
