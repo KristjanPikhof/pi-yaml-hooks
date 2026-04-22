@@ -289,6 +289,8 @@ If PI is running without a UI surface (print/RPC mode), `confirm:` actions retur
 
 **Windows:** Unsupported. The extension logs one warning and registers no handlers (the bash executor requires a POSIX `bash`).
 
+**Timed-out bash hooks on macOS/Linux:** `pi-hooks` now signals the whole spawned process group, not just the top-level shell, so backgrounded descendants are cleaned up as part of timeout handling. Timeout logs include the SIGTERM/SIGKILL cleanup path and final result.
+
 **Debug logging:**
 ```bash
 PI_HOOKS_DEBUG=1 pi

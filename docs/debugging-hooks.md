@@ -71,6 +71,7 @@ When debug logging is enabled, `pi-hooks` logs:
 - each action start/result
 - the exact prompt text queued by `tool:` actions
 - bash result status, exit code, duration, stdout, and stderr
+- timeout cleanup details such as process-group SIGTERM, SIGKILL escalation, and final cleanup result
 - exact skip reasons such as `matchesAnyPath_failed` or `scope_mismatch`
 - target session ids and prompt text for `tool:` follow-up injections
 - whether `tool:`, `notify:`, and `setStatus:` actions were accepted, degraded, or failed
