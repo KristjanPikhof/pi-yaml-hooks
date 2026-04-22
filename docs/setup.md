@@ -18,9 +18,9 @@ This repository now treats Pi 0.68.1 and 0.69.0 as the documented compatibility 
 ### Recommended: global extension symlink
 
 ```bash
-git clone https://github.com/KristjanPikhof/pi-hooks
+git clone https://github.com/KristjanPikhof/pi-yaml-hooks.git
 cd pi-hooks
-bun install
+npm install
 ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts
 ```
 
