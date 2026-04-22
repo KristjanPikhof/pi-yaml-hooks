@@ -1376,6 +1376,55 @@ function getStatusSlotKey(hookId: string, sourceFilePath: string): string {
   return `pi-hooks:${hookId}@${sourceFilePath}`
 }
 
+function resolveAsyncExecutionConfig(
+  hook: HookConfig,
+  sessionID: string,
+): { queueKey: string; concurrency: number } {
+  if (hook.async === true || hook.async === undefined) {
+    return { queueKey: `${hook.event}:${sessionID}`, concurrency: 1 }
+  }
+
+  const group = hook.async.group?.trim()
+  return {
+    queueKey: group ? `${sessionID}:${group}` : `${hook.event}:${sessionID}`,
+    concurrency: hook.async.concurrency ?? 1,
+  }
+}
+
+function enqueueAsyncHook(
+  asyncQueues: Map<string, AsyncQueueState>,
+  config: { queueKey: string; concurrency: number },
+  run: () => Promise<void>,
+  onError: (error: unknown) => void,
+): void {
+  const state = asyncQueues.get(config.queueKey) ?? { activeCount: 0, pending: [] }
+  asyncQueues.set(config.queueKey, state)
+
+  const startNext = (): void => {
+    while (state.activeCount < config.concurrency && state.pending.length > 0) {
+      const next = state.pending.shift()
+      if (!next) {
+        continue
+      }
+
+      state.activeCount += 1
+      void next()
+        .catch(onError)
+        .finally(() => {
+          state.activeCount -= 1
+          if (state.activeCount === 0 && state.pending.length === 0) {
+            asyncQueues.delete(config.queueKey)
+            return
+          }
+          startNext()
+        })
+    }
+  }
+
+  state.pending.push(run)
+  startNext()
+}
+
 function formatHookSource(hook: HookConfig): string {
   return `${hook.source.filePath}#hooks[${hook.source.index}]`
 }
