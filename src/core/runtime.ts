@@ -1201,7 +1201,7 @@ async function executeAction(
     try {
       const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
       if (typeof host.setStatus === "function") {
-        const statusHookId = `pi-hooks:${hookId}`
+        const statusHookId = getStatusSlotKey(hookId, sourceFilePath)
         const delivery = normalizeHostDeliveryResult(await host.setStatus(statusHookId, config.text))
         const deliveryDetails = {
           statusHookId,
@@ -1369,6 +1369,10 @@ function resolveToolArgs(
 
 function getHookIdentifier(hook: HookConfig): string {
   return hook.id ?? `${hook.source.filePath}#hooks[${hook.source.index}]`
+}
+
+function getStatusSlotKey(hookId: string, sourceFilePath: string): string {
+  return `pi-hooks:${hookId}@${sourceFilePath}`
 }
 
 function formatHookSource(hook: HookConfig): string {
