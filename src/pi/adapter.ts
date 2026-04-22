@@ -43,6 +43,7 @@ import {
   type ToolExecuteBeforeOutput,
 } from "../core/runtime.js";
 import type { HookNotifyLevel, HostAdapter, HostDeliveryResult } from "../core/types.js";
+import { sendHookDiagnostics } from "./diagnostics.js";
 import { getRootSessionId } from "./session-lineage.js";
 
 /**
@@ -151,6 +152,21 @@ export function registerAdapter(pi: ExtensionAPI): void {
             message: error.message,
           })),
         },
+      });
+      sendHookDiagnostics(pi, {
+        title: "Hook configuration issues",
+        level: "warning",
+        content: `Hook loading found ${loaded.errors.length} validation issue(s). Valid hooks stayed active.`,
+        sections: [
+          {
+            label: "Files",
+            lines: loaded.files,
+          },
+          {
+            label: "Validation errors",
+            lines: loaded.errors.map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`),
+          },
+        ],
       });
     }
     const summary = formatHookLoadSummary(loaded);
