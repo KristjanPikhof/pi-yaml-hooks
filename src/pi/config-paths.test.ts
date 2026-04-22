@@ -67,6 +67,10 @@ function cleanup(dir: string): void {
   rmSync(dir, { recursive: true, force: true })
 }
 
+function samePaths(actual: string[], expected: string[]): boolean {
+  return JSON.stringify(actual.map((entry) => path.resolve(entry))) === JSON.stringify(expected.map((entry) => path.resolve(entry)))
+}
+
 const cases: Case[] = [
   {
     name: "nested cwd under repo root with repo-root config loads",
@@ -123,7 +127,7 @@ const cases: Case[] = [
         writeTrustedProjects(homeDir, [repoDir])
         const resolution = resolveProjectHookResolution({ homeDir, projectDir: nestedDir })
         const paths = discoverHookConfigPaths({ homeDir, projectDir: nestedDir })
-        return resolution?.trusted && JSON.stringify(paths) === JSON.stringify([configPath])
+        return resolution?.trusted && samePaths(paths, [configPath])
           ? { ok: true }
           : { ok: false, detail: JSON.stringify({ resolution, paths }) }
       } finally {
@@ -201,12 +205,13 @@ const cases: Case[] = [
     name: "no-git fallback still works",
     run: () => {
       const sandbox = createSandbox("env-trust")
+      const homeDir = path.join(sandbox, "home")
       const projectDir = path.join(sandbox, "project")
       const nestedDir = path.join(projectDir, "deep")
       try {
         mkdirSync(nestedDir, { recursive: true })
         const configPath = writeFlatHooks(projectDir)
-        const paths = withEnv("PI_HOOKS_TRUST_PROJECT", "1", () => discoverHookConfigPaths({ projectDir: nestedDir }))
+        const paths = withEnv("PI_HOOKS_TRUST_PROJECT", "1", () => discoverHookConfigPaths({ homeDir, projectDir: nestedDir }))
         return JSON.stringify(paths) === JSON.stringify([configPath]) ? { ok: true } : { ok: false, detail: JSON.stringify(paths) }
       } finally {
         cleanup(sandbox)
