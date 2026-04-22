@@ -282,8 +282,9 @@ actions:
 Exact behavior:
 
 - this updates a PI status-bar slot when a UI surface exists
-- status entries are keyed by `<source-file>#<event>`
-- hooks from the same file on the same event share that slot
+- status entries are keyed per hook as `pi-hooks:<hook-id-or-fallback>`
+- when `id` is present, repeated updates reuse that stable hook key
+- when `id` is absent, pi-hooks falls back to a deterministic source-location key so hooks in the same file do not collide
 - the parser currently requires a non-empty status string
 
 ### `command`
