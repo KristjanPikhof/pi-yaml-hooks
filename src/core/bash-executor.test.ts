@@ -84,7 +84,6 @@ const cases: Case[] = [
       return calls === 2 && !first.resolvedFromGit && second.resolvedFromGit && second.worktreeDir === "/repo"
         ? { ok: true }
         : { ok: false, detail: JSON.stringify({ calls, first, second }) }
-      }
     },
   },
   {
