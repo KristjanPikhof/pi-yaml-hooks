@@ -76,6 +76,8 @@ Why:
 - it works across recognized mutation tools
 - it keeps path-based logic in one place
 
+Use path conditions on `tool.after.<name>` when you deliberately want tool-specific post-processing, such as reacting only to `tool.after.write` events under `src/**`. The condition still needs changed paths; non-mutating tools such as `read`, `grep`, `find`, and `ls` will not match path filters.
+
 ### Use `session.idle` for batching
 
 If you want one action after a burst of edits, prefer `session.idle`.
