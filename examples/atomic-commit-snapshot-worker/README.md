@@ -246,9 +246,9 @@ layer needed to keep the existing local queue model safe.
 
 ## Event states
 
-Current code already uses these states today. `blocked_conflict` is the settled
-state for rows that no longer replay safely, including stale branch-generation
-or unsupported-topology cases.
+The worker uses these states. `blocked_conflict` is the settled state for rows
+that no longer replay safely, including stale branch-generation or
+unsupported-topology cases.
 
 | State | Meaning |
 |------|---------|
@@ -306,7 +306,7 @@ claim exact per-edit replay semantics for that event.
 ### Branch generation and quarantine semantics
 
 - `events.base_head` is the capture-time ancestry anchor.
-- The current implementation also uses a shared branch-incarnation signal in
+- The implementation also uses a shared branch-incarnation signal in
   repo-common-dir state so branch delete-and-recreate can be distinguished from
   an ordinary fast-forward on the same branch name.
 - A queued event is safe to replay only while the live branch still belongs to
@@ -322,10 +322,9 @@ claim exact per-edit replay semantics for that event.
   `blocked_conflict` with an explicit generation or topology reason. They must
   not be silently retried against the new branch incarnation.
 
-This is the contract the current implementation enforces: exact capture only in
-supported modes, explicit best-effort labeling for inferred paths, and
-quarantine instead of opportunistic replay when branch identity is no longer
-trustworthy.
+The enforced contract is exact capture only in supported modes, explicit
+best-effort labeling for inferred paths, and quarantine instead of opportunistic
+replay when branch identity is no longer trustworthy.
 
 ### Mixed-fidelity events
 
@@ -357,15 +356,15 @@ fidelity is not sufficient.
     Exact mode therefore assumes one worktree owns a branch at a time.
 
 - **Branch-specific replay**
-  - Today, the worker only processes pending events for the currently checked
+  - The worker only processes pending events for the currently checked
     out branch.
   - Events for other branches stay pending until that branch is active again.
-  - That branch-name check is necessary but not sufficient. The current
-    implementation also enforces shared branch generation checks and rejects or
-    quarantines unsupported same-branch multi-worktree cases.
+  - That branch-name check is necessary but not sufficient. Shared branch
+    generation checks reject or quarantine unsupported same-branch
+    multi-worktree cases.
 
 - **Crash recovery is explicit**
-  - Today, leftover `publishing` rows are reconciled on startup.
+  - Leftover `publishing` rows are reconciled on startup.
   - If the target commit is already an ancestor of the branch tip, the event is
     marked `published`.
   - If the branch generation or ancestry no longer matches, the row is
