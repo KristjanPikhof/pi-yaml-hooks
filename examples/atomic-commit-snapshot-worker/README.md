@@ -24,9 +24,10 @@ commits in every trusted repo session. Put it in `<project>/.pi/hook/hooks.yaml`
 trusted before you expect the hook to load.
 
 You also need a real checkout or copied script directory on disk. `pi install`
-by itself does not give you a stable `/abs/path/to/pi-hooks/...` path to point
-at. Replace `/abs/path/to/pi-hooks` below with the actual path where these
-example scripts live.
+by itself does not give you a stable example-script path to point at. Replace
+`<snapshot-example-dir>` below with the actual path to the
+`examples/atomic-commit-snapshot-worker/` directory that contains
+`snapshot-hook.py` and `snapshot-worker.py`.
 
 ```yaml
 hooks:
@@ -34,13 +35,13 @@ hooks:
     event: file.changed
     async: true
     actions:
-      - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-hook.py'
+      - bash: 'python3 <snapshot-example-dir>/snapshot-hook.py'
 
   # Best-effort flush on shutdown or session switch so commits do not trail too far behind.
   - id: snapshot-flush-on-exit
     event: session.deleted
     actions:
-      - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
+      - bash: 'python3 <snapshot-example-dir>/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
 ```
 
 A copy of these two hooks lives next to this README as
@@ -56,7 +57,7 @@ From a PI session inside a git repo:
 4. Check the worker queue:
 
    ```bash
-   python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-worker.py \
+   python3 <snapshot-example-dir>/snapshot-worker.py \
      --status --repo .
    ```
 
