@@ -8,6 +8,7 @@ Use this pack when you want fast checks before PI runs tools that can mutate a p
 |---|---|
 | `guard-risky-bash` | You want to block obviously dangerous shell commands before they run. |
 | `guard-protected-write` | You want to stop direct writes to secrets, certificates, keys, and local environment files. |
+| `guard-protected-edit` | You want the same protection for edit-based file changes. |
 | `guard-package-install` | You want package installs and dependency updates to be explicit human actions. |
 
 ## Install
@@ -34,5 +35,7 @@ For another project, copy `pre-tool-policy.mjs` into that project and point the 
 3. Confirm the bash tool call is blocked.
 4. Ask PI to write `.env`.
 5. Confirm the write tool call is blocked.
-6. Ask PI to run a harmless command like `pwd`.
-7. Confirm it still runs.
+6. Ask PI to run `npm install left-pad`.
+7. Confirm the package install is blocked.
+8. Ask PI to run a harmless command like `pwd`.
+9. Confirm it still runs.
