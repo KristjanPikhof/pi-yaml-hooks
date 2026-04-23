@@ -1,9 +1,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { resetPiHooksLoggerForTests } from "../core/logger.js"
-import piHooksExtension from "../index.js"
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url))
+const extensionEntrypointPath = currentDir.endsWith(`${path.sep}dist${path.sep}pi`)
+  ? path.resolve(currentDir, "../extensions/index.js")
+  : path.resolve(currentDir, "../../extensions/index.ts")
+const { default: piHooksExtension } = (await import(pathToFileURL(extensionEntrypointPath).href)) as {
+  default: (pi: unknown) => void
+}
 
 interface Case {
   readonly name: string

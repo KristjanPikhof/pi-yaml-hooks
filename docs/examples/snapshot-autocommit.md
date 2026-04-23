@@ -21,17 +21,18 @@ hooks:
     event: file.changed
     async: true
     actions:
-      - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-hook.py'
+      - bash: 'python3 <snapshot-example-dir>/snapshot-hook.py'
 
   - id: snapshot-flush-on-exit
     event: session.deleted
     actions:
-      - bash: 'python3 /abs/path/to/pi-hooks/examples/atomic-commit-snapshot-worker/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
+      - bash: 'python3 <snapshot-example-dir>/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
 ```
 
-Replace `/abs/path/to/pi-hooks` with the actual path where you checked out or
-copied these example scripts. `pi install` alone does not give you a stable
-working-tree path for this snippet.
+Replace `<snapshot-example-dir>` with the actual path to the checked-out or
+copied `examples/atomic-commit-snapshot-worker/` directory that contains
+`snapshot-hook.py` and `snapshot-worker.py`. `pi install` alone does not give
+you a stable working-tree path for this snippet.
 
 ## When to use it
 
