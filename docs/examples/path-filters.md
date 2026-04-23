@@ -18,6 +18,22 @@ hooks:
 
 This runs if at least one changed path matches one of the patterns.
 
+## Filter a specific post-tool event by path
+
+```yaml
+hooks:
+  - id: write-src-ts-change
+    event: tool.after.write
+    conditions:
+      - matchesAnyPath:
+          - "src/**/*.ts"
+          - "src/**/*.tsx"
+    actions:
+      - notify: "A TypeScript source file was written"
+```
+
+This runs only after the `write` tool and only when the written path matches one of the patterns. Use `file.changed` instead when the workflow should react to the path regardless of whether `write`, `edit`, or a recognized mutation-shaped `bash` command caused it.
+
 ## Run only when all changed paths stay inside one area
 
 ```yaml

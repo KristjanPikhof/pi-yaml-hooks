@@ -876,7 +876,7 @@ function parseStructuredCondition(
       error: createError(
         filePath,
         "invalid_conditions",
-        `${conditionPath}.${key} is only supported on file.changed and session.idle hooks.`,
+        `${conditionPath}.${key} is only supported on file.changed, session.idle, and tool.after.* hooks.`,
         `${conditionPath}.${key}`,
       ),
     }
@@ -929,8 +929,8 @@ function normalizePathConditionValues(
   return { values: [...value] }
 }
 
-function supportsPathConditions(event: HookConfig["event"]): event is "file.changed" | "session.idle" {
-  return event === "file.changed" || event === "session.idle"
+function supportsPathConditions(event: HookConfig["event"]): boolean {
+  return event === "file.changed" || event === "session.idle" || event.startsWith("tool.after.")
 }
 
 function parseActions(

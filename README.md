@@ -191,9 +191,9 @@ or use the built-in command:
 
 ## Examples
 
-Example workflows live under [`examples/`](./examples/). The main one today is [`examples/atomic-commit-snapshot-worker/`](./examples/atomic-commit-snapshot-worker/).
+Example workflows live under [`examples/`](./examples/). Start with [`examples/README.md`](./examples/README.md) for complete example packs, including pre-tool developer guards and post-tool developer feedback hooks.
 
-That snapshot worker is an opt-in example, not a built-in PI feature.
+These packs are opt-in examples, not built-in PI features.
 
 ## Docs
 

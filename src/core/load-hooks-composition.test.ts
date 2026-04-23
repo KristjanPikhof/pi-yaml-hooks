@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { loadDiscoveredHooks } from "./load-hooks.js"
+import { loadDiscoveredHooks, parseHooksFile } from "./load-hooks.js"
 
 interface Case {
   readonly name: string
@@ -219,6 +219,69 @@ const cases: Case[] = [
       } finally {
         cleanup(sandbox)
       }
+    },
+  },
+  {
+    name: "path conditions are accepted on tool.after events",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - id: path-filtered-write
+    event: tool.after.write
+    conditions:
+      - matchesAnyPath:
+          - "src/**"
+      - matchesAllPaths: "**/*.ts"
+    actions:
+      - notify: "matched"
+`,
+      )
+
+      const hooks = result.hooks.get("tool.after.write") ?? []
+      return result.errors.length === 0 && hooks.length === 1
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify({ errors: result.errors, hooks: hooks.length }) }
+    },
+  },
+  {
+    name: "path conditions stay rejected on tool.before events",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - id: before-path-filter
+    event: tool.before.write
+    conditions:
+      - matchesAnyPath: "src/**"
+    actions:
+      - notify: "matched"
+`,
+      )
+
+      return result.errors.some((error) => error.code === "invalid_conditions" && error.path === "hooks[0].conditions[0].matchesAnyPath")
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(result.errors) }
+    },
+  },
+  {
+    name: "path conditions stay rejected on lifecycle events without changed paths",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - id: created-path-filter
+    event: session.created
+    conditions:
+      - matchesAllPaths: "src/**"
+    actions:
+      - notify: "matched"
+`,
+      )
+
+      return result.errors.some((error) => error.code === "invalid_conditions" && error.path === "hooks[0].conditions[0].matchesAllPaths")
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(result.errors) }
     },
   },
 ]
