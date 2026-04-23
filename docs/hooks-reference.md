@@ -118,7 +118,7 @@ Custom tool names can also match if the host emits them.
 
 `file.changed` is synthesized from the tool result payload.
 
-On stock PI today it can come from:
+On stock PI, `pi-hooks` can synthesize it from:
 
 - `write`
 - `edit`
@@ -129,7 +129,7 @@ On stock PI today it can come from:
   - `touch`
   - `mkdir`
 
-For direct `write` and `edit` tool calls, the current implementation reports the target path as a `modify` change.
+For direct `write` and `edit` tool calls, `pi-hooks` reports the target path as a `modify` change.
 
 If you install custom tools named `multiedit`, `patch`, or `apply_patch`, the runtime can also synthesize `file.changed` from them.
 
@@ -158,7 +158,7 @@ Path conditions are accepted on these events:
 - `tool.after.*`
 - `tool.after.<name>`
 
-For `tool.after.*` and `tool.after.<name>`, they only match when `pi-hooks` can infer changed paths from the tool result. Stock PI path context is available for `write`, `edit`, and recognized mutation-shaped `bash` commands. Non-mutating tools such as `read`, `grep`, `find`, and `ls` have no changed paths, so path conditions on those events do not match.
+For `tool.after.*` and `tool.after.<name>`, path conditions only match when `pi-hooks` can infer changed paths from the tool result. Stock PI path context is available for `write`, `edit`, and recognized mutation-shaped `bash` commands. Non-mutating tools such as `read`, `grep`, `find`, and `ls` have no changed paths, so path conditions on those events do not match.
 
 ### `matchesAnyPath`
 
@@ -467,9 +467,9 @@ These environment variables are injected into every `bash` hook:
 
 The process working directory is the current project directory.
 
-## Pi 0.69 smoke-check checklist
+## PI compatibility smoke-check checklist
 
-For a real Pi 0.69.0 run, verify these compatibility-sensitive surfaces:
+For a real PI run in the documented peer range, verify these compatibility-sensitive surfaces:
 
 - `before_agent_start` appends the hook-awareness note when `PI_HOOKS_PROMPT_AWARENESS` is not `0`
 - headless mode still mentions degraded UI actions in that prompt note
