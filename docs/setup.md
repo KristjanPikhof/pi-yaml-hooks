@@ -60,7 +60,7 @@ Project settings override global ones, and PI installs missing project packages 
 | Method | Use when |
 |---|---|
 | `pi -e git:git@github.com:KristjanPikhof/pi-yaml-hooks` | You want a one-off run without writing settings |
-| `ln -s "$PWD/src/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | You are editing a local checkout and want PI to load that working tree |
+| `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | You are editing a local checkout and want PI to load that working tree |
 | `<project>/.pi/extensions/pi-hooks.ts` | You want a project-local local-dev install from a checkout |
 
 ## Create your first hook file
