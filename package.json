@@ -8,13 +8,14 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./extensions/index.ts"
     ]
   },
   "keywords": [
     "pi-package"
   ],
   "files": [
+    "extensions",
     "src",
     "docs",
     "examples",
