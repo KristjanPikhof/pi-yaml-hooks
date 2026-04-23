@@ -10,7 +10,7 @@
 - [`debugging-hooks.md`](./debugging-hooks.md) — persistent hook logs, tailing, and debugging workflow
 - [`examples/`](./examples/) — copy-paste examples for each major capability
 
-## What pi-hooks can do today
+## What pi-hooks can do
 
 - Run `bash` before or after tool calls
 - Block pre-tool calls from `bash` hooks with exit code `2`
@@ -19,7 +19,7 @@
 - Send follow-up prompts back into the current PI session with `tool:` actions
 - React to session lifecycle events: `session.created`, `session.idle`, and `session.deleted`
 - React to `file.changed`, which PI synthesizes after recognized file mutations, including `cp`/`git cp`, `mv`/`git mv`, `rm`/`git rm`, `touch`, and `mkdir`
-- Filter hooks by file extension or glob patterns
+- Filter hooks by file extension or glob patterns, including post-tool mutation hooks with changed paths
 - Restrict hooks to `all`, `main`, or `child` sessions
 - Queue selected hooks asynchronously so they do not block the agent turn
 - Layer one global root hook file and one trusted project root hook file, each of which can import more hook files, with id-based replacement or disable behavior
@@ -37,7 +37,7 @@ These are the details that matter most when authoring hooks:
 - `tool:` does not imperatively invoke a tool; it sends a follow-up prompt to the current session.
 - `confirm:` blocks only on `tool.before.*` hooks.
 - `session.deleted` is intentionally lossy: PI fires it for shutdown and for session switches like `/new`, `/resume`, and `/fork`.
-- `file.changed` is synthesized from recognized mutation tools. On stock PI that means `write`, `edit`, and some `bash` commands such as `mv`, `rm`, `touch`, and `mkdir`.
+- `file.changed` is synthesized from recognized mutation tools. On stock PI that means `write`, `edit`, and some `bash` commands such as `cp`, `mv`, `rm`, `touch`, and `mkdir`.
 
 ## Recommended reading order
 

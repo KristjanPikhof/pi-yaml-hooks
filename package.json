@@ -1,7 +1,7 @@
 {
   "name": "pi-hooks",
-  "version": "2026-04-23",
-  "description": "Port of OpenCode-Hooks to the PI harness: YAML-driven hooks for PI sessions.",
+  "version": "2026-04-24",
+  "description": "YAML hook automation for the PI coding agent: tool guards, session hooks, prompts, notifications, and bash actions.",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -12,7 +12,15 @@
     ]
   },
   "keywords": [
-    "pi-package"
+    "pi",
+    "pi-package",
+    "pi-coding-agent",
+    "coding-agent",
+    "agent-hooks",
+    "hooks",
+    "yaml",
+    "automation",
+    "developer-tools"
   ],
   "files": [
     "extensions",
@@ -29,7 +37,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KristjanPikhof/pi-hooks.git"
+    "url": "git+https://github.com/KristjanPikhof/pi-yaml-hooks.git"
+  },
+  "homepage": "https://github.com/KristjanPikhof/pi-yaml-hooks#readme",
+  "bugs": {
+    "url": "https://github.com/KristjanPikhof/pi-yaml-hooks/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT",
   "peerDependencies": {
