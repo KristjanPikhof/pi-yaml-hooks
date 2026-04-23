@@ -269,7 +269,7 @@ Levels:
 - `warning`
 - `error`
 
-On PI, `success` is mapped to `info` because the current UI API does not expose a separate success level.
+On PI, `success` is mapped to `info` because the UI API does not expose a separate success level.
 
 ### `confirm`
 
@@ -419,7 +419,7 @@ hooks:
     disable: true
 ```
 
-Important detail: the current loader resolves overrides against hooks loaded from earlier files. Same-file override entries are not a reliable authoring pattern.
+Important detail: overrides resolve against hooks loaded from earlier files. Same-file override entries are not a reliable authoring pattern.
 
 ## Bash hook stdin contract
 
