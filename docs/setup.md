@@ -107,7 +107,7 @@ Checked in this order:
 1. `~/.pi/agent/hook/hooks.yaml`
 2. `~/.pi/agent/hooks.yaml`
 
-The codebase still knows about Windows-style paths internally, but Windows is not a supported runtime for `pi-hooks` today.
+Windows is not a supported runtime, even if some internal path discovery code recognizes Windows-style locations.
 
 ### Project locations
 
@@ -189,7 +189,7 @@ For exact override behavior, see [`hooks-reference.md`](./hooks-reference.md).
 
 ## Hook file reload behavior
 
-`pi-hooks` re-checks the discovered `hooks.yaml` files on later events. If file size or modification time changes, it reloads them automatically.
+`pi-hooks` re-checks discovered hook files on later events. If file size or modification time changes, it reloads the active hook set automatically.
 
 In practice this means:
 
