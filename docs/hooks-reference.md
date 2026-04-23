@@ -151,6 +151,15 @@ Practical note:
 - it is most useful on `file.changed`, `tool.after.<mutation>`, and `session.idle`
 - on events with no file context, it will not match
 
+Path conditions are accepted on these events:
+
+- `file.changed`
+- `session.idle`
+- `tool.after.*`
+- `tool.after.<name>`
+
+For `tool.after.*` and `tool.after.<name>`, they only match when `pi-hooks` can infer changed paths from the tool result. Stock PI path context is available for `write`, `edit`, and recognized mutation-shaped `bash` commands. Non-mutating tools such as `read`, `grep`, `find`, and `ls` have no changed paths, so path conditions on those events do not match.
+
 ### `matchesAnyPath`
 
 ```yaml
