@@ -16,6 +16,12 @@ These examples are designed to be copied into `hooks.yaml` with minimal editing.
 - [`tail-hook-logs.md`](./tail-hook-logs.md) — tail and filter the persistent hook log while debugging
 - [`snapshot-autocommit.md`](./snapshot-autocommit.md) — hook up the included Python snapshot worker example
 
+## Complete example packs
+
+- [`../../examples/pre-tool-developer-guards/`](../../examples/pre-tool-developer-guards/) — pre-tool guards for risky bash, protected files, and dependency installs
+- [`../../examples/post-tool-developer-feedback/`](../../examples/post-tool-developer-feedback/) — post-tool logging, status, and follow-up prompts for developer workflows
+- [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/) — advanced snapshot worker example
+
 ## Before you paste
 
 - If you are using a project hook file, trust the project first.
