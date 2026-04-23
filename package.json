@@ -29,7 +29,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KristjanPikhof/pi-hooks.git"
+    "url": "git+https://github.com/KristjanPikhof/pi-yaml-hooks.git"
   },
   "license": "MIT",
   "peerDependencies": {
