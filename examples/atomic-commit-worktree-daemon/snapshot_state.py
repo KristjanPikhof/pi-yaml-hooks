@@ -34,7 +34,7 @@ from snapshot_shared import (  # type: ignore[reportMissingImports]
     ensure_branch_registry,
     local_state_dir,
     quarantine_incompatible_local_state,
-    resolve_repo_paths,
+    resolve_repo_paths as _resolve_repo_paths,
     run_git,
 )
 
@@ -48,6 +48,10 @@ SCHEMA_VERSION = 1
 
 def db_path(git_dir: Path) -> Path:
     return local_state_dir(git_dir) / DB_NAME
+
+
+def resolve_repo_paths(cwd: Path) -> Tuple[Path, Path, Path]:
+    return _resolve_repo_paths(cwd)
 
 
 def index_path(git_dir: Path) -> Path:
