@@ -60,6 +60,11 @@ def _replay_pending(conn, repo_root: Path, git_dir: Path) -> int:
     return int(module.replay_pending_events(conn, repo_root, git_dir))
 
 
+def _pending_event_count(conn) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM capture_events WHERE state='pending'").fetchone()
+    return int(row[0] if row else 0)
+
+
 def process_requests(
     conn,
     repo_root: Path,
@@ -81,13 +86,13 @@ def process_requests(
             sleeping = False
             note = "wake acknowledged"
         elif command == "flush":
-            published = _replay_pending(conn, repo_root, git_dir)
+            published = _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
             note = f"flush acknowledged; published={published}"
         elif command == "sleep":
             sleeping = True
             note = "sleep acknowledged"
         elif command == "stop":
-            published = _replay_pending(conn, repo_root, git_dir)
+            published = _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
             note = f"stop acknowledged; published={published}"
             sleeping = True
             stop_event.set()
