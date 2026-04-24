@@ -453,6 +453,56 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         ]
         self.assertEqual(states, ["blocked_conflict", "pending"])
 
+    def test_replay_stops_after_commit_build_failure(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        first = snapshot_state.capture_blob_for_text(repo, "first\n")
+        second = snapshot_state.capture_blob_for_text(repo, "second\n")
+        for name, blob in (("first.txt", first), ("second.txt", second)):
+            snapshot_state.record_event(
+                conn,
+                branch_ref=ctx["branch_ref"],
+                branch_generation=ctx["branch_generation"],
+                base_head=ctx["base_head"],
+                operation="create",
+                path=name,
+                old_path=None,
+                fidelity="watcher",
+                ops=[
+                    {
+                        "op": "create",
+                        "path": name,
+                        "before_oid": None,
+                        "before_mode": None,
+                        "after_oid": blob,
+                        "after_mode": "100644",
+                    }
+                ],
+            )
+
+        replay = load_example_module("snapshot_replay_build_failure_test", "snapshot-replay.py")
+        original_run = replay.subprocess.run
+
+        def fail_write_tree(args, *pargs, **kwargs):
+            if len(args) > 1 and args[1] == "write-tree":
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"forced write-tree failure")
+            return original_run(args, *pargs, **kwargs)
+
+        replay.subprocess.run = fail_write_tree
+        try:
+            self.assertEqual(replay.replay_pending_events(conn, repo, git_dir), 0)
+        finally:
+            replay.subprocess.run = original_run
+        states = [
+            row["state"]
+            for row in conn.execute("SELECT state FROM capture_events ORDER BY seq").fetchall()
+        ]
+        self.assertEqual(states, ["failed", "pending"])
+
     def test_daemon_processes_flush_sleep_and_stop_requests(self) -> None:
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)

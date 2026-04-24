@@ -126,6 +126,28 @@ def _live_index_entries(repo_root: Path, paths: List[str]) -> Dict[str, Tuple[st
     return entries
 
 
+def _tree_entries(repo_root: Path, rev: str, paths: List[str]) -> Dict[str, Tuple[str, str]]:
+    if not paths:
+        return {}
+    proc = subprocess.run(
+        ["git", "ls-tree", "-z", rev, "--", *paths],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        return {}
+    entries: Dict[str, Tuple[str, str]] = {}
+    for chunk in proc.stdout.split(b"\x00"):
+        if not chunk:
+            continue
+        meta, _tab, path_bytes = chunk.partition(b"\t")
+        parts = meta.split()
+        if len(parts) >= 3:
+            entries[path_bytes.decode("utf-8", errors="replace")] = (parts[0].decode(), parts[2].decode())
+    return entries
+
+
 def _entry(state: Dict[str, Tuple[str, str]], path: str) -> Tuple[str, str]:
     return state.get(path) or ABSENT
 
@@ -183,6 +205,14 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     if branch != live_branch or expected_generation != live_generation:
         reason = "stale branch during publish recovery"
     elif target and _is_ancestor(repo_root, target, live_head):
+        ops = [dict(op) for op in load_ops(conn, event_seq)]
+        paths = _touched_paths(ops)
+        _reconcile_live_index(
+            repo_root,
+            paths,
+            _tree_entries(repo_root, source_head, paths),
+            _tree_entries(repo_root, target, paths),
+        )
         conn.execute(
             "UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?",
             (target, event_seq),
