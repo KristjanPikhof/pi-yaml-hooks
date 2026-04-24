@@ -43,6 +43,7 @@ STATE_SUBDIR = "ai-snapshotd"
 DB_NAME = "daemon.db"
 LOCK_NAME = "daemon.lock"
 CONTROL_LOCK_NAME = "control.lock"
+PUBLISH_LOCK_NAME = "publish.lock"
 INDEX_NAME = "worker.index"
 SCHEMA_VERSION = 1
 
@@ -315,34 +316,43 @@ def record_event(
     captured_ts: Optional[float] = None,
 ) -> int:
     captured_ts = time.time() if captured_ts is None else captured_ts
-    cur = conn.execute(
-        """INSERT INTO capture_events(branch_ref, branch_generation, base_head, operation,
-               path, old_path, fidelity, captured_ts)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (branch_ref, branch_generation, base_head, operation, path, old_path, fidelity, captured_ts),
-    )
-    seq = int(cur.lastrowid or 0)
-    for ord_, op in enumerate(ops):
-        conn.execute(
-            """INSERT INTO capture_ops(event_seq, ord, op, path, old_path,
-                   before_oid, before_mode, after_oid, after_mode, fidelity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                seq,
-                ord_,
-                op["op"],
-                op["path"],
-                op.get("old_path"),
-                op.get("before_oid"),
-                op.get("before_mode"),
-                op.get("after_oid"),
-                op.get("after_mode"),
-                op.get("fidelity", fidelity),
-            ),
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            """INSERT INTO capture_events(branch_ref, branch_generation, base_head, operation,
+                   path, old_path, fidelity, captured_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (branch_ref, branch_generation, base_head, operation, path, old_path, fidelity, captured_ts),
         )
-    for op in ops:
-        _update_shadow_path(conn, branch_ref, branch_generation, base_head, fidelity, op)
-    return seq
+        seq = int(cur.lastrowid or 0)
+        for ord_, op in enumerate(ops):
+            conn.execute(
+                """INSERT INTO capture_ops(event_seq, ord, op, path, old_path,
+                       before_oid, before_mode, after_oid, after_mode, fidelity)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    seq,
+                    ord_,
+                    op["op"],
+                    op["path"],
+                    op.get("old_path"),
+                    op.get("before_oid"),
+                    op.get("before_mode"),
+                    op.get("after_oid"),
+                    op.get("after_mode"),
+                    op.get("fidelity", fidelity),
+                ),
+            )
+        for op in ops:
+            _update_shadow_path(conn, branch_ref, branch_generation, base_head, fidelity, op)
+        conn.execute("COMMIT")
+        return seq
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            pass
+        raise
 
 
 def _update_shadow_path(
@@ -608,6 +618,18 @@ def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
 @contextmanager
 def control_lock(git_dir: Path) -> Iterator[None]:
     path = local_state_dir(git_dir) / CONTROL_LOCK_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def publish_lock(git_dir: Path) -> Iterator[None]:
+    path = local_state_dir(git_dir) / PUBLISH_LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)

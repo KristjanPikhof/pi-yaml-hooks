@@ -28,12 +28,16 @@ from snapshot_state import (
     index_path,
     load_ops,
     load_pending_events,
+    publish_lock,
     repo_context,
     resolve_repo_paths,
     snapshot_state_for_index,
     status_snapshot,
     update_publish_state,
 )
+
+
+ABSENT: Tuple[str, str] = ("__absent__", "__absent__")
 
 
 def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
@@ -79,6 +83,74 @@ def _apply_state(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> None:
     path = op["path"]
     if kind in {"create", "modify", "mode", "symlink"}:
         state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
+
+
+def _touched_paths(ops: List[Dict[str, Any]]) -> List[str]:
+    paths: List[str] = []
+    for op in ops:
+        if op.get("old_path"):
+            paths.append(str(op["old_path"]))
+        paths.append(str(op["path"]))
+    return sorted(set(paths))
+
+
+def _live_index_entries(repo_root: Path, paths: List[str]) -> Dict[str, Tuple[str, str]]:
+    if not paths:
+        return {}
+    env = os.environ.copy()
+    env.pop("GIT_INDEX_FILE", None)
+    proc = subprocess.run(
+        ["git", "ls-files", "-s", "-z", "--", *paths],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    if proc.returncode != 0:
+        return {}
+    entries: Dict[str, Tuple[str, str]] = {}
+    for chunk in proc.stdout.split(b"\x00"):
+        if not chunk:
+            continue
+        meta, _tab, path_bytes = chunk.partition(b"\t")
+        parts = meta.split()
+        if len(parts) >= 2:
+            entries[path_bytes.decode("utf-8", errors="replace")] = (parts[0].decode(), parts[1].decode())
+    return entries
+
+
+def _entry(state: Dict[str, Tuple[str, str]], path: str) -> Tuple[str, str]:
+    return state.get(path) or ABSENT
+
+
+def _reconcile_live_index(
+    repo_root: Path,
+    paths: List[str],
+    pre_state: Dict[str, Tuple[str, str]],
+    post_state: Dict[str, Tuple[str, str]],
+) -> None:
+    live = _live_index_entries(repo_root, paths)
+    safe: List[str] = []
+    for path in paths:
+        live_entry = live.get(path) or ABSENT
+        pre_entry = _entry(pre_state, path)
+        post_entry = _entry(post_state, path)
+        if live_entry == post_entry:
+            continue
+        if live_entry == pre_entry:
+            safe.append(path)
+    if not safe:
+        return
+    env = os.environ.copy()
+    env.pop("GIT_INDEX_FILE", None)
+    subprocess.run(
+        ["git", "reset", "-q", "--", *safe],
+        cwd=str(repo_root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        check=False,
+    )
     elif kind == "delete":
         state.pop(path, None)
     elif kind == "rename":
@@ -162,6 +234,11 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
 
 
 def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
+    with publish_lock(git_dir):
+        return _replay_pending_events_locked(conn, repo_root, git_dir)
+
+
+def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
     head = ctx["base_head"]
@@ -273,6 +350,7 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                 commit_oid = commit_proc.stdout.decode("utf-8", errors="replace").strip()
             except Exception as exc:
                 state = saved
+                subprocess.run(["git", "read-tree", parent], cwd=str(repo_root), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (str(exc), int(event["seq"])))
                 update_publish_state(
                     conn,
@@ -284,7 +362,7 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                     status="failed",
                     error=str(exc),
                 )
-                continue
+                break
 
             update_publish_state(
                 conn,
@@ -310,6 +388,8 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                         proc.stderr.decode("utf-8", errors="replace").strip()
                     )
             except Exception as exc:
+                state = saved
+                subprocess.run(["git", "read-tree", parent], cwd=str(repo_root), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", (str(exc), int(event["seq"])))
                 update_publish_state(
                     conn,
@@ -321,11 +401,12 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                     status="blocked_conflict",
                     error=str(exc),
                 )
-                continue
+                break
 
             parent = commit_oid
             published += 1
             conn.execute("UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?", (commit_oid, int(event["seq"])))
+            _reconcile_live_index(repo_root, _touched_paths(ops), saved, state)
             update_publish_state(
                 conn,
                 event_seq=int(event["seq"]),

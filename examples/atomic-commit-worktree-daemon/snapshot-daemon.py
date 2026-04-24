@@ -67,7 +67,12 @@ def _pending_event_count(conn) -> int:
 
 def _capture_then_replay(conn, repo_root: Path, git_dir: Path) -> int:
     """Capture the current stable polling snapshot before draining commits."""
-    capture.poll_once(conn, repo_root, git_dir)
+    try:
+        capture.poll_once(conn, repo_root, git_dir)
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
+    except Exception as exc:
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
+        raise
     return _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
 
 
@@ -180,7 +185,9 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             if not sleeping:
                 try:
                     capture.poll_once(conn, repo_root, git_dir)
+                    snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
                 except Exception as exc:
+                    snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
                     _heartbeat(conn, os.getpid(), "running", ctx, note=f"capture error: {exc}")
                 conn.commit()
 

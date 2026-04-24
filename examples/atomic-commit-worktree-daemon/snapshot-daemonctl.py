@@ -35,6 +35,7 @@ from snapshot_state import (
 
 ACK_TIMEOUT = float(os.environ.get("SNAPSHOTD_ACK_TIMEOUT", "2.0"))
 FRESH_HEARTBEAT_SECONDS = float(os.environ.get("SNAPSHOTD_HEARTBEAT_FRESH_SECONDS", "15.0"))
+START_READY_TIMEOUT = float(os.environ.get("SNAPSHOTD_START_READY_TIMEOUT", "1.0"))
 
 
 def daemon_script_path() -> Path:
@@ -99,8 +100,17 @@ def _maybe_start(repo_root: Path, git_dir: Path, conn, note: str = "") -> Dict[s
     if proc is None:
         set_daemon_state(conn, pid=0, mode="degraded-no-daemon", note="snapshot-daemon.py missing")
         return {"started": False, "reason": "snapshot-daemon.py missing", "daemon": _daemon_row(conn)}
-    set_daemon_state(conn, pid=proc.pid, mode="running", note=note or "daemon started")
-    return {"started": True, "pid": proc.pid, "daemon": _daemon_row(conn)}
+    set_daemon_state(conn, pid=proc.pid, mode="starting", note=note or "daemon starting")
+    deadline = time.time() + START_READY_TIMEOUT
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            set_daemon_state(conn, pid=0, mode="stopped", note="daemon exited during startup")
+            return {"started": False, "reason": "daemon exited during startup", "daemon": _daemon_row(conn)}
+        current = _daemon_row(conn)
+        if int(current.get("pid") or 0) == proc.pid and current.get("mode") == "running":
+            return {"started": True, "pid": proc.pid, "daemon": current}
+        time.sleep(0.05)
+    return {"started": True, "pid": proc.pid, "ready": False, "reason": "daemon readiness timeout", "daemon": _daemon_row(conn)}
 
 
 def cmd_start(repo_root: Path, git_dir: Path) -> int:

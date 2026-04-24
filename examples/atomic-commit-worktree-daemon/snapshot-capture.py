@@ -9,8 +9,10 @@ records stable file events with ``rescan`` fidelity.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
+import subprocess
 import stat
 import sys
 from pathlib import Path
@@ -24,6 +26,14 @@ import snapshot_state  # noqa: E402
 
 
 IGNORE_NAMES = {".git", snapshot_state.STATE_SUBDIR}
+SENSITIVE_PATTERNS = tuple(
+    p.strip()
+    for p in os.environ.get(
+        "SNAPSHOTD_SENSITIVE_GLOBS",
+        ".env,.env.*,**/.env,**/.env.*,**/id_rsa*,**/*.pem,**/*.key,**/*.p12,**/*.pfx,**/secrets/*,**/credentials*",
+    ).split(",")
+    if p.strip()
+)
 
 
 def _mode_for_stat(st: os.stat_result) -> str:
@@ -38,6 +48,20 @@ def _read_path_bytes(path: Path) -> bytes:
     if path.is_symlink():
         return os.readlink(path).encode("utf-8")
     return path.read_bytes()
+
+
+def _is_git_ignored(repo_root: Path, rel: str) -> bool:
+    proc = subprocess.run(
+        ["git", "check-ignore", "-q", "--", rel],
+        cwd=str(repo_root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0
+
+
+def _is_sensitive(rel: str) -> bool:
+    return any(fnmatch.fnmatch(rel, pattern) for pattern in SENSITIVE_PATTERNS)
 
 
 def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
@@ -56,6 +80,8 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
             if stat.S_ISDIR(st.st_mode):
                 continue
             rel = path.relative_to(repo_root).as_posix()
+            if _is_sensitive(rel) or _is_git_ignored(repo_root, rel):
+                continue
             try:
                 data = _read_path_bytes(path)
             except FileNotFoundError:

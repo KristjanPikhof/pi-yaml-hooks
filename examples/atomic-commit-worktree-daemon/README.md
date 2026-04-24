@@ -31,7 +31,9 @@ stable example-script path to reference from YAML.
 
 Copy [`hooks.yaml`](./hooks.yaml) into your project hook file, then replace
 `<example-dir>` with the absolute path to this
-`examples/atomic-commit-worktree-daemon/` directory.
+`examples/atomic-commit-worktree-daemon/` directory. The starter YAML assigns it
+inside double quotes (`SNAPSHOT_DAEMON_DIR="<example-dir>"`) so paths with spaces
+continue to work after replacement.
 
 The hook pack uses only `bash` actions. It does not rely on unsupported PI
 `command:` actions, and it does not use `tool:` actions as imperative execution.
@@ -252,6 +254,7 @@ The daemon stores worktree-local state under the worktree git dir:
 | `<git-dir>/ai-snapshotd/daemon.db` | SQLite state, capture queue, shadow tree, control requests |
 | `<git-dir>/ai-snapshotd/daemon.lock` | Singleton daemon lock |
 | `<git-dir>/ai-snapshotd/control.lock` | Short controller lock |
+| `<git-dir>/ai-snapshotd/publish.lock` | Replay/publish serialization lock |
 | `<git-dir>/ai-snapshotd/worker.index` | Temporary replay index |
 | `<git-common-dir>/ai-snapshotd/branch-registry/` | Shared branch generation and worktree ownership registry |
 
@@ -263,6 +266,8 @@ Useful settings:
 | `SNAPSHOTD_SLEEP_INTERVAL` | `2.0` | Sleep-loop interval after `sleep` requests |
 | `SNAPSHOTD_ACK_TIMEOUT` | `2.0` | Blocking controller wait for daemon acknowledgements |
 | `SNAPSHOTD_HEARTBEAT_FRESH_SECONDS` | `15.0` | Age at which controller treats a heartbeat as stale |
+| `SNAPSHOTD_SENSITIVE_GLOBS` | `.env,*.pem,*.key,…` | Comma-separated paths excluded from polling capture |
+| `SNAPSHOTD_START_READY_TIMEOUT` | `1.0` | Seconds `start` waits for daemon heartbeat readiness |
 
 ## Troubleshooting
 
