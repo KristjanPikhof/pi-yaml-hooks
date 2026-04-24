@@ -19,12 +19,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import snapshot_state
+
 from snapshot_state import (
     control_lock,
     ensure_state,
     heartbeat_alive,
     current_branch,
-    current_head,
     request_flush,
     resolve_repo_paths,
     set_daemon_state,
@@ -59,7 +60,7 @@ def _refresh_mode(conn, mode: str, note: str = "") -> None:
 
 def _light_context(repo_root: Path) -> Dict[str, Any]:
     branch = current_branch(repo_root)
-    head = current_head(repo_root)
+    head = snapshot_state.current_head(repo_root)
     if branch is None:
         raise RuntimeError("detached or unborn HEAD is not replay-safe")
     if head is None:
