@@ -76,7 +76,7 @@ def bootstrap_shadow(
     branch_generation: int,
     base_head: str,
 ) -> int:
-    if snapshot_state.load_shadow_paths(conn):
+    if snapshot_state.get_daemon_meta(conn, "shadow_bootstrapped") == "1":
         return 0
     live = _scan_tree(repo_root)
     snapshot_state.replace_shadow_paths(
@@ -95,6 +95,7 @@ def bootstrap_shadow(
             for row in live.values()
         ),
     )
+    snapshot_state.set_daemon_meta(conn, "shadow_bootstrapped", "1")
     return len(live)
 
 
