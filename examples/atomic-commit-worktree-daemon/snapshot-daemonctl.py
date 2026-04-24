@@ -221,10 +221,14 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
             row = _daemon_row(conn)
             pid = int(row.get("pid") or 0)
             if pid > 0 and heartbeat_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
+                _signal_daemon(conn, signal.SIGUSR1)
+                if not _wait_for_ack(conn, request_id):
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+            else:
+                snapshot_state.acknowledge_flush(conn, request_id, "stop acknowledged; daemon absent")
             _refresh_mode(conn, "stopped", note="stop requested")
             print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
             return 0

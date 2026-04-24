@@ -444,6 +444,20 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         )
         self.assertEqual(stop.returncode, 0, stop.stderr)
 
+        status_after_stop = subprocess.run(
+            [sys.executable, str(script), "status", "--repo", str(repo)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(status_after_stop.returncode, 0, status_after_stop.stderr)
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        unacked = conn.execute(
+            "SELECT COUNT(*) FROM flush_requests WHERE acknowledged_ts IS NULL"
+        ).fetchone()[0]
+        self.assertEqual(unacked, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
