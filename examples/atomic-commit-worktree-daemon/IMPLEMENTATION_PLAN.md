@@ -239,5 +239,5 @@ Manual PI smoke:
 2. Implement portable polling fallback first for shape and replay correctness.
 3. Add native watcher backend.
 4. Add strict FUSE/overlay mode only after the daemon contract is stable.
-5. Promote from design scaffold to copyable example only when smoke tests pass
-   on macOS and Linux.
+5. Keep the copyable example marked as polling/rescan fidelity until native
+   watcher smoke tests pass on macOS and Linux.
