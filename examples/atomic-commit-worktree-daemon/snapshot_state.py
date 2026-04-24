@@ -162,6 +162,13 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
            )"""
     )
     conn.execute(
+        """CREATE TABLE IF NOT EXISTS daemon_meta(
+               key TEXT PRIMARY KEY,
+               value TEXT NOT NULL,
+               updated_ts REAL NOT NULL
+           )"""
+    )
+    conn.execute(
         """INSERT OR IGNORE INTO daemon_state(id, pid, mode, heartbeat_ts, updated_ts)
            VALUES (1, 0, 'stopped', 0, ?)""",
         (time.time(),),
@@ -242,6 +249,19 @@ def replace_shadow_paths(
                 now,
             ),
         )
+
+
+def get_daemon_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM daemon_meta WHERE key=?", (key,)).fetchone()
+    return str(row[0]) if row else None
+
+
+def set_daemon_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """INSERT INTO daemon_meta(key, value, updated_ts) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_ts=excluded.updated_ts""",
+        (key, value, time.time()),
+    )
 
 
 def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> Dict[str, Any]:
