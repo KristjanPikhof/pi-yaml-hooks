@@ -70,7 +70,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         conn = snapshot_state.ensure_state(git_dir)
         conn.close()
 
-        quarantine_dirs = list(git_dir.parent.glob("ai-snapshotd.incompatible-*"))
+        quarantine_dirs = list(git_dir.glob("ai-snapshotd.incompatible-*"))
         self.assertTrue(quarantine_dirs)
         with sqlite3.connect(db) as db_conn:
             self.assertEqual(db_conn.execute("PRAGMA user_version").fetchone()[0], 1)
@@ -85,6 +85,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
 
         env = os.environ.copy()
         index = snapshot_state.index_path(git_dir)
+        index.parent.mkdir(parents=True, exist_ok=True)
         env["GIT_INDEX_FILE"] = str(index)
         read_tree = git(repo, "read-tree", "HEAD", env=env)
         self.assertEqual(read_tree.returncode, 0, read_tree.stderr)
