@@ -22,6 +22,10 @@ These examples are designed to be copied into `hooks.yaml` with minimal editing.
 - [`../../examples/post-tool-developer-feedback/`](../../examples/post-tool-developer-feedback/) — post-tool logging, status, and follow-up prompts for developer workflows
 - [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/) — advanced snapshot worker example
 
+## Design scaffolds
+
+- [`../../examples/atomic-commit-worktree-daemon/`](../../examples/atomic-commit-worktree-daemon/) — design scaffold for a future daemon-based atomic commit watcher
+
 ## Before you paste
 
 - If you are using a project hook file, trust the project first.
