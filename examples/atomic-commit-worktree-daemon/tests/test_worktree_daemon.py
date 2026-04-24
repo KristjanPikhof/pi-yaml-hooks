@@ -39,21 +39,20 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess
     )
 
 
-def init_repo() -> tuple[Path, Path]:
+def init_repo() -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name) / "repo"
     repo.mkdir()
     git(repo, "init", "-b", "main")
     git(repo, "commit", "--allow-empty", "-m", "init")
     _, git_dir, _ = snapshot_state.resolve_repo_paths(repo)
-    repo._tmp = tmp  # type: ignore[attr-defined]
-    return repo, git_dir
+    return tmp, repo, git_dir
 
 
 class WorktreeDaemonExampleTests(unittest.TestCase):
     def test_schema_version_and_quarantine(self) -> None:
-        repo, git_dir = init_repo()
-        self.addCleanup(lambda: getattr(repo, "_tmp").cleanup())
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
 
         conn = snapshot_state.ensure_state(git_dir)
         conn.close()
@@ -76,8 +75,8 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             self.assertEqual(db_conn.execute("PRAGMA user_version").fetchone()[0], 1)
 
     def test_apply_ops_supports_rename_mode_and_symlink(self) -> None:
-        repo, git_dir = init_repo()
-        self.addCleanup(lambda: getattr(repo, "_tmp").cleanup())
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
 
         (repo / "old.txt").write_text("hello\n", encoding="utf-8")
         git(repo, "add", "old.txt")
@@ -130,8 +129,8 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual(state["link.ln"][0], "120000")
 
     def test_replay_commits_one_per_event(self) -> None:
-        repo, git_dir = init_repo()
-        self.addCleanup(lambda: getattr(repo, "_tmp").cleanup())
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
 
         conn = snapshot_state.ensure_state(git_dir)
         ctx = snapshot_state.repo_context(repo, git_dir)
@@ -218,8 +217,8 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual(rev_count.stdout.strip(), "4")
 
     def test_controller_commands_are_idempotent_and_degrade_cleanly(self) -> None:
-        repo, git_dir = init_repo()
-        self.addCleanup(lambda: getattr(repo, "_tmp").cleanup())
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
 
         script = EXAMPLE_DIR / "snapshot-daemonctl.py"
 
