@@ -4,6 +4,10 @@ This repository includes a full Python example that auto-commits recognized file
 
 This is an opt-in example, not a built-in `pi-hooks` feature.
 
+For long-running shell commands where files can be created, modified, and
+deleted before PI emits a `file.changed` event, see the daemon variant:
+[`../../examples/atomic-commit-worktree-daemon/`](../../examples/atomic-commit-worktree-daemon/).
+
 ## Use the bundled example
 
 - example directory: [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/)

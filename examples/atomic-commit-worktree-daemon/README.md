@@ -1,11 +1,64 @@
 # Atomic commit worktree daemon
 
-Design scaffold for a daemon-based snapshot example that can commit file
-changes one stable file version at a time.
+Runnable daemon-based snapshot example that can commit file changes one stable
+file version at a time.
 
-This is not a runnable hook pack yet. It is a concrete implementation plan and
-hook contract for a future example. The current runnable autocommit example is
-[`../atomic-commit-snapshot-worker/`](../atomic-commit-snapshot-worker/).
+This is **not** a built-in `pi-hooks` feature. It is an opt-in example pack you
+copy into a trusted project hook file. The daemon observes the worktree while PI
+tools run, then publishes one git commit per captured file event.
+
+The implementation currently uses a portable polling/rescan backend. Polling can
+capture long-lived create/modify/delete states, but it can still miss files or
+intermediate contents that appear and disappear between scans. Native watcher
+and strict mount backends are documented as future fidelity levels, not as
+available behavior.
+
+## Use as a pi-hooks hook
+
+### 1. Prerequisites
+
+- macOS or Linux (the example uses POSIX signals and advisory locks)
+- `python3` 3.x on `$PATH`
+- `git` 2.x
+- a repo/worktree with at least one existing commit
+- a trusted project hook file under `<project>/.pi/hook/hooks.yaml` or
+  `<project>/.pi/hooks.yaml`
+
+Keep this example directory on disk. `pi install` alone does not give you a
+stable example-script path to reference from YAML.
+
+### 2. Copy the hook pack
+
+Copy [`hooks.yaml`](./hooks.yaml) into your project hook file, then replace
+`<example-dir>` with the absolute path to this
+`examples/atomic-commit-worktree-daemon/` directory.
+
+The hook pack uses only `bash` actions. It does not rely on unsupported PI
+`command:` actions, and it does not use `tool:` actions as imperative execution.
+
+### 3. Verify it works
+
+From a PI session inside the trusted repo, run a compound shell command that
+keeps each state around long enough for polling to see it:
+
+```bash
+printf '' > test.md && sleep 3 && printf 'hello' >> test.md && sleep 3 && rm test.md
+```
+
+Then inspect history and daemon state:
+
+```bash
+git log --oneline --max-count=5
+python3 <example-dir>/snapshot-daemonctl.py status --repo "$PI_PROJECT_DIR"
+```
+
+Expected history shape when polling catches all three states:
+
+```text
+Remove test.md
+Update test.md
+Add test.md
+```
 
 ## Goal
 
@@ -107,9 +160,9 @@ publisher settles the event as `blocked_conflict` with an explicit reason. It
 must not replay stale events opportunistically onto a rewritten or recreated
 branch.
 
-## Planned hook wiring
+## Hook wiring
 
-Use the future daemon controller from a trusted project hook file:
+Use the daemon controller from a trusted project hook file:
 
 ```yaml
 hooks:
@@ -144,21 +197,88 @@ hooks:
 PI `agent_end` only when the current session is idle and has no pending
 messages. Use it for final drain and sleep, not for long background work.
 
-See [`hooks.yaml`](./hooks.yaml) for the planned hook shape and
+See [`hooks.yaml`](./hooks.yaml) for the copyable hook shape and
 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) for the full build plan.
 
-## Proposed files
+## Files
 
 | File | Purpose |
 | --- | --- |
 | `snapshot-daemonctl.py` | Small control CLI used by hooks: start, wake, flush, sleep, stop, status. |
-| `snapshot-daemon.py` | Per-worktree watcher process that records file lifecycle events. |
-| `snapshot-capture.py` | Platform watcher backend and fallback rescan logic. |
+| `snapshot-daemon.py` | Per-worktree daemon process that records file lifecycle events and handles control requests. |
+| `snapshot-capture.py` | Portable polling/rescan capture backend. |
 | `snapshot-replay.py` | Commit publisher adapted from the current snapshot worker. |
 | `snapshot_state.py` | SQLite schema, branch registry, shadow tree, and locks. |
 
 The split keeps hook actions cheap. Hooks only control the daemon. Capture and
 commit replay happen in long-lived processes.
+
+## Operating commands
+
+Run these from the example directory, or use absolute script paths.
+
+```bash
+# Start or ensure the per-worktree daemon exists
+python3 snapshot-daemonctl.py start --repo /path/to/repo
+
+# Wake the daemon before a tool or command runs
+python3 snapshot-daemonctl.py wake --repo /path/to/repo
+
+# Ask the daemon to publish pending events and wait for acknowledgement
+python3 snapshot-daemonctl.py flush --repo /path/to/repo
+
+# Ask for a quick non-blocking publish after each tool
+python3 snapshot-daemonctl.py flush --repo /path/to/repo --non-blocking
+
+# Pause polling after PI is idle; process state is retained
+python3 snapshot-daemonctl.py sleep --repo /path/to/repo
+
+# Flush, then stop; safe to call more than once
+python3 snapshot-daemonctl.py stop --repo /path/to/repo --flush
+
+# Inspect DB path, daemon heartbeat, queue counts, and publish state
+python3 snapshot-daemonctl.py status --repo /path/to/repo
+
+# Drain pending events directly without going through daemon control rows
+python3 snapshot-replay.py --flush --repo /path/to/repo
+```
+
+## State and environment
+
+The daemon stores worktree-local state under the worktree git dir:
+
+| Path | Purpose |
+| --- | --- |
+| `<git-dir>/ai-snapshotd/daemon.db` | SQLite state, capture queue, shadow tree, control requests |
+| `<git-dir>/ai-snapshotd/daemon.lock` | Singleton daemon lock |
+| `<git-dir>/ai-snapshotd/control.lock` | Short controller lock |
+| `<git-dir>/ai-snapshotd/worker.index` | Temporary replay index |
+| `<git-common-dir>/ai-snapshotd/branch-registry/` | Shared branch generation and worktree ownership registry |
+
+Useful settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SNAPSHOTD_POLL_INTERVAL` | `0.75` | Seconds between active polling scans |
+| `SNAPSHOTD_SLEEP_INTERVAL` | `2.0` | Sleep-loop interval after `sleep` requests |
+| `SNAPSHOTD_ACK_TIMEOUT` | `2.0` | Blocking controller wait for daemon acknowledgements |
+| `SNAPSHOTD_HEARTBEAT_FRESH_SECONDS` | `15.0` | Age at which controller treats a heartbeat as stale |
+
+## Troubleshooting
+
+- `status` shows `degraded-no-daemon`: the controller could not find or start
+  `snapshot-daemon.py`. Check the `<example-dir>` path in hooks.yaml.
+- `flush` exits `2`: the daemon did not acknowledge before
+  `SNAPSHOTD_ACK_TIMEOUT`. Run `status`, then `start`, then retry `flush`.
+- Events become `blocked_conflict`: branch identity was unsafe for replay
+  (detached/unborn branch, stale branch generation, branch rewrite, or
+  unsupported same-branch multi-worktree topology).
+- Polling missed a create/delete cycle: that is a known `rescan` limitation.
+  Increase sleeps or lower `SNAPSHOTD_POLL_INTERVAL`; strict capture requires a
+  future native/strict backend.
+- The final tree does not contain a file that was created and deleted: check
+  `git log --oneline`; the daemon should still have published the intermediate
+  create, modify, and delete commits if polling observed each state.
 
 ## PI SDK findings
 
