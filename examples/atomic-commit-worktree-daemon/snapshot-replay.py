@@ -88,10 +88,84 @@ def _apply_state(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> None:
         state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
 
 
+def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
+    """Reconcile a crash between commit creation, update-ref, and DB settlement.
+
+    ``publish_state`` stores the one event that was in the publish critical
+    section. If the target commit is now reachable from the branch, the publish
+    completed and the row can be marked ``published``. If the ref never moved
+    and still equals ``source_head``, the event can safely become ``pending``
+    again. Anything else is a conflict, not an opportunity to replay blindly.
+    """
+    row = conn.execute("SELECT * FROM publish_state WHERE id=1").fetchone()
+    if row is None or row["status"] != "publishing" or row["event_seq"] is None:
+        return
+
+    event_seq = int(row["event_seq"])
+    branch = str(row["branch_ref"] or "")
+    target = str(row["target_commit_oid"] or "")
+    source_head = str(row["source_head"] or "")
+    expected_generation = int(row["branch_generation"] or 0)
+    live_branch = str(ctx["branch_ref"])
+    live_generation = int(ctx["branch_generation"])
+    live_head = str(ctx["base_head"])
+
+    if branch != live_branch or expected_generation != live_generation:
+        reason = "stale branch during publish recovery"
+    elif target and _is_ancestor(repo_root, target, live_head):
+        conn.execute(
+            "UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?",
+            (target, event_seq),
+        )
+        update_publish_state(
+            conn,
+            event_seq=event_seq,
+            branch_ref=live_branch,
+            branch_generation=live_generation,
+            source_head=source_head,
+            target_commit_oid=target,
+            status="published",
+        )
+        return
+    elif live_head == source_head:
+        conn.execute(
+            "UPDATE capture_events SET state='pending', commit_oid=NULL, error=NULL WHERE seq=?",
+            (event_seq,),
+        )
+        update_publish_state(
+            conn,
+            event_seq=None,
+            branch_ref=live_branch,
+            branch_generation=live_generation,
+            source_head=live_head,
+            target_commit_oid=None,
+            status="idle",
+        )
+        return
+    else:
+        reason = "branch moved during publish recovery"
+
+    conn.execute(
+        "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+        (reason, event_seq),
+    )
+    update_publish_state(
+        conn,
+        event_seq=event_seq,
+        branch_ref=live_branch,
+        branch_generation=live_generation,
+        source_head=live_head,
+        target_commit_oid=target or None,
+        status="blocked_conflict",
+        error=reason,
+    )
+
+
 def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
     head = ctx["base_head"]
+    recover_publishing(conn, repo_root, ctx)
     pending = load_pending_events(conn, branch)
     if not pending:
         return 0

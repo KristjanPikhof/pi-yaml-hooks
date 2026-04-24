@@ -220,6 +220,87 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual(rev_count.returncode, 0, rev_count.stderr)
         self.assertEqual(rev_count.stdout.strip(), "4")
 
+    def test_replay_recovers_publishing_event(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        base_head = ctx["base_head"]
+        branch = ctx["branch_ref"]
+        generation = ctx["branch_generation"]
+        blob = snapshot_state.capture_blob_for_text(repo, "recover\n")
+        seq = snapshot_state.record_event(
+            conn,
+            branch_ref=branch,
+            branch_generation=generation,
+            base_head=base_head,
+            operation="create",
+            path="recover.txt",
+            old_path=None,
+            fidelity="watcher",
+            ops=[
+                {
+                    "op": "create",
+                    "path": "recover.txt",
+                    "before_oid": None,
+                    "before_mode": None,
+                    "after_oid": blob,
+                    "after_mode": "100644",
+                }
+            ],
+        )
+
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(snapshot_state.index_path(git_dir))
+        self.assertEqual(git(repo, "read-tree", base_head, env=env).returncode, 0)
+        snapshot_state.apply_ops_to_index(
+            repo,
+            env,
+            [
+                {
+                    "op": "create",
+                    "path": "recover.txt",
+                    "after_oid": blob,
+                    "after_mode": "100644",
+                }
+            ],
+        )
+        tree = git(repo, "write-tree", env=env)
+        self.assertEqual(tree.returncode, 0, tree.stderr)
+        commit = git(repo, "commit-tree", tree.stdout.strip(), "-p", base_head, env=env)
+        self.assertEqual(commit.returncode, 0, commit.stderr)
+        target = commit.stdout.strip()
+        update = git(repo, "update-ref", branch, target, base_head)
+        self.assertEqual(update.returncode, 0, update.stderr)
+
+        snapshot_state.update_publish_state(
+            conn,
+            event_seq=seq,
+            branch_ref=branch,
+            branch_generation=generation,
+            source_head=base_head,
+            target_commit_oid=target,
+            status="publishing",
+        )
+        conn.execute("UPDATE capture_events SET state='publishing' WHERE seq=?", (seq,))
+        conn.close()
+
+        proc = subprocess.run(
+            [sys.executable, str(EXAMPLE_DIR / "snapshot-replay.py"), "--flush", "--repo", str(repo)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("published=0", proc.stdout)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        row = conn.execute("SELECT state, commit_oid FROM capture_events WHERE seq=?", (seq,)).fetchone()
+        self.assertEqual(row["state"], "published")
+        self.assertEqual(row["commit_oid"], target)
+
     def test_controller_commands_are_idempotent_and_degrade_cleanly(self) -> None:
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
