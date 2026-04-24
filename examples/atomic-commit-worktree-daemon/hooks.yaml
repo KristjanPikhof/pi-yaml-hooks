@@ -1,0 +1,48 @@
+# pi-hooks example scaffold: atomic-commit-worktree-daemon
+#
+# This file documents the intended hook wiring for a future daemon-based
+# snapshot example. It is not copy-runnable until snapshot-daemonctl.py and the
+# daemon scripts described in README.md are implemented.
+#
+# When implemented, copy this into <project>/.pi/hook/hooks.yaml (preferred) or
+# <project>/.pi/hooks.yaml, trust the repo/worktree anchor, then replace
+# <example-dir> with the real path to this example directory.
+
+hooks:
+  # Start the per-worktree daemon for genuinely new/startup sessions.
+  - id: snapshot-daemon-start
+    event: session.created
+    actions:
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py start --repo "$PI_PROJECT_DIR"'
+
+  # Wake before tools run so long-running bash commands are observed while they
+  # execute, not only after PI reports the tool result.
+  - id: snapshot-daemon-wake-before-tool
+    event: tool.before.*
+    actions:
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py wake --repo "$PI_PROJECT_DIR"'
+
+  # Ask the daemon to publish recent events after every tool. This is
+  # non-blocking so normal agent work is not delayed by commit creation.
+  - id: snapshot-daemon-flush-after-tool
+    event: tool.after.*
+    actions:
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py flush --repo "$PI_PROJECT_DIR" --non-blocking'
+
+  # PI has no distinct "after idle" hook. pi-hooks maps PI agent_end to
+  # session.idle only when the current session is idle and no messages are
+  # pending, which makes this the right place to drain and pause the daemon.
+  - id: snapshot-daemon-sleep-on-idle
+    event: session.idle
+    actions:
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py flush --repo "$PI_PROJECT_DIR"'
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py sleep --repo "$PI_PROJECT_DIR"'
+
+  # session.deleted is intentionally lossy on PI and can fire for session
+  # switches such as /new, /resume, and /fork. The controller must make stop
+  # --flush idempotent.
+  - id: snapshot-daemon-stop-on-delete
+    event: session.deleted
+    actions:
+      - bash: 'python3 <example-dir>/snapshot-daemonctl.py stop --repo "$PI_PROJECT_DIR" --flush'
+
