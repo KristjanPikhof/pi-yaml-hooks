@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from snapshot_state import (
-    acknowledge_flush,
     control_lock,
     ensure_state,
     heartbeat_alive,
@@ -158,7 +157,6 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
             request_id = request_flush(conn, "wake", True, note="wake requested")
             if not _signal_daemon(conn, signal.SIGUSR1):
                 _maybe_start(repo_root, git_dir, conn, note="wake-start fallback")
-            acknowledge_flush(conn, request_id, note="wake recorded")
             print(json.dumps({"ok": True, "action": "wake", "request_id": request_id, "branch": ctx["branch_ref"]}, indent=2))
             return 0
     finally:
@@ -190,7 +188,6 @@ def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
             request_id = request_flush(conn, "sleep", True, note="sleep requested")
             _signal_daemon(conn, signal.SIGUSR1)
             _refresh_mode(conn, "sleeping", note="sleep requested")
-            acknowledge_flush(conn, request_id, note="sleep recorded")
             print(json.dumps({"ok": True, "action": "sleep", "request_id": request_id, "branch": ctx["branch_ref"]}, indent=2))
             return 0
     finally:
@@ -216,7 +213,6 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
                 except OSError:
                     pass
             _refresh_mode(conn, "stopped", note="stop requested")
-            acknowledge_flush(conn, request_id, note="stop recorded")
             print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
             return 0
     finally:
