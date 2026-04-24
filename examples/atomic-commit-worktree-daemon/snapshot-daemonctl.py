@@ -23,8 +23,9 @@ from snapshot_state import (
     control_lock,
     ensure_state,
     heartbeat_alive,
+    current_branch,
+    current_head,
     request_flush,
-    repo_context,
     resolve_repo_paths,
     set_daemon_state,
     status_snapshot,
@@ -54,6 +55,16 @@ def _refresh_mode(conn, mode: str, note: str = "") -> None:
         branch_generation=row.get("branch_generation"),
         note=note,
     )
+
+
+def _light_context(repo_root: Path) -> Dict[str, Any]:
+    branch = current_branch(repo_root)
+    head = current_head(repo_root)
+    if branch is None:
+        raise RuntimeError("detached or unborn HEAD is not replay-safe")
+    if head is None:
+        raise RuntimeError("unable to resolve HEAD")
+    return {"branch_ref": branch, "base_head": head}
 
 
 def _spawn_daemon(repo_root: Path, git_dir: Path) -> Optional[subprocess.Popen[str]]:
@@ -95,11 +106,11 @@ def cmd_start(repo_root: Path, git_dir: Path) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
-            ctx = repo_context(repo_root, git_dir)
             row = _daemon_row(conn)
             if row and _fresh_heartbeat(row):
                 print(json.dumps({"ok": True, "action": "start", "duplicate": True, "daemon": row}, indent=2))
                 return 0
+            ctx = _light_context(repo_root)
             if row.get("pid") and not heartbeat_alive(int(row.get("pid") or 0)):
                 set_daemon_state(conn, pid=0, mode="stale-heartbeat", note="replaced stale daemon")
             result = _maybe_start(repo_root, git_dir, conn, note="start request")
@@ -137,7 +148,7 @@ def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
 
 
 def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> tuple[int, bool, str]:
-    ctx = repo_context(repo_root, git_dir)
+    ctx = _light_context(repo_root)
     request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
     signaled = _signal_daemon(conn, signal.SIGUSR1)
     if non_blocking:
@@ -154,7 +165,7 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
-            ctx = repo_context(repo_root, git_dir)
+            ctx = _light_context(repo_root)
             request_id = request_flush(conn, "wake", True, note="wake requested")
             if not _signal_daemon(conn, signal.SIGUSR1):
                 _maybe_start(repo_root, git_dir, conn, note="wake-start fallback")
@@ -185,7 +196,7 @@ def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
-            ctx = repo_context(repo_root, git_dir)
+            ctx = _light_context(repo_root)
             request_id = request_flush(conn, "sleep", True, note="sleep requested")
             _signal_daemon(conn, signal.SIGUSR1)
             _refresh_mode(conn, "sleeping", note="sleep requested")
@@ -199,7 +210,7 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
-            ctx = repo_context(repo_root, git_dir)
+            ctx = _light_context(repo_root)
             if flush_first:
                 try:
                     _flush_locked(repo_root, git_dir, conn, non_blocking=False)
