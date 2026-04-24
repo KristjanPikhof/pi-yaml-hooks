@@ -476,7 +476,7 @@ def request_flush(conn: sqlite3.Connection, command: str, non_blocking: bool, no
            VALUES (?, ?, ?, ?, 'pending', ?)""",
         (token, command, 1 if non_blocking else 0, time.time(), note),
     )
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def acknowledge_flush(conn: sqlite3.Connection, request_id: int, note: str = "") -> None:
