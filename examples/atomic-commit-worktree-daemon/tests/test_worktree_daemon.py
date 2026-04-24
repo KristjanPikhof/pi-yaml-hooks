@@ -284,6 +284,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         target = commit.stdout.strip()
         update = git(repo, "update-ref", branch, target, base_head)
         self.assertEqual(update.returncode, 0, update.stderr)
+        (repo / "recover.txt").write_text("recover\n", encoding="utf-8")
 
         snapshot_state.update_publish_state(
             conn,
@@ -311,6 +312,9 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         row = conn.execute("SELECT state, commit_oid FROM capture_events WHERE seq=?", (seq,)).fetchone()
         self.assertEqual(row["state"], "published")
         self.assertEqual(row["commit_oid"], target)
+        status = git(repo, "status", "--porcelain", "--", "recover.txt")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "")
 
     def test_polling_create_modify_delete_sequence(self) -> None:
         tmp, repo, git_dir = init_repo()
@@ -493,6 +497,56 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             return original_run(args, *pargs, **kwargs)
 
         replay.subprocess.run = fail_write_tree
+        try:
+            self.assertEqual(replay.replay_pending_events(conn, repo, git_dir), 0)
+        finally:
+            replay.subprocess.run = original_run
+        states = [
+            row["state"]
+            for row in conn.execute("SELECT state FROM capture_events ORDER BY seq").fetchall()
+        ]
+        self.assertEqual(states, ["failed", "pending"])
+
+    def test_replay_stops_after_commit_tree_failure(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        first = snapshot_state.capture_blob_for_text(repo, "first\n")
+        second = snapshot_state.capture_blob_for_text(repo, "second\n")
+        for name, blob in (("first.txt", first), ("second.txt", second)):
+            snapshot_state.record_event(
+                conn,
+                branch_ref=ctx["branch_ref"],
+                branch_generation=ctx["branch_generation"],
+                base_head=ctx["base_head"],
+                operation="create",
+                path=name,
+                old_path=None,
+                fidelity="watcher",
+                ops=[
+                    {
+                        "op": "create",
+                        "path": name,
+                        "before_oid": None,
+                        "before_mode": None,
+                        "after_oid": blob,
+                        "after_mode": "100644",
+                    }
+                ],
+            )
+
+        replay = load_example_module("snapshot_replay_commit_tree_failure_test", "snapshot-replay.py")
+        original_run = replay.subprocess.run
+
+        def fail_commit_tree(args, *pargs, **kwargs):
+            if len(args) > 1 and args[1] == "commit-tree":
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"forced commit-tree failure")
+            return original_run(args, *pargs, **kwargs)
+
+        replay.subprocess.run = fail_commit_tree
         try:
             self.assertEqual(replay.replay_pending_events(conn, repo, git_dir), 0)
         finally:
