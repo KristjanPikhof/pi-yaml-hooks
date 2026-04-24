@@ -18,6 +18,11 @@ Atomic event units:
 
 Do not commit every low-level write syscall. Commit stable file versions after
 the writer closes the file or after a debounce window proves it is stable.
+Use the README vocabulary exactly: `create`, `modify`, `delete`, `rename`, and
+`mode`. A symlink retarget is a `modify` because the link target is the blob
+content. A rename is a single event only when the backend can pair source and
+destination; otherwise it degrades to delete + create with the appropriate
+fidelity labels.
 
 Persist each captured event with:
 
@@ -26,8 +31,33 @@ Persist each captured event with:
 - captured timestamp
 - before blob/mode from the daemon shadow tree
 - after blob/mode from immediate `git hash-object -w`
-- source fidelity: `watcher`, `rescan`, `hook-payload`
+- per-operation source fidelity: `watcher`, `rescan`, `hook-payload`
 - branch ref, branch generation, and base head
+
+Fidelity contract:
+
+- `watcher`: native platform watcher event. Best available lifecycle stream, but
+  still subject to native API coalescing and overflow.
+- `rescan`: polling or recovery scan. Captures only states present at scan time;
+  can miss create-delete cycles and intermediate contents between scans.
+- `hook-payload`: pi-hooks payload hint. Exact only for structured `changes[]`;
+  `files[]`-only payloads are best-effort path hints.
+- `strict-mount`: future FUSE/macFUSE or overlay recorder mode. Out of scope for
+  the first implementation and must not be described as runnable.
+
+State ownership boundaries:
+
+- hooks call `snapshot-daemonctl.py` only
+- daemon owns watcher lifecycle, heartbeat, shadow tree, capture queue, and
+  flush acknowledgements
+- replay owns temporary index, compare-and-swap publish, and post-publish
+  reconcile state
+- repo-shared branch registry owns branch generation and worktree ownership
+
+Safety rule: reject unsupported topology before enqueue when possible; otherwise
+settle already-queued stale or unsupported events as `blocked_conflict`. Never
+replay across detached HEAD, unborn branches, same-branch multi-worktree edits,
+branch rewrites, branch deletion, or branch recreation.
 
 ## 2. Build the control CLI
 
@@ -86,6 +116,12 @@ Start with two tiers:
 
 Document the fidelity difference. Native watchers can catch more transient
 states. Polling can still miss create-delete cycles between scans.
+
+The polling fallback must compare the live tree to `shadow_paths` and should
+wait for a path to remain stable across the debounce window before hashing. It
+is acceptable for polling to emit fewer events than a native watcher, but every
+polling-derived operation must be marked `rescan` so users know the event was
+inferred from snapshots rather than observed as a lifecycle transition.
 
 Long-term strict mode:
 
@@ -195,4 +231,3 @@ Manual PI smoke:
 4. Add strict FUSE/overlay mode only after the daemon contract is stable.
 5. Promote from design scaffold to copyable example only when smoke tests pass
    on macOS and Linux.
-

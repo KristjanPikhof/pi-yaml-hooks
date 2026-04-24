@@ -30,6 +30,83 @@ modify test.md to "hello"
 delete test.md
 ```
 
+## Capture contract
+
+This example commits **stable file-event units**, not every filesystem syscall.
+The daemon records an event after a path has settled long enough to hash the
+content that should appear in the commit. The debounce window is a correctness
+boundary: it collapses noisy write bursts, but it is not allowed to merge
+distinct lifecycle events that the daemon can observe separately.
+
+Canonical event vocabulary:
+
+| Event unit | Commit semantics | Notes |
+| --- | --- | --- |
+| `create` | Add a path that was absent from the daemon shadow tree | Includes empty files and symlink creation. |
+| `modify` | Replace the blob for an existing path | Includes truncation and content changes after close or debounce. |
+| `delete` | Remove a path that existed in the daemon shadow tree | A native watcher can observe this even when no file remains to hash. |
+| `rename` | Remove `old_path` and add `path` in one commit | Used only when the backend can pair source and destination. Otherwise this may degrade to delete + create. |
+| `mode` | Change executable bit without changing content | Symlink retargets are represented as `modify` because the link target is the blob content. |
+
+Each captured event owns one or more operations with:
+
+- operation and path data (`path`, optional `old_path`)
+- `before` blob and mode from the daemon shadow tree
+- `after` blob and mode from immediate `git hash-object -w` when the path exists
+- capture timestamp and backend fidelity
+- branch ref, branch generation, and capture-time `base_head`
+
+### Fidelity levels
+
+The example must label capture fidelity honestly. Replay is safe only when the
+event's branch identity is still valid; fidelity describes how complete the file
+operation observation was.
+
+| Fidelity | Source | Guarantee | Known misses |
+| --- | --- | --- | --- |
+| `watcher` | Native filesystem events such as inotify or FSEvents | Best available lifecycle stream for the current platform. Can distinguish deletes and many renames while tools run. | Native APIs can coalesce, drop, or reorder under load; the daemon must rescan and mark recovered paths accordingly. |
+| `rescan` | Polling fallback that compares the live worktree with the shadow tree | Portable and deterministic for states present at scan time. | Can miss create-modify-delete cycles, short-lived files, or intermediate contents between scans. |
+| `hook-payload` | pi-hooks `file.changed` payloads | Exact only for structured `changes[]` entries reported by pi-hooks. Useful as a reconciliation hint. | Too late to observe transient states inside a long-running tool; `files[]`-only payloads are path hints, not exact operations. |
+| `strict-mount` | Future FUSE/macFUSE or overlay recorder mode | Intended to make all writes pass through a recorder. | Not part of this first example. Do not document it as available. |
+
+Mixed-fidelity events are allowed. For example, a native watcher event may be
+augmented by a rescan. Fidelity therefore belongs on each captured operation, or
+on an equivalent structure that preserves which paths are exact and which were
+inferred.
+
+### State boundaries
+
+State is deliberately split by ownership:
+
+| Owner | State | Why |
+| --- | --- | --- |
+| Hook actions | No durable state beyond invoking `snapshot-daemonctl.py` | Hooks stay cheap and PI lifecycle-safe. They wake, flush, sleep, or stop the daemon; they do not watch files or create commits. |
+| Daemon process | Heartbeat, watcher lifecycle, shadow tree, capture queue, flush acknowledgements | The daemon is the only process that observes filesystem transitions and mutates capture state. |
+| Replay publisher | Temporary index, compare-and-swap publish state, reconcile state | Publishing is isolated from capture so slow commit work does not block watcher callbacks. |
+| Repo-shared branch registry | Branch owner, generation, observed head/incarnation token | Worktree-local queues are safe only when branch identity is coordinated across linked worktrees. |
+
+Hooks only control the daemon because PI lifecycle events are not a reliable
+place to perform long-running work. `tool.before.*` is early enough to wake a
+sleeping daemon before command execution. `tool.after.*`, `session.idle`, and
+`session.deleted` are flush/control points; they are too late to discover file
+states that appeared and disappeared while the tool was running.
+
+### Branch and worktree safety
+
+Replay is allowed only when all of these remain true:
+
+- the worktree is on a symbolic branch, not detached `HEAD`
+- the branch has an existing `HEAD` commit
+- one worktree owns the branch at capture and replay time
+- the live branch is still in the same branch generation as the event
+- the live branch tip is a descendant of the event's `base_head`
+
+If unsupported topology or stale generation is detected before enqueue, the
+daemon rejects the event visibly. If it is detected after enqueue, the replay
+publisher settles the event as `blocked_conflict` with an explicit reason. It
+must not replay stale events opportunistically onto a rewritten or recreated
+branch.
+
 ## Planned hook wiring
 
 Use the future daemon controller from a trusted project hook file:
