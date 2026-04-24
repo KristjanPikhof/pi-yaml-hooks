@@ -344,6 +344,115 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual([row["operation"] for row in rows], ["create", "modify", "delete"])
         self.assertTrue(all(row["fidelity"] == "rescan" for row in rows))
 
+    def test_polling_skips_ignored_and_sensitive_files(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        capture = load_example_module("snapshot_capture_exclusion_test", "snapshot-capture.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+
+        (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+        (repo / "ignored.log").write_text("ignored\n", encoding="utf-8")
+        (repo / ".env").write_text("SECRET=1\n", encoding="utf-8")
+        seqs = capture.poll_once(conn, repo, git_dir)
+        rows = conn.execute("SELECT path FROM capture_events ORDER BY seq").fetchall()
+        self.assertEqual(seqs, [1])
+        self.assertEqual([row["path"] for row in rows], [".gitignore"])
+
+    def test_replay_reconciles_live_index_after_publish(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        blob = snapshot_state.capture_blob_for_text(repo, "clean\n")
+        (repo / "clean.txt").write_text("clean\n", encoding="utf-8")
+        snapshot_state.record_event(
+            conn,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+            operation="create",
+            path="clean.txt",
+            old_path=None,
+            fidelity="watcher",
+            ops=[
+                {
+                    "op": "create",
+                    "path": "clean.txt",
+                    "before_oid": None,
+                    "before_mode": None,
+                    "after_oid": blob,
+                    "after_mode": "100644",
+                }
+            ],
+        )
+        replay = load_example_module("snapshot_replay_reconcile_test", "snapshot-replay.py")
+        self.assertEqual(replay.replay_pending_events(conn, repo, git_dir), 1)
+        status = git(repo, "status", "--porcelain", "--", "clean.txt")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "")
+
+    def test_replay_stops_after_update_ref_failure(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        first = snapshot_state.capture_blob_for_text(repo, "first\n")
+        second = snapshot_state.capture_blob_for_text(repo, "second\n")
+        for name, blob in (("first.txt", first), ("second.txt", second)):
+            snapshot_state.record_event(
+                conn,
+                branch_ref=ctx["branch_ref"],
+                branch_generation=ctx["branch_generation"],
+                base_head=ctx["base_head"],
+                operation="create",
+                path=name,
+                old_path=None,
+                fidelity="watcher",
+                ops=[
+                    {
+                        "op": "create",
+                        "path": name,
+                        "before_oid": None,
+                        "before_mode": None,
+                        "after_oid": blob,
+                        "after_mode": "100644",
+                    }
+                ],
+            )
+
+        replay = load_example_module("snapshot_replay_failure_test", "snapshot-replay.py")
+        original_run = replay.subprocess.run
+
+        def fail_update_ref(args, *pargs, **kwargs):
+            if len(args) > 1 and args[1] == "update-ref":
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"forced failure")
+            return original_run(args, *pargs, **kwargs)
+
+        replay.subprocess.run = fail_update_ref
+        try:
+            self.assertEqual(replay.replay_pending_events(conn, repo, git_dir), 0)
+        finally:
+            replay.subprocess.run = original_run
+        states = [
+            row["state"]
+            for row in conn.execute("SELECT state FROM capture_events ORDER BY seq").fetchall()
+        ]
+        self.assertEqual(states, ["blocked_conflict", "pending"])
+
     def test_daemon_processes_flush_sleep_and_stop_requests(self) -> None:
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
