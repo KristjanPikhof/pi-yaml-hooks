@@ -9,6 +9,7 @@ records stable file events with ``rescan`` fidelity.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import stat
 import sys
@@ -210,7 +211,13 @@ def _apply_event(conn, ctx: Dict[str, Any], event: Dict[str, Any]) -> int:
 
 def poll_once(conn, repo_root: Path, git_dir: Path) -> List[int]:
     ctx = snapshot_state.repo_context(repo_root, git_dir)
-    bootstrap_shadow(conn, repo_root, **ctx)
+    bootstrap_shadow(
+        conn,
+        repo_root,
+        branch_ref=ctx["branch_ref"],
+        branch_generation=ctx["branch_generation"],
+        base_head=ctx["base_head"],
+    )
     shadow = _shadow_map(conn)
     live = _scan_tree(repo_root)
     events = _classify_changes(shadow, live)
@@ -239,9 +246,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     conn = snapshot_state.ensure_state(git_dir)
     try:
         if args.once:
-            print({"published": poll_once(conn, repo_root, git_dir)})
+            print(json.dumps({"published": poll_once(conn, repo_root, git_dir)}, sort_keys=True))
             return 0
-        print({"scanned": bootstrap_shadow(conn, repo_root, **snapshot_state.repo_context(repo_root, git_dir))})
+        ctx = snapshot_state.repo_context(repo_root, git_dir)
+        print(
+            json.dumps(
+                {
+                    "scanned": bootstrap_shadow(
+                        conn,
+                        repo_root,
+                        branch_ref=ctx["branch_ref"],
+                        branch_generation=ctx["branch_generation"],
+                        base_head=ctx["base_head"],
+                    )
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     finally:
         conn.close()
