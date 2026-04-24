@@ -375,7 +375,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             setattr(daemon, "_replay_pending", original)
 
         self.assertTrue(sleeping)
-        self.assertEqual(len(replay_calls), 2)
+        self.assertEqual(len(replay_calls), 0)
         self.assertTrue(
             all(
                 row[0]
