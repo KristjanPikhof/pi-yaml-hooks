@@ -164,6 +164,9 @@ commit replay happen in long-lived processes.
 
 - PI exposes `session_start`, `agent_end`, `session_shutdown`,
   `session_before_switch`, `tool_call`, and `tool_result`.
+- PI `session_start` includes a reason (`startup`, `reload`, `new`, `resume`, or
+  `fork`). pi-hooks intentionally maps only `startup` and `new` to
+  `session.created`, so daemon start is tied to genuinely new sessions.
 - pi-hooks currently maps `session_start` with reason `startup` or `new` to
   `session.created`.
 - pi-hooks maps `agent_end` to `session.idle` only when `ctx.isIdle()` is true
@@ -177,8 +180,13 @@ commit replay happen in long-lived processes.
 
 ## Hook architecture changes to consider
 
-This example can be built with today's hook events, but these changes would
-make the daemon cleaner:
+No pi-hooks core change is required for the first runnable daemon example. The
+existing `session.created`, `tool.before.*`, `tool.after.*`, `session.idle`, and
+`session.deleted` events are sufficient because the hooks only control daemon
+lifecycle. File observation happens in the daemon, not in hook payloads.
+
+These future changes would make the daemon cleaner, but they are not required
+for the initial example:
 
 1. Add `session.resumed` or include PI `session_start.reason` in
    `session.created` payloads. The daemon can currently recover from missing

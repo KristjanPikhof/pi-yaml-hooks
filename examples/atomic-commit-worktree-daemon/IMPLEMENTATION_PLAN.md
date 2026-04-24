@@ -187,7 +187,17 @@ safe when the user resumes or forks rather than truly quits.
 
 ## 8. Required pi-hooks changes
 
-The first version can ship without core changes. Recommended improvements:
+The first version can ship without core changes. The current PI adapter already
+provides the needed control points:
+
+- `session_start` with reason `startup` or `new` becomes `session.created`
+- `tool_call` becomes `tool.before.*`
+- `tool_result` becomes `tool.after.*`
+- `agent_end` becomes `session.idle` only after PI reports idle and no pending
+  messages
+- `session_shutdown` and `session_before_switch` become lossy `session.deleted`
+
+Recommended future improvements:
 
 - expose PI `session_start.reason` in hook payloads, or add `session.resumed`
   and `session.reloaded`
