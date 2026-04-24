@@ -65,6 +65,12 @@ def _pending_event_count(conn) -> int:
     return int(row[0] if row else 0)
 
 
+def _capture_then_replay(conn, repo_root: Path, git_dir: Path) -> int:
+    """Capture the current stable polling snapshot before draining commits."""
+    capture.poll_once(conn, repo_root, git_dir)
+    return _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
+
+
 def process_requests(
     conn,
     repo_root: Path,
@@ -86,13 +92,13 @@ def process_requests(
             sleeping = False
             note = "wake acknowledged"
         elif command == "flush":
-            published = _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
+            published = _capture_then_replay(conn, repo_root, git_dir)
             note = f"flush acknowledged; published={published}"
         elif command == "sleep":
             sleeping = True
             note = "sleep acknowledged"
         elif command == "stop":
-            published = _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
+            published = _capture_then_replay(conn, repo_root, git_dir)
             note = f"stop acknowledged; published={published}"
             sleeping = True
             stop_event.set()

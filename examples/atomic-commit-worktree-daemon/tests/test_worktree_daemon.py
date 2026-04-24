@@ -349,8 +349,18 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
 
         daemon = load_example_module("snapshot_daemon_test", "snapshot-daemon.py")
+        capture = load_example_module("snapshot_capture_daemon_test", "snapshot-capture.py")
         conn = snapshot_state.ensure_state(git_dir)
         self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+        (repo / "queued.txt").write_text("queued\n", encoding="utf-8")
         snapshot_state.request_flush(conn, "wake", True, note="wake")
         snapshot_state.request_flush(conn, "flush", False, note="flush")
         snapshot_state.request_flush(conn, "sleep", False, note="sleep")
@@ -375,7 +385,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             setattr(daemon, "_replay_pending", original)
 
         self.assertTrue(sleeping)
-        self.assertEqual(len(replay_calls), 0)
+        self.assertEqual(len(replay_calls), 2)
         self.assertTrue(
             all(
                 row[0]
