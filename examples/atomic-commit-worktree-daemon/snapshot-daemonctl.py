@@ -145,7 +145,6 @@ def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> t
             raise TimeoutError("daemon is absent; flush recorded but not acknowledged")
     if not _wait_for_ack(conn, request_id):
         raise TimeoutError("flush timed out waiting for daemon ack")
-    acknowledge_flush(conn, request_id, note="flush acknowledged")
     return request_id, signaled, ctx["branch_ref"]
 
 
