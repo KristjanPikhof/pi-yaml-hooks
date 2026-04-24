@@ -357,8 +357,12 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         snapshot_state.request_flush(conn, "stop", False, note="stop")
 
         replay_calls: list[tuple[Path, Path]] = []
-        original = daemon._replay_pending
-        daemon._replay_pending = lambda _conn, repo_root, git_dir: replay_calls.append((repo_root, git_dir)) or 1
+        original = getattr(daemon, "_replay_pending")
+        setattr(
+            daemon,
+            "_replay_pending",
+            lambda _conn, repo_root, git_dir: replay_calls.append((repo_root, git_dir)) or 1,
+        )
         try:
             sleeping = daemon.process_requests(
                 conn,
@@ -368,7 +372,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                 stop_event=threading.Event(),
             )
         finally:
-            daemon._replay_pending = original
+            setattr(daemon, "_replay_pending", original)
 
         self.assertTrue(sleeping)
         self.assertEqual(len(replay_calls), 2)
