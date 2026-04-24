@@ -81,6 +81,38 @@ If you are editing this repo locally, the symlink workflow is still useful:
 | `pi -e /path/to/pi-hooks/extensions/index.ts` | One-off local testing from a checkout. |
 | `<project>/.pi/extensions/pi-hooks.ts` | Project-local local-dev install from a checkout. |
 
+### SDK compatibility matrix
+
+Before widening PI peer support or merging SDK-sensitive changes, run the repeatable SDK matrix:
+
+```bash
+npm run compat:sdk-matrix
+```
+
+The matrix checks the minimum supported SDK (`@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` `0.68.1`) and the current supported `0.69.x` line. It creates a temporary copy of the repository, installs each SDK pair in that copy only, then runs `npm run typecheck` and `npm test`. The working checkout's `package.json`, `package-lock.json`, and normal `node_modules` are not mutated.
+
+To preview the workflow without installing anything:
+
+```bash
+npm run compat:sdk-matrix:dry-run
+```
+
+Runtime PI behavior also has a smoke checklist for surfaces unit tests cannot fully emulate, including slash commands, custom diagnostics, UI actions, follow-up prompts, `user_bash`, session switching, and `/quit`:
+
+```bash
+scripts/smoke/pi-runtime-smoke.sh
+```
+
+Follow [`docs/setup.md#runtime-pi-smoke-checklist`](./docs/setup.md#runtime-pi-smoke-checklist) and keep the generated evidence file with release notes or SDK-widening PRs.
+
+`0.70.x` is a gated future target, not part of the current peer range. Try it explicitly with:
+
+```bash
+npm run compat:sdk-matrix:future
+```
+
+Do not widen support to 0.70.x until both the future matrix and the runtime smoke pass, including the no-builtin-tools gate.
+
 ## Quick start
 
 Create a minimal global hook file so you can see the extension working right away.
@@ -149,6 +181,8 @@ When an event matches, `pi-hooks` evaluates conditions and runs the configured a
 | `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command |
 
 `/hooks-status`, `/hooks-validate`, and hook-load validation errors also emit structured in-session diagnostics when PI supports custom messages.
+
+When PI exposes `ctx.ui.addAutocompleteProvider` (PI 0.69+), `pi-hooks` also layers guarded `/hooks` autocomplete into the editor. Older supported PI versions that do not expose that UI method continue loading normally. Suggestions include the command names plus contextual hook IDs, event names, config paths, and log-tail options where useful.
 
 ## Important limitations
 
