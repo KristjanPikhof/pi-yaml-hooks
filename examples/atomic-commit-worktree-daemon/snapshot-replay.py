@@ -34,7 +34,6 @@ from snapshot_state import (
     status_snapshot,
     update_publish_state,
 )
-from snapshot_shared import run_git  # type: ignore[reportMissingImports]
 
 
 def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
@@ -104,7 +103,15 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
         index_file = index_path(git_dir)
         index_file.parent.mkdir(parents=True, exist_ok=True)
         index_file.unlink(missing_ok=True)
-        run_git(repo_root, "read-tree", head, env=env)
+        proc = subprocess.run(
+            ["git", "read-tree", head],
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.decode("utf-8", errors="replace").strip())
         state = dict(snapshot_state_for_index(repo_root, env))
         parent = head
         published = 0
@@ -164,9 +171,32 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                 _apply_state(op, state)
             try:
                 apply_ops_to_index(repo_root, env, ops)
-                tree = run_git(repo_root, "write-tree", env=env).strip()
+                tree_proc = subprocess.run(
+                    ["git", "write-tree"],
+                    cwd=str(repo_root),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                if tree_proc.returncode != 0:
+                    raise RuntimeError(
+                        tree_proc.stderr.decode("utf-8", errors="replace").strip()
+                    )
+                tree = tree_proc.stdout.decode("utf-8", errors="replace").strip()
                 message = build_message(event, ops)
-                commit_oid = run_git(repo_root, "commit-tree", tree, "-p", parent, input_bytes=message.encode("utf-8"), env=env).strip()
+                commit_proc = subprocess.run(
+                    ["git", "commit-tree", tree, "-p", parent],
+                    cwd=str(repo_root),
+                    input=message.encode("utf-8"),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                if commit_proc.returncode != 0:
+                    raise RuntimeError(
+                        commit_proc.stderr.decode("utf-8", errors="replace").strip()
+                    )
+                commit_oid = commit_proc.stdout.decode("utf-8", errors="replace").strip()
             except Exception as exc:
                 state = saved
                 conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (str(exc), int(event["seq"])))
