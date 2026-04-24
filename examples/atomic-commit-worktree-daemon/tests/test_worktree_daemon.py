@@ -65,6 +65,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             }
             self.assertTrue({"daemon_state", "capture_events", "publish_state"} <= tables)
             db_conn.execute("PRAGMA user_version=99")
+            db_conn.commit()
 
         conn = snapshot_state.ensure_state(git_dir)
         conn.close()
@@ -85,9 +86,11 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         env = os.environ.copy()
         index = snapshot_state.index_path(git_dir)
         env["GIT_INDEX_FILE"] = str(index)
-        git(repo, "read-tree", "HEAD", env=env)
+        read_tree = git(repo, "read-tree", "HEAD", env=env)
+        self.assertEqual(read_tree.returncode, 0, read_tree.stderr)
 
         state = snapshot_state.snapshot_state_for_index(repo, env)
+        self.assertIn("old.txt", state)
         mode, oid = state["old.txt"]
         symlink_oid = snapshot_state.capture_blob_for_text(repo, "target.txt")
 
