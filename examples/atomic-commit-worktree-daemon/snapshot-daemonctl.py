@@ -135,6 +135,21 @@ def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
     return False
 
 
+def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> tuple[int, bool, str]:
+    ctx = repo_context(repo_root, git_dir)
+    request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
+    signaled = _signal_daemon(conn, signal.SIGUSR1)
+    if non_blocking:
+        return request_id, signaled, ctx["branch_ref"]
+    if not signaled and not daemon_script_path().exists():
+        if not _wait_for_ack(conn, request_id, timeout=0.1):
+            raise TimeoutError("daemon is absent; flush recorded but not acknowledged")
+    if not _wait_for_ack(conn, request_id):
+        raise TimeoutError("flush timed out waiting for daemon ack")
+    acknowledge_flush(conn, request_id, note="flush acknowledged")
+    return request_id, signaled, ctx["branch_ref"]
+
+
 def cmd_wake(repo_root: Path, git_dir: Path) -> int:
     conn = ensure_state(git_dir)
     try:
@@ -154,22 +169,15 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
-            ctx = repo_context(repo_root, git_dir)
-            request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
-            signaled = _signal_daemon(conn, signal.SIGUSR1)
+            request_id, signaled, branch = _flush_locked(repo_root, git_dir, conn, non_blocking)
             if non_blocking:
-                print(json.dumps({"ok": True, "action": "flush", "non_blocking": True, "request_id": request_id, "signaled": signaled}, indent=2))
+                print(json.dumps({"ok": True, "action": "flush", "non_blocking": True, "request_id": request_id, "signaled": signaled, "branch": branch}, indent=2))
                 return 0
-            if not signaled and daemon_script_path().exists() is False:
-                if not _wait_for_ack(conn, request_id, timeout=0.1):
-                    print("daemon is absent; flush recorded but not acknowledged", file=sys.stderr)
-                    return 2
-            if not _wait_for_ack(conn, request_id):
-                print("flush timed out waiting for daemon ack", file=sys.stderr)
-                return 2
-            acknowledge_flush(conn, request_id, note="flush acknowledged")
-            print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": ctx["branch_ref"]}, indent=2))
+            print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": branch}, indent=2))
             return 0
+    except TimeoutError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     finally:
         conn.close()
 
@@ -195,9 +203,10 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
         with control_lock(git_dir):
             ctx = repo_context(repo_root, git_dir)
             if flush_first:
-                rc = cmd_flush(repo_root, git_dir, non_blocking=False)
-                if rc not in (0, 2):
-                    return rc
+                try:
+                    _flush_locked(repo_root, git_dir, conn, non_blocking=False)
+                except TimeoutError as exc:
+                    print(str(exc), file=sys.stderr)
             request_id = request_flush(conn, "stop", False, note="stop requested")
             row = _daemon_row(conn)
             pid = int(row.get("pid") or 0)
