@@ -37,6 +37,16 @@ from snapshot_state import (
 from snapshot_shared import run_git  # type: ignore[reportMissingImports]
 
 
+def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    proc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return proc.returncode == 0
+
+
 def _verify_op(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> Optional[str]:
     kind = op["op"]
     path = op["path"]
@@ -114,7 +124,7 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                 )
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", ("stale branch generation", int(event["seq"])))
                 continue
-            if event["base_head"] != head:
+            if not _is_ancestor(repo_root, str(event["base_head"]), head):
                 update_publish_state(
                     conn,
                     event_seq=int(event["seq"]),
@@ -125,7 +135,10 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
                     status="blocked_conflict",
                     error="stale branch ancestry",
                 )
-                conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", ("stale branch ancestry", int(event["seq"])))
+                conn.execute(
+                    "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                    ("stale branch ancestry", int(event["seq"])),
+                )
                 continue
             reason = None
             for op in ops:
