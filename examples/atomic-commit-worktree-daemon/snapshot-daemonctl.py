@@ -72,6 +72,8 @@ def _spawn_daemon(repo_root: Path, git_dir: Path) -> Optional[subprocess.Popen[s
 def _fresh_heartbeat(row: Dict[str, Any]) -> bool:
     heartbeat_ts = float(row.get("heartbeat_ts") or 0)
     pid = int(row.get("pid") or 0)
+    if row.get("mode") == "degraded-no-daemon" and (time.time() - heartbeat_ts) < FRESH_HEARTBEAT_SECONDS:
+        return True
     if not heartbeat_alive(pid):
         return False
     return (time.time() - heartbeat_ts) < FRESH_HEARTBEAT_SECONDS
