@@ -42,6 +42,7 @@ from snapshot_shared import (  # type: ignore[reportMissingImports]
 STATE_SUBDIR = "ai-snapshotd"
 DB_NAME = "daemon.db"
 LOCK_NAME = "daemon.lock"
+CONTROL_LOCK_NAME = "control.lock"
 INDEX_NAME = "worker.index"
 SCHEMA_VERSION = 1
 
@@ -586,7 +587,7 @@ def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
 
 @contextmanager
 def control_lock(git_dir: Path) -> Iterator[None]:
-    path = lock_path(git_dir)
+    path = local_state_dir(git_dir) / CONTROL_LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
