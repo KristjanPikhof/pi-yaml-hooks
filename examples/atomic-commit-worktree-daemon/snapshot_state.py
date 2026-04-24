@@ -203,6 +203,46 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
+def load_shadow_paths(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+    return {
+        row["path"]: dict(row)
+        for row in conn.execute(
+            "SELECT path, operation, mode, oid, old_path, branch_ref, branch_generation, base_head, fidelity, updated_ts FROM shadow_paths"
+        ).fetchall()
+    }
+
+
+def replace_shadow_paths(
+    conn: sqlite3.Connection,
+    *,
+    branch_ref: str,
+    branch_generation: int,
+    base_head: str,
+    entries: Iterable[Dict[str, Any]],
+    fidelity: str = "rescan",
+) -> None:
+    now = time.time()
+    conn.execute("DELETE FROM shadow_paths")
+    for entry in entries:
+        conn.execute(
+            """INSERT INTO shadow_paths(path, operation, mode, oid, old_path,
+               branch_ref, branch_generation, base_head, fidelity, updated_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry["path"],
+                entry.get("operation", "baseline"),
+                entry.get("mode"),
+                entry.get("oid"),
+                entry.get("old_path"),
+                branch_ref,
+                branch_generation,
+                base_head,
+                entry.get("fidelity", fidelity),
+                now,
+            ),
+        )
+
+
 def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> Dict[str, Any]:
     repo_root, git_dir, common_dir = resolve_repo_paths(repo_input)
     if explicit_git_dir is not None:
