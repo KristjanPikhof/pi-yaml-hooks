@@ -9,6 +9,7 @@ incompatible local state instead of trying to muddle through.
 
 from __future__ import annotations
 
+import sys
 import fcntl
 import errno
 import hashlib
@@ -21,11 +22,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
+HERE = Path(__file__).resolve().parent
+WORKER_DIR = HERE.parent / "atomic-commit-snapshot-worker"
+if str(WORKER_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKER_DIR))
+
 from snapshot_shared import (
     IncompatibleLocalStateError,
     branch_worktree_git_dirs,
     current_head,
-    current_branch,
     ensure_branch_registry,
     local_state_dir,
     quarantine_incompatible_local_state,
@@ -326,6 +331,19 @@ def capture_blob_for_bytes(repo_root: Path, data: bytes) -> str:
     return _hash_blob(repo_root, data)
 
 
+def current_branch(repo_root: Path) -> Optional[str]:
+    proc = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.decode("utf-8", errors="replace").strip()
+    return out or None
+
+
 def snapshot_state_for_index(repo_root: Path, env: Dict[str, str]) -> Dict[str, Tuple[str, str]]:
     proc = subprocess.run(
         ["git", "ls-files", "-s", "-z"],
@@ -495,7 +513,7 @@ def heartbeat_alive(pid: int) -> bool:
         return exc.errno == errno.EPERM
 
 
-def status_snapshot(conn: sqlite3.Connection) -> Dict[str, Any]:
+def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
     daemon = _row_to_dict(conn.execute("SELECT * FROM daemon_state WHERE id=1").fetchone())
     publish = _row_to_dict(conn.execute("SELECT * FROM publish_state WHERE id=1").fetchone())
     counts = {
@@ -505,7 +523,7 @@ def status_snapshot(conn: sqlite3.Connection) -> Dict[str, Any]:
         ).fetchall()
     }
     return {
-        "db": str(db_path(conn.execute("PRAGMA database_list").fetchone()[2] if False else Path(""))),
+        "db": str(db_path(git_dir)),
         "daemon": daemon,
         "publish": publish,
         "counts": counts,
@@ -537,8 +555,8 @@ def capture_example_ops(
     mode_after: str = "100644",
     fidelity: str = "watcher",
 ) -> List[Dict[str, Any]]:
-    before_oid = capture_blob_for_text(repo_root, text_before.encode("utf-8").decode("utf-8")) if text_before is not None else None
-    after_oid = capture_blob_for_text(repo_root, text_after.encode("utf-8").decode("utf-8")) if text_after is not None else None
+    before_oid = capture_blob_for_text(repo_root, text_before) if text_before is not None else None
+    after_oid = capture_blob_for_text(repo_root, text_after) if text_after is not None else None
     kind = "modify"
     if text_before is None and text_after is not None:
         kind = "create"
