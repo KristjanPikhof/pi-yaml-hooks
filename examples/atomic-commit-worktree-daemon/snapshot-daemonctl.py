@@ -148,6 +148,17 @@ def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
     return False
 
 
+def _settle_pending_requests(conn, note: str) -> None:
+    now = time.time()
+    conn.execute(
+        """UPDATE flush_requests
+           SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
+               note=COALESCE(note, '') || ?
+           WHERE acknowledged_ts IS NULL""",
+        (now, now, f"; {note}"),
+    )
+
+
 def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> tuple[int, bool, str]:
     ctx = _light_context(repo_root)
     request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
@@ -227,8 +238,9 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
                         os.kill(pid, signal.SIGTERM)
                     except OSError:
                         pass
+                    _settle_pending_requests(conn, "daemon stopped before ack")
             else:
-                snapshot_state.acknowledge_flush(conn, request_id, "stop acknowledged; daemon absent")
+                _settle_pending_requests(conn, "stop acknowledged; daemon absent")
             _refresh_mode(conn, "stopped", note="stop requested")
             print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
             return 0
