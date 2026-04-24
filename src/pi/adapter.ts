@@ -439,8 +439,15 @@ export function createHostAdapter(
         const message = error instanceof Error ? error.message : String(error);
         logger.error("host_send_prompt", "sendUserMessage failed.", {
           cwd: projectDir,
-          details: { text, error: message },
+          details: { text, error: message, staleSessionContext: isStaleSessionBoundError(error) },
         });
+        if (isStaleSessionBoundError(error)) {
+          return {
+            status: "degraded",
+            reason: "stale_session_context",
+            details: { text, error: message },
+          };
+        }
         throw new Error(`sendUserMessage failed: ${message}`);
       }
     },
@@ -480,8 +487,15 @@ export function createHostAdapter(
         const message = error instanceof Error ? error.message : String(error);
         logger.error("host_notify", "UI notification failed.", {
           cwd: projectDir,
-          details: { text, level: piLevel, error: message },
+          details: { text, level: piLevel, error: message, staleSessionContext: isStaleSessionBoundError(error) },
         });
+        if (isStaleSessionBoundError(error)) {
+          return {
+            status: "degraded",
+            reason: "stale_session_context",
+            details: { text, level: piLevel, error: message },
+          };
+        }
         throw new Error(`ui.notify failed: ${message}`);
       }
     },
@@ -561,8 +575,15 @@ export function createHostAdapter(
         const message = error instanceof Error ? error.message : String(error);
         logger.error("host_set_status", "Updating PI status surface failed.", {
           cwd: projectDir,
-          details: { hookId, text, error: message },
+          details: { hookId, text, error: message, staleSessionContext: isStaleSessionBoundError(error) },
         });
+        if (isStaleSessionBoundError(error)) {
+          return {
+            status: "degraded",
+            reason: "stale_session_context",
+            details: { hookId, text, error: message },
+          };
+        }
         throw new Error(`ui.setStatus failed: ${message}`);
       }
     },
@@ -609,6 +630,11 @@ function safeGetParentSessionPath(sessionManager: ReadonlySessionManager | undef
   } catch {
     return undefined;
   }
+}
+
+function isStaleSessionBoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /stale|invalidated|replaced session|session-bound/i.test(message);
 }
 
 function debugLog(message: string): void {

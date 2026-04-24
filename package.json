@@ -32,8 +32,11 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "test": "npm src/pi/unsupported.test.ts && npm src/pi/ux-actions.test.ts && npm src/pi/config-paths.test.ts && npm src/pi/logger.test.ts && npm src/pi/logging.test.ts && npm src/pi/adapter.test.ts && npm src/core/bash-executor.test.ts && npm src/core/load-hooks-composition.test.ts && npm src/core/runtime-paths.test.ts && npm src/core/runtime-async.test.ts"
+    "build": "tsc && mkdir -p dist/extensions && printf 'export { default } from \"../index.js\";\n' > dist/extensions/index.js",
+    "test": "npm run build && node dist/pi/unsupported.test.js && node dist/pi/ux-actions.test.js && node dist/pi/config-paths.test.js && node dist/pi/logger.test.js && node dist/pi/logging.test.js && node dist/pi/adapter.test.js && node dist/core/bash-executor.test.js && node dist/core/load-hooks-composition.test.js && node dist/core/runtime-paths.test.js && node dist/core/runtime-async.test.js",
+    "compat:sdk-matrix": "bash scripts/check-sdk-matrix.sh",
+    "compat:sdk-matrix:dry-run": "bash scripts/check-sdk-matrix.sh --dry-run",
+    "compat:sdk-matrix:future": "bash scripts/check-sdk-matrix.sh --include-future"
   },
   "repository": {
     "type": "git",
@@ -48,7 +51,8 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.68.1 || ^0.69.0"
+    "@mariozechner/pi-coding-agent": "^0.68.1 || ^0.69.0",
+    "@mariozechner/pi-tui": "^0.68.1 || ^0.69.0"
   },
   "dependencies": {
     "yaml": "^2.8.2"

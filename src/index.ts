@@ -10,6 +10,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { registerAdapter } from "./pi/adapter.js";
+import { registerHookAutocomplete } from "./pi/autocomplete.js";
 import { registerCommands } from "./pi/commands.js";
 import { registerHookDiagnostics } from "./pi/diagnostics.js";
 import { registerPromptSupport } from "./pi/prompt-support.js";
@@ -18,5 +19,7 @@ export default function piHooksExtension(pi: ExtensionAPI): void {
   registerHookDiagnostics(pi);
   registerPromptSupport(pi);
   registerCommands(pi);
+  pi.on("session_start", (_event, ctx) => registerHookAutocomplete(ctx));
+  pi.on("before_agent_start", (_event, ctx) => registerHookAutocomplete(ctx));
   registerAdapter(pi);
 }

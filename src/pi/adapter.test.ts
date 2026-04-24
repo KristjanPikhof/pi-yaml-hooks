@@ -4,6 +4,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { resetPiHooksLoggerForTests } from "../core/logger.js"
+import { resetHookAutocompleteForTests } from "./autocomplete.js"
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const extensionEntrypointPath = currentDir.endsWith(`${path.sep}dist${path.sep}pi`)
@@ -20,6 +21,24 @@ interface Case {
 
 type PiHandler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown
 type CommandHandler = (args: string, ctx: unknown) => Promise<void>
+type AutocompleteItem = { value: string; label: string; description?: string }
+type AutocompleteProvider = {
+  getSuggestions: (
+    lines: string[],
+    cursorLine: number,
+    cursorCol: number,
+    options: { signal: AbortSignal; force?: boolean },
+  ) => Promise<{ items: AutocompleteItem[]; prefix: string } | null>
+  applyCompletion: (
+    lines: string[],
+    cursorLine: number,
+    cursorCol: number,
+    item: AutocompleteItem,
+    prefix: string,
+  ) => { lines: string[]; cursorLine: number; cursorCol: number }
+  shouldTriggerFileCompletion?: (lines: string[], cursorLine: number, cursorCol: number) => boolean
+}
+type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider
 
 class FakePiHarness {
   readonly projectDir: string
@@ -28,11 +47,15 @@ class FakePiHarness {
   readonly confirms: Array<{ title: string; message: string }> = []
   readonly userMessages: Array<{ text: string; options?: unknown }> = []
   readonly customMessages: Array<{ customType: string; content: unknown; display: boolean; details?: unknown }> = []
-  readonly handlers = new Map<string, PiHandler>()
+  readonly handlers = new Map<string, PiHandler[]>()
   readonly commands = new Map<string, CommandHandler>()
   readonly messageRenderers = new Map<string, unknown>()
-  readonly sessionId: string
+  readonly autocompleteProviders: AutocompleteProviderFactory[] = []
+  sessionId: string
+  private sessionGeneration = 0
+  throwOnStalePiUse = false
   hasUI = true
+  exposeAutocomplete = true
   confirmResult = true
   reloads = 0
   notificationsWithLevel: Array<{ message: string; type?: string }> = []
@@ -43,9 +66,12 @@ class FakePiHarness {
   }
 
   register(): void {
+    const piGeneration = this.sessionGeneration
     const pi = {
       on: (event: string, handler: PiHandler) => {
-        this.handlers.set(event, handler)
+        const handlers = this.handlers.get(event) ?? []
+        handlers.push(handler)
+        this.handlers.set(event, handlers)
       },
       registerCommand: (name: string, options: { handler: CommandHandler }) => {
         this.commands.set(name, options.handler)
@@ -54,6 +80,9 @@ class FakePiHarness {
         this.messageRenderers.set(customType, renderer)
       },
       sendUserMessage: (text: string, options?: unknown) => {
+        if (this.throwOnStalePiUse && piGeneration !== this.sessionGeneration) {
+          throw new Error("stale session-bound ExtensionAPI after replacement")
+        }
         this.userMessages.push({ text, options })
       },
       sendMessage: (message: { customType: string; content: unknown; display: boolean; details?: unknown }) => {
@@ -65,27 +94,49 @@ class FakePiHarness {
   }
 
   createContext(): unknown {
+    const contextGeneration = this.sessionGeneration
+    const assertFresh = () => {
+      if (contextGeneration !== this.sessionGeneration) {
+        throw new Error("stale session-bound ExtensionContext after replacement")
+      }
+    }
     return {
       cwd: this.projectDir,
       hasUI: this.hasUI,
       ui: this.hasUI
         ? {
             notify: (text: string, type?: string) => {
+              assertFresh()
               this.notifications.push(text)
               this.notificationsWithLevel.push({ message: text, type })
             },
             confirm: async (title: string, message: string) => {
+              assertFresh()
               this.confirms.push({ title, message })
               return this.confirmResult
             },
             setStatus: (hookId: string, text?: string) => {
+              assertFresh()
               this.statusUpdates.push({ hookId, text })
             },
+            ...(this.exposeAutocomplete
+              ? {
+                  addAutocompleteProvider: (factory: AutocompleteProviderFactory) => {
+                    this.autocompleteProviders.push(factory)
+                  },
+                }
+              : {}),
           }
         : undefined,
       sessionManager: {
-        getSessionId: () => this.sessionId,
-        getHeader: () => ({}),
+        getSessionId: () => {
+          assertFresh()
+          return this.sessionId
+        },
+        getHeader: () => {
+          assertFresh()
+          return { id: this.sessionId }
+        },
       },
       isIdle: () => true,
       hasPendingMessages: () => false,
@@ -95,13 +146,25 @@ class FakePiHarness {
     } as never
   }
 
+  replaceSession(sessionId: string): void {
+    this.sessionId = sessionId
+    this.sessionGeneration += 1
+  }
+
   async emit(eventName: string, event: unknown = {}): Promise<unknown> {
-    const handler = this.handlers.get(eventName)
-    if (!handler) {
+    const handlers = this.handlers.get(eventName)
+    if (!handlers || handlers.length === 0) {
       throw new Error(`${eventName} handler was not registered`)
     }
 
-    return await handler(event, this.createContext())
+    let result: unknown
+    for (const handler of handlers) {
+      const handlerResult = await handler(event, this.createContext())
+      if (handlerResult !== undefined) {
+        result = handlerResult
+      }
+    }
+    return result
   }
 
   async sessionStart(reason: "new" | "startup" | "resume" | "fork" = "new"): Promise<void> {
@@ -173,6 +236,7 @@ async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string
   process.env.HOME = homeDir
   process.env.USERPROFILE = homeDir
   resetPiHooksLoggerForTests()
+  resetHookAutocompleteForTests()
   console.warn = () => {}
   console.info = () => {}
   console.error = () => {}
@@ -189,6 +253,7 @@ async function withIsolatedProject<T>(trusted: boolean, run: (projectDir: string
       if (previousUserProfile === undefined) delete process.env.USERPROFILE
       else process.env.USERPROFILE = previousUserProfile
       resetPiHooksLoggerForTests()
+      resetHookAutocompleteForTests()
       rmSync(projectDir, { recursive: true, force: true })
       rmSync(homeDir, { recursive: true, force: true })
     }
@@ -201,6 +266,38 @@ function readTrustedProjectsFile(): string[] {
     return []
   }
   return JSON.parse(readFileSync(filePath, "utf8")) as string[]
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function createNoopAutocompleteProvider(): AutocompleteProvider {
+  return {
+    async getSuggestions() {
+      return null
+    },
+    applyCompletion(lines, cursorLine, cursorCol) {
+      return { lines, cursorLine, cursorCol }
+    },
+  }
+}
+
+function createSlashCommandAutocompleteProvider(): AutocompleteProvider {
+  return {
+    async getSuggestions() {
+      return null
+    },
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      const line = lines[cursorLine] ?? ""
+      const replacementStart = Math.max(0, cursorCol - prefix.length)
+      const replacement = line.startsWith("/") ? `/${item.value} ` : `${item.value} `
+      const nextLine = `${line.slice(0, replacementStart)}${replacement}${line.slice(cursorCol)}`
+      const nextLines = [...lines]
+      nextLines[cursorLine] = nextLine
+      return { lines: nextLines, cursorLine, cursorCol: replacementStart + replacement.length }
+    },
+  }
 }
 
 const cases: Case[] = [
@@ -560,6 +657,37 @@ const cases: Case[] = [
       }),
   },
   {
+    name: "delayed async follow-up prompt degrades instead of throwing after session replacement",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: tool.after.write
+    async: true
+    actions:
+      - bash: "sleep 0.05"
+      - tool:
+          name: grep
+          args:
+            pattern: TODO
+            path: src
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.throwOnStalePiUse = true
+        harness.register()
+        await harness.toolResult("write", "call-stale-prompt", { path: path.join(projectDir, "src", "file.ts"), content: "ok" })
+        harness.replaceSession("session-2")
+        await sleep(150)
+
+        return harness.userMessages.length === 0
+          ? { ok: true }
+          : { ok: false, detail: `userMessages=${JSON.stringify(harness.userMessages)}` }
+      }),
+  },
+  {
     name: "headless confirm denies tool execution by default",
     run: async () =>
       await withIsolatedProject(true, async (projectDir) => {
@@ -852,7 +980,7 @@ hooks: []
             ? { ok: true }
             : { ok: false, detail: `trustedProjects=${JSON.stringify(trustedProjects)}` }
         } finally {
-          rmSync(symlinkDir, { force: true })
+          rmSync(symlinkDir, { force: true, recursive: true })
         }
       }),
   },
@@ -903,6 +1031,101 @@ hooks: []
             harness.customMessages.some((message) => JSON.stringify(message.content).includes("validation issue"))
           ? { ok: true }
           : { ok: false, detail: `messages=${JSON.stringify(harness.customMessages)}` }
+      }),
+  },
+  {
+    name: "registers guarded /hooks autocomplete when the UI capability exists",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - id: audit-write
+    event: tool.after.write
+    actions:
+      - notify: ok
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionStart("new")
+
+        const factory = harness.autocompleteProviders[0]
+        if (!factory) {
+          return { ok: false, detail: "autocomplete provider was not registered" }
+        }
+
+        const provider = factory(createNoopAutocompleteProvider())
+        const commandSuggestions = await provider.getSuggestions(["/hooks-st"], 0, "/hooks-st".length, {
+          signal: new AbortController().signal,
+        })
+        const argumentSuggestions = await provider.getSuggestions(["/hooks-status audit"], 0, "/hooks-status audit".length, {
+          signal: new AbortController().signal,
+        })
+        const eventSuggestions = await provider.getSuggestions(["/hooks-validate tool.after"], 0, "/hooks-validate tool.after".length, {
+          signal: new AbortController().signal,
+        })
+        const logSuggestions = await provider.getSuggestions(["/hooks-tail-log --"], 0, "/hooks-tail-log --".length, {
+          signal: new AbortController().signal,
+        })
+
+        const commandValues = commandSuggestions?.items.map((item) => item.value) ?? []
+        const commandLabels = commandSuggestions?.items.map((item) => item.label) ?? []
+        const argumentValues = argumentSuggestions?.items.map((item) => item.value) ?? []
+        const eventValues = eventSuggestions?.items.map((item) => item.value) ?? []
+        const logValues = logSuggestions?.items.map((item) => item.value) ?? []
+        const ok =
+          commandValues.includes("hooks-status") &&
+          commandLabels.includes("/hooks-status") &&
+          argumentValues.includes("audit-write") &&
+          eventValues.includes("tool.after.write") &&
+          logValues.includes("--follow")
+
+        return ok
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify({ commandValues, commandLabels, argumentValues, eventValues, logValues }) }
+      }),
+  },
+  {
+    name: "applies /hooks command autocomplete with a single leading slash",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        await harness.sessionStart("new")
+
+        const factory = harness.autocompleteProviders[0]
+        if (!factory) {
+          return { ok: false, detail: "autocomplete provider was not registered" }
+        }
+
+        const provider = factory(createSlashCommandAutocompleteProvider())
+        const input = "/hooks-st"
+        const suggestions = await provider.getSuggestions([input], 0, input.length, {
+          signal: new AbortController().signal,
+        })
+        const hooksStatus = suggestions?.items.find((item) => item.label === "/hooks-status")
+        if (!hooksStatus) {
+          return { ok: false, detail: `suggestions=${JSON.stringify(suggestions)}` }
+        }
+
+        const applied = provider.applyCompletion([input], 0, input.length, hooksStatus, suggestions?.prefix ?? input)
+        const ok = applied.lines[0] === "/hooks-status " && applied.cursorLine === 0 && applied.cursorCol === "/hooks-status ".length
+        return ok ? { ok: true } : { ok: false, detail: JSON.stringify(applied) }
+      }),
+  },
+  {
+    name: "skips /hooks autocomplete registration when addAutocompleteProvider is absent",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        const harness = new FakePiHarness(projectDir)
+        harness.exposeAutocomplete = false
+        harness.register()
+        await harness.sessionStart("new")
+        return harness.autocompleteProviders.length === 0
+          ? { ok: true }
+          : { ok: false, detail: `providers=${harness.autocompleteProviders.length}` }
       }),
   },
 ]

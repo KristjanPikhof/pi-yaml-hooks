@@ -437,6 +437,67 @@ const runtimeCases: RuntimeCase[] = [
     },
   },
   {
+    name: "adapter sendPrompt reports degraded for stale session-bound PI API",
+    run: async () => {
+      const pi = {
+        sendUserMessage: () => {
+          throw new Error("stale session-bound ExtensionAPI after replacement")
+        },
+      } as unknown as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(pi, "/tmp", () => undefined, () => undefined)
+      const result = host.sendPrompt("s1", "hello")
+      return result && typeof result === "object" && "status" in result && result.status === "degraded" && result.reason === "stale_session_context"
+        ? { ok: true }
+        : { ok: false, detail: `result=${JSON.stringify(result)}` }
+    },
+  },
+  {
+    name: "adapter UI actions report degraded for stale session-bound context",
+    run: async () => {
+      const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(pi, "/tmp", () => undefined, () => ({
+        hasUI: true,
+        ui: {
+          notify: () => {
+            throw new Error("stale session-bound ExtensionContext after replacement")
+          },
+          setStatus: () => {
+            throw new Error("stale session-bound ExtensionContext after replacement")
+          },
+        },
+      } as never))
+      const notify = await Promise.resolve(host.notify?.("hi", "warning"))
+      const setStatus = await Promise.resolve(host.setStatus?.("hook#1", "busy"))
+      return notify && typeof notify === "object" && notify.status === "degraded" && notify.reason === "stale_session_context" &&
+          setStatus && typeof setStatus === "object" && setStatus.status === "degraded" && setStatus.reason === "stale_session_context"
+        ? { ok: true }
+        : { ok: false, detail: `notify=${JSON.stringify(notify)}, setStatus=${JSON.stringify(setStatus)}` }
+    },
+  },
+  {
+    name: "adapter sessionManager access falls back when captured manager is stale",
+    run: async () => {
+      const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
+      const host = createHostAdapter(
+        pi,
+        "/tmp",
+        () => ({
+          getSessionId: () => {
+            throw new Error("stale session-bound sessionManager after replacement")
+          },
+          getHeader: () => {
+            throw new Error("stale session-bound sessionManager after replacement")
+          },
+        } as never),
+        () => undefined,
+      )
+      const result = host.getRootSessionId("s1")
+      return result === "s1"
+        ? { ok: true }
+        : { ok: false, detail: `result=${JSON.stringify(result)}` }
+    },
+  },
+  {
     name: "adapter setStatus throws when PI UI status update fails",
     run: async () => {
       const pi = { sendUserMessage: () => {} } as unknown as Parameters<typeof createHostAdapter>[0]
