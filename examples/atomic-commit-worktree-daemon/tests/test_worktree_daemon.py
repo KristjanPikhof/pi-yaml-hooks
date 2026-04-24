@@ -427,7 +427,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertGreaterEqual(payload["flush_requests"], 1)
 
         stop = subprocess.run(
-            [sys.executable, str(script), "stop", "--repo", str(repo), "--flush"],
+            [sys.executable, str(script), "stop", "--repo", str(repo)],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
