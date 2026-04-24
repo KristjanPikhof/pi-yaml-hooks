@@ -51,7 +51,8 @@ Then inspect history and daemon state:
 
 ```bash
 git log --oneline --max-count=5
-python3 <example-dir>/snapshot-daemonctl.py status --repo "$PI_PROJECT_DIR"
+SNAPSHOT_DAEMON_DIR="<example-dir>"
+python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" status --repo "$PI_PROJECT_DIR"
 ```
 
 Expected history shape when polling catches all three states:
@@ -171,28 +172,28 @@ hooks:
   - id: snapshot-daemon-start
     event: session.created
     actions:
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py start --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" start --repo "$PI_PROJECT_DIR"'
 
   - id: snapshot-daemon-wake-before-tool
     event: tool.before.*
     actions:
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py wake --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" wake --repo "$PI_PROJECT_DIR"'
 
   - id: snapshot-daemon-flush-after-tool
     event: tool.after.*
     actions:
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py flush --repo "$PI_PROJECT_DIR" --non-blocking'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR" --non-blocking'
 
   - id: snapshot-daemon-sleep-on-idle
     event: session.idle
     actions:
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py flush --repo "$PI_PROJECT_DIR"'
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py sleep --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR"'
 
   - id: snapshot-daemon-stop-on-delete
     event: session.deleted
     actions:
-      - bash: 'python3 <example-dir>/snapshot-daemonctl.py stop --repo "$PI_PROJECT_DIR" --flush'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" stop --repo "$PI_PROJECT_DIR" --flush'
 ```
 
 `session.idle` is PI's practical "after idle" surface. pi-hooks emits it from
