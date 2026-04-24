@@ -2,6 +2,20 @@
 
 This document describes the current `pi-hooks` behavior as implemented in this repository.
 
+## `/hooks` command autocomplete
+
+On PI versions that expose `ctx.ui.addAutocompleteProvider`, `pi-hooks` registers a guarded autocomplete provider for the built-in `/hooks-*` commands. The provider is capability-detected at runtime, so older supported PI versions continue to load without this UI feature.
+
+Autocomplete suggestions are deterministic and intentionally lightweight: command names are static; event names use the supported event list; config paths and the current log path are resolved once when the provider registers; hook ID suggestions come from the loaded global/project snapshot at registration time.
+
+Useful completions include:
+
+- `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, `/hooks-tail-log`
+- loaded hook IDs such as `audit-write`
+- event names such as `session.idle`, `tool.before.bash`, and `tool.after.write`
+- global/project hook config paths
+- log helpers such as `--follow`, `--path`, and a ready-to-run `tail -F` command
+
 ## Hook file shape
 
 A hook file must parse to an object with a top-level `hooks:` array. It may also define an optional top-level `imports:` array.
@@ -469,13 +483,20 @@ The process working directory is the current project directory.
 
 ## PI compatibility smoke-check checklist
 
+Use the repeatable runtime checklist in [`setup.md#runtime-pi-smoke-checklist`](./setup.md#runtime-pi-smoke-checklist) for real PI verification before widening SDK support or changing session, UI, prompt, command, or tool-event behavior. The local harness lives in [`scripts/smoke/`](../scripts/smoke/) and creates an evidence file for future release updates.
+
 For a real PI run in the documented peer range, verify these compatibility-sensitive surfaces:
 
 - `before_agent_start` appends the hook-awareness note when `PI_HOOKS_PROMPT_AWARENESS` is not `0`
 - headless mode still mentions degraded UI actions in that prompt note
+- `/hooks-status`, `/hooks-validate`, and `/hooks-reload` work and emit structured diagnostics when PI supports custom messages
+- `tool.before.bash`, `tool.after.read`, `tool.after.write`, and synthesized `file.changed` events reach smoke hooks
+- `tool:` actions produce a follow-up prompt in the current PI session, not imperative tool execution
+- `PI_HOOKS_ENABLE_USER_BASH=1` routes human `!` / `!!` commands through `tool.before.bash` only
 - `/new` triggers lossy cleanup via `session.deleted` and a fresh `session.created`
 - `/resume` and `/fork` do not re-fire `session.created` for an existing session re-entry
-- `/new`, `/resume`, and `/fork` do not double-run `session.deleted` cleanup when PI emits both `session_before_switch` and `session_shutdown`
+- `/new`, `/resume`, `/fork`, and `/quit` do not double-run `session.deleted` cleanup when PI emits both `session_before_switch` and `session_shutdown`
+- PI 0.70.x remains gated until the future SDK matrix and the runtime smoke both pass, including the no-builtin-tools check
 
 ## Unsupported and advisory cases
 
