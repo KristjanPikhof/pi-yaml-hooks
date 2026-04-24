@@ -12,40 +12,29 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+HERE = Path(__file__).resolve().parent
+WORKER_DIR = HERE.parent / "atomic-commit-snapshot-worker"
+if str(WORKER_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKER_DIR))
+
 from snapshot_state import (
-    acknowledge_flush,
     apply_ops_to_index,
     build_message,
-    control_lock,
-    current_branch,
-    current_head,
     ensure_state,
     index_path,
     load_ops,
     load_pending_events,
-    open_state,
-    record_event,
     repo_context,
     resolve_repo_paths,
-    set_daemon_state,
     snapshot_state_for_index,
     status_snapshot,
     update_publish_state,
-    capture_example_ops,
 )
-from snapshot_shared import run_git
-
-
-def _event_state(conn, seq: int) -> Dict[str, Any]:
-    row = conn.execute(
-        "SELECT seq, branch_ref, branch_generation, base_head, state, commit_oid, error FROM capture_events WHERE seq=?",
-        (seq,),
-    ).fetchone()
-    return dict(row) if row else {}
+from snapshot_shared import run_git  # type: ignore[reportMissingImports]
 
 
 def _verify_op(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> Optional[str]:
@@ -88,11 +77,6 @@ def _apply_state(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> None:
         if old_path:
             state.pop(old_path, None)
         state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
-
-
-def _branch_ref(repo_root: Path) -> Optional[str]:
-    branch = current_branch(repo_root)
-    return branch
 
 
 def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
@@ -196,10 +180,18 @@ def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
             )
             conn.execute("UPDATE capture_events SET state='publishing' WHERE seq=?", (int(event["seq"]),))
 
-            code, _out, err = run_git(repo_root, "update-ref", branch, commit_oid, parent), 0, ""
-            # `run_git` throws on failure; keep the compare-and-swap explicit.
             try:
-                run_git(repo_root, "update-ref", branch, commit_oid, parent)
+                proc = subprocess.run(
+                    ["git", "update-ref", branch, commit_oid, parent],
+                    cwd=str(repo_root),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        proc.stderr.decode("utf-8", errors="replace").strip()
+                    )
             except Exception as exc:
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", (str(exc), int(event["seq"])))
                 update_publish_state(
