@@ -83,6 +83,13 @@ def _apply_state(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> None:
     path = op["path"]
     if kind in {"create", "modify", "mode", "symlink"}:
         state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
+    elif kind == "delete":
+        state.pop(path, None)
+    elif kind == "rename":
+        old_path = op.get("old_path") or ""
+        if old_path:
+            state.pop(old_path, None)
+        state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
 
 
 def _touched_paths(ops: List[Dict[str, Any]]) -> List[str]:
@@ -151,15 +158,6 @@ def _reconcile_live_index(
         env=env,
         check=False,
     )
-    elif kind == "delete":
-        state.pop(path, None)
-    elif kind == "rename":
-        old_path = op.get("old_path") or ""
-        if old_path:
-            state.pop(old_path, None)
-        state[path] = (op.get("after_mode") or "100644", op.get("after_oid") or "0" * 40)
-
-
 def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     """Reconcile a crash between commit creation, update-ref, and DB settlement.
 
