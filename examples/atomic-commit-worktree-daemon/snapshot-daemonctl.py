@@ -22,11 +22,9 @@ from typing import Any, Dict, Optional
 from snapshot_state import (
     acknowledge_flush,
     control_lock,
-    current_branch,
-    current_head,
     ensure_state,
     heartbeat_alive,
-    record_flush_request,
+    request_flush,
     repo_context,
     resolve_repo_paths,
     set_daemon_state,
@@ -48,7 +46,7 @@ def _daemon_row(conn) -> Dict[str, Any]:
 
 
 def _refresh_mode(conn, mode: str, note: str = "") -> None:
-    row = repo_snapshot = _daemon_row(conn)
+    row = _daemon_row(conn)
     set_daemon_state(
         conn,
         pid=int(row.get("pid") or 0),
@@ -142,7 +140,7 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
     try:
         with control_lock(git_dir):
             ctx = repo_context(repo_root, git_dir)
-            request_id = record_flush_request(conn, "wake", True, note="wake requested")
+            request_id = request_flush(conn, "wake", True, note="wake requested")
             if not _signal_daemon(conn, signal.SIGUSR1):
                 _maybe_start(repo_root, git_dir, conn, note="wake-start fallback")
             acknowledge_flush(conn, request_id, note="wake recorded")
@@ -157,7 +155,7 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
     try:
         with control_lock(git_dir):
             ctx = repo_context(repo_root, git_dir)
-            request_id = record_flush_request(conn, "flush", non_blocking, note="flush requested")
+            request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
             signaled = _signal_daemon(conn, signal.SIGUSR1)
             if non_blocking:
                 print(json.dumps({"ok": True, "action": "flush", "non_blocking": True, "request_id": request_id, "signaled": signaled}, indent=2))
@@ -181,7 +179,7 @@ def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
     try:
         with control_lock(git_dir):
             ctx = repo_context(repo_root, git_dir)
-            request_id = record_flush_request(conn, "sleep", True, note="sleep requested")
+            request_id = request_flush(conn, "sleep", True, note="sleep requested")
             _signal_daemon(conn, signal.SIGUSR1)
             _refresh_mode(conn, "sleeping", note="sleep requested")
             acknowledge_flush(conn, request_id, note="sleep recorded")
@@ -200,7 +198,7 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
                 rc = cmd_flush(repo_root, git_dir, non_blocking=False)
                 if rc not in (0, 2):
                     return rc
-            request_id = record_flush_request(conn, "stop", False, note="stop requested")
+            request_id = request_flush(conn, "stop", False, note="stop requested")
             row = _daemon_row(conn)
             pid = int(row.get("pid") or 0)
             if pid > 0 and heartbeat_alive(pid):
