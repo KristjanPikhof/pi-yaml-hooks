@@ -27,7 +27,7 @@ WORKER_DIR = HERE.parent / "atomic-commit-snapshot-worker"
 if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
-from snapshot_shared import (
+from snapshot_shared import (  # type: ignore[reportMissingImports]
     IncompatibleLocalStateError,
     branch_worktree_git_dirs,
     current_head,
@@ -256,7 +256,7 @@ def record_event(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (branch_ref, branch_generation, base_head, operation, path, old_path, fidelity, captured_ts),
     )
-    seq = int(cur.lastrowid)
+    seq = int(cur.lastrowid or 0)
     for ord_, op in enumerate(ops):
         conn.execute(
             """INSERT INTO capture_ops(event_seq, ord, op, path, old_path,
@@ -499,7 +499,15 @@ def set_daemon_state(
     conn.execute(
         """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
                branch_generation=?, note=?, updated_ts=? WHERE id=1""",
-        (pid, mode, time.time(), branch_ref, branch_generation, note, time.time()),
+        (
+            pid,
+            mode,
+            time.time(),
+            branch_ref,
+            int(branch_generation) if branch_generation is not None else None,
+            note,
+            time.time(),
+        ),
     )
 
 
