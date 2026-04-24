@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,15 @@ if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
 
 import snapshot_state  # noqa: E402
+
+
+def load_example_module(name: str, filename: str):
+    spec = importlib.util.spec_from_file_location(name, str(EXAMPLE_DIR / filename))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -301,6 +312,75 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual(row["state"], "published")
         self.assertEqual(row["commit_oid"], target)
 
+    def test_polling_create_modify_delete_sequence(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        capture = load_example_module("snapshot_capture_test", "snapshot-capture.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+
+        alpha = repo / "alpha.txt"
+        alpha.write_text("one\n", encoding="utf-8")
+        self.assertEqual(capture.poll_once(conn, repo, git_dir), [1])
+
+        alpha.write_text("two\n", encoding="utf-8")
+        self.assertEqual(capture.poll_once(conn, repo, git_dir), [2])
+
+        alpha.unlink()
+        self.assertEqual(capture.poll_once(conn, repo, git_dir), [3])
+
+        rows = conn.execute(
+            "SELECT operation, path, fidelity FROM capture_events ORDER BY seq"
+        ).fetchall()
+        self.assertEqual([row["operation"] for row in rows], ["create", "modify", "delete"])
+        self.assertTrue(all(row["fidelity"] == "rescan" for row in rows))
+
+    def test_daemon_processes_flush_sleep_and_stop_requests(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        daemon = load_example_module("snapshot_daemon_test", "snapshot-daemon.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        snapshot_state.request_flush(conn, "wake", True, note="wake")
+        snapshot_state.request_flush(conn, "flush", False, note="flush")
+        snapshot_state.request_flush(conn, "sleep", False, note="sleep")
+        snapshot_state.request_flush(conn, "stop", False, note="stop")
+
+        replay_calls: list[tuple[Path, Path]] = []
+        original = daemon._replay_pending
+        daemon._replay_pending = lambda _conn, repo_root, git_dir: replay_calls.append((repo_root, git_dir)) or 1
+        try:
+            sleeping = daemon.process_requests(
+                conn,
+                repo,
+                git_dir,
+                sleeping=True,
+                stop_event=threading.Event(),
+            )
+        finally:
+            daemon._replay_pending = original
+
+        self.assertTrue(sleeping)
+        self.assertEqual(len(replay_calls), 2)
+        self.assertTrue(
+            all(
+                row[0]
+                for row in conn.execute(
+                    "SELECT acknowledged_ts FROM flush_requests ORDER BY id"
+                ).fetchall()
+            )
+        )
+
     def test_controller_commands_are_idempotent_and_degrade_cleanly(self) -> None:
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
@@ -339,7 +419,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         )
         self.assertEqual(status.returncode, 0, status.stderr)
         payload = json.loads(status.stdout)
-        self.assertFalse(payload["daemon_script_present"])
+        self.assertTrue(payload["daemon_script_present"])
         self.assertGreaterEqual(payload["flush_requests"], 1)
 
         stop = subprocess.run(
