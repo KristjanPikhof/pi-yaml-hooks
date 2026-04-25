@@ -1133,6 +1133,76 @@ def _replay_pending_events_locked(
     if batch_limit is not None and batch_limit > 0:
         pending = pending[:batch_limit]
 
+    # ----- AI / command pre-pass --------------------------------------- #
+    # Decide whether either of the message-generation paths needs op diffs.
+    # When neither is enabled the default-deterministic path must remain
+    # byte-identical to the historical ``build_message`` output, and we
+    # must NOT pay the cost of computing diffs.
+    use_batch_ai = (
+        SNAPSHOTD_AI_ENABLE
+        and bool(OPENAI_API_KEY)
+        and len(pending) <= SNAPSHOTD_AI_MAX_QUEUE_DEPTH
+    )
+    use_command_msg = bool(SNAPSHOTD_COMMIT_MESSAGE_CMD)
+    need_diffs = use_batch_ai or use_command_msg
+
+    # Pre-load ops once per event so the commit loop and the diff pre-pass
+    # share the same data. Existing per-event ops loads inside the loop are
+    # replaced by lookups into this map.
+    ops_by_seq: Dict[int, List[Dict[str, Any]]] = {}
+    for event in pending:
+        ops_by_seq[int(event["seq"])] = [
+            dict(row) for row in load_ops(conn, int(event["seq"]))
+        ]
+
+    diffs_by_event: Dict[int, Dict[int, str]] = {}
+    if need_diffs:
+        for event in pending:
+            seq = int(event["seq"])
+            # Skip diff computation for events that already have a stored
+            # message — the chain will pick that up directly without
+            # consulting AI/command.
+            existing = _event_field(event, "message")
+            if existing:
+                continue
+            diffs_by_event[seq] = compute_diffs_for_event(repo_root, ops_by_seq[seq])
+
+    if use_batch_ai:
+        events_needing_msg: List[Tuple[Any, List[Mapping[str, Any]]]] = [
+            (event, ops_by_seq[int(event["seq"])])
+            for event in pending
+            if not _event_field(event, "message")
+        ]
+        generated: Dict[int, str] = {}
+        if events_needing_msg:
+            try:
+                generated = batch_ai_messages(events_needing_msg, diffs_by_event)
+            except Exception:
+                generated = {}
+        if generated:
+            try:
+                with transaction(conn):
+                    for seq, message in generated.items():
+                        set_event_message(conn, int(seq), message)
+            except Exception:
+                # Persistence failure is never fatal — the same messages are
+                # still available in-memory below via ``generated``, and the
+                # next replay cycle can re-derive any that are missing.
+                pass
+        # Reflect newly-stored messages into the in-memory rows so the
+        # commit loop's ``event["message"]`` lookup sees them without a
+        # second SELECT.
+        if generated:
+            refreshed: List[Any] = []
+            for event in pending:
+                seq = int(event["seq"])
+                stored = _event_field(event, "message")
+                if not stored and seq in generated:
+                    refreshed.append({**dict(event), "message": generated[seq]})
+                else:
+                    refreshed.append(event)
+            pending = refreshed
+
     env = _clean_git_env({"GIT_INDEX_FILE": str(index_path(git_dir))})
 
     try:
