@@ -45,6 +45,12 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess
             "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test User",
             "GIT_COMMITTER_EMAIL": "test@example.com",
+            # Pin global/system config to /dev/null so a developer's local
+            # .gitconfig (signing keys, conditional includes, hooks paths,
+            # commit templates, signed pushes) cannot bleed into test runs
+            # and cause spurious failures or, worse, false positives.
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
         }
     )
     if env:
@@ -56,6 +62,7 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=proc_env,
+        timeout=_SUBPROC_TIMEOUT,
     )
 
 
