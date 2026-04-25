@@ -225,15 +225,22 @@ Unit tests:
 - branch-generation rejection
 - replay produces the expected tree per event
 - duplicate daemonctl calls are idempotent
+- `test_stop_flush_is_idempotent`: stop --flush is safe to call more than once
+  (to be added by test-lane, task a1a9383a-...)
 
-Integration tests:
+Integration tests (polling/rescan backend — shipped):
 
 - `write` tool creates one commit
 - `edit` tool creates one commit
-- bash redirection create/modify/delete sequence is captured by native watcher
 - daemon sleeps on `session.idle` and wakes on `tool.before.*`
+
+Integration tests (future — native watcher backend not yet shipped):
+
+- bash redirection create/modify/delete sequence is captured by native watcher
+  *(future work; requires native watcher backend — see section 4)*
 - `session.deleted` flushes without double-running when PI emits both shutdown
-  and before-switch
+  and before-switch *(future work; idempotency covered by
+  `test_stop_flush_is_idempotent` above once added)*
 
 Manual PI smoke:
 
