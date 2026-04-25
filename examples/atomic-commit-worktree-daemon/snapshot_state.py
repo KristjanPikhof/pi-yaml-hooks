@@ -817,6 +817,25 @@ def load_pending_events(conn: sqlite3.Connection, branch_ref: str) -> List[sqlit
     ).fetchall()
 
 
+def set_event_message(conn: sqlite3.Connection, seq: int, message: str) -> None:
+    """Persist an AI-generated commit message for a still-pending event.
+
+    Idempotent: only writes when ``message`` is currently NULL so a retry
+    cannot stomp on a previously-stored value, and only touches rows still
+    in the ``pending`` state so an event already in publish/published is
+    never modified after the fact. Errors are the caller's problem — this
+    helper is a single, narrow UPDATE.
+    """
+    if not message:
+        return
+    conn.execute(
+        """UPDATE capture_events
+           SET message=?
+           WHERE seq=? AND state='pending' AND message IS NULL""",
+        (message, seq),
+    )
+
+
 def load_ops(conn: sqlite3.Connection, seq: int) -> List[sqlite3.Row]:
     return conn.execute(
         """SELECT ord, op, path, old_path, before_oid, before_mode, after_oid, after_mode, fidelity
