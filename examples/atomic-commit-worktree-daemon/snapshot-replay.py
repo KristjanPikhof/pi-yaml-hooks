@@ -133,14 +133,12 @@ def _touched_paths(ops: List[Dict[str, Any]]) -> List[str]:
 def _live_index_entries(repo_root: Path, paths: List[str]) -> Dict[str, Tuple[str, str]]:
     if not paths:
         return {}
-    env = os.environ.copy()
-    env.pop("GIT_INDEX_FILE", None)
     proc = subprocess.run(
         ["git", "ls-files", "-s", "-z", "--", *paths],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=env,
+        env=_clean_git_env(),
     )
     if proc.returncode != 0:
         return {}
