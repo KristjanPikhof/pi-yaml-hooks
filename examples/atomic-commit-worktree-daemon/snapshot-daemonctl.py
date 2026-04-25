@@ -78,7 +78,6 @@ def _spawn_daemon(repo_root: Path, git_dir: Path) -> Optional[subprocess.Popen[s
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
-        text=True,
     )
 
 
