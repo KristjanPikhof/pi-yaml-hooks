@@ -295,26 +295,10 @@ def _record_flush(
     return request_id, signaled, ctx["branch_ref"], daemon_present, warning
 
 
-class FlushFailedError(RuntimeError):
-    """Raised when the daemon ack reports a capture/replay failure."""
-
-    def __init__(self, note: Optional[str]) -> None:
-        super().__init__(note or "daemon reported flush failure")
-        self.note = note
-
-
 def _await_flush_ack(conn, request_id: int) -> None:
-    """Wait for ack outside ``control_lock``; raise on timeout/failure.
-
-    A ``FlushFailedError`` is raised when the row arrives with a failure
-    status (or a note that encodes a failure from older daemons) so the
-    blocking flush can return non-zero rather than mis-report success.
-    """
+    """Wait for ack outside ``control_lock``; raise on timeout/absent daemon."""
     if not _wait_for_ack(conn, request_id):
         raise TimeoutError("flush timed out waiting for daemon ack")
-    status, note = _ack_outcome(conn, request_id)
-    if status == "failed":
-        raise FlushFailedError(note)
 
 
 def cmd_wake(repo_root: Path, git_dir: Path) -> int:
@@ -373,25 +357,6 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
             _await_flush_ack(conn, request_id)
         except TimeoutError as exc:
             print(str(exc), file=sys.stderr)
-            return 2
-        except FlushFailedError as exc:
-            # The daemon acked the row but capture/replay raised. Returning
-            # ok=true here would silently swallow data-loss; surface the
-            # failure with a non-zero exit so callers can react.
-            print(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "action": "flush",
-                        "request_id": request_id,
-                        "branch": branch,
-                        "status": "failed",
-                        "error": exc.note or str(exc),
-                    },
-                    indent=2,
-                ),
-                file=sys.stderr,
-            )
             return 2
         print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": branch}, indent=2))
         return 0
@@ -452,12 +417,19 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
             ctx = _light_context(repo_root)
             flush_request_id: Optional[int] = None
             flush_warning: Optional[str] = None
-            if flush_first:
-                flush_request_id, _signaled, _branch, _present, flush_warning = (
-                    _record_flush(repo_root, conn, non_blocking=False)
-                )
-            request_id = request_flush(conn, "stop", False, note="stop requested")
+            # Verify daemon presence before recording the pre-stop flush row.
+            # Otherwise a `stop --flush` against an already-dead daemon
+            # leaves an unacknowledged row stranded forever — that row keeps
+            # accumulating in flush_requests and confuses status counters.
             target = _verified_target(conn)
+            if flush_first:
+                if target is not None:
+                    flush_request_id, _signaled, _branch, _present, flush_warning = (
+                        _record_flush(repo_root, conn, non_blocking=False)
+                    )
+                else:
+                    flush_warning = "no daemon present; skipping pre-stop flush"
+            request_id = request_flush(conn, "stop", False, note="stop requested")
             row = _daemon_row(conn)
             cached_token = row.get("daemon_token")
             cached_fingerprint = row.get("daemon_fingerprint")
@@ -472,8 +444,6 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
             except TimeoutError as exc:
                 print(str(exc), file=sys.stderr)
             except FlushFailedError as exc:
-                # Best-effort drain on stop: log the failure and proceed with
-                # the actual stop request rather than aborting.
                 print(
                     f"flush prior to stop reported failure: {exc.note or exc}",
                     file=sys.stderr,
