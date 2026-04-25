@@ -793,11 +793,24 @@ def request_flush(conn: sqlite3.Connection, command: str, non_blocking: bool, no
     return int(cur.lastrowid or 0)
 
 
-def acknowledge_flush(conn: sqlite3.Connection, request_id: int, note: str = "") -> None:
+def acknowledge_flush(
+    conn: sqlite3.Connection,
+    request_id: int,
+    note: str = "",
+    status: str = "acknowledged",
+) -> None:
+    """Mark a flush request acknowledged with an outcome status.
+
+    ``status`` distinguishes successful acks ('acknowledged') from failure
+    ('failed') so blocking controllers can return non-zero when the daemon
+    raises during capture/replay rather than silently reporting ``ok=true``.
+    Older callers that omit ``status`` continue to record the historical
+    'acknowledged' value, keeping pre-existing rows backward compatible.
+    """
     conn.execute(
-        """UPDATE flush_requests SET acknowledged_ts=?, completed_ts=?, status='acknowledged', note=COALESCE(NULLIF(?, ''), note)
+        """UPDATE flush_requests SET acknowledged_ts=?, completed_ts=?, status=?, note=COALESCE(NULLIF(?, ''), note)
            WHERE id=?""",
-        (time.time(), time.time(), note, request_id),
+        (time.time(), time.time(), status, note, request_id),
     )
 
 
