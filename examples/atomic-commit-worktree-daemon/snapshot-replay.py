@@ -403,6 +403,42 @@ def compute_diffs_for_event(
     return diffs
 
 
+def _redacted_op_payload(
+    op: Mapping[str, Any], idx: int, diffs: Mapping[int, str]
+) -> Tuple[Dict[str, Any], bool]:
+    """Build a single op payload, scrubbing path/old_path/diff when sensitive.
+
+    Returns ``(entry, sensitive)`` so callers can also drop the original
+    path from any sibling ``paths`` array. The diff is replaced with
+    ``"<redacted: sensitive path>"`` regardless of whether
+    ``compute_diffs_for_event`` already redacted it — this keeps the
+    helper standalone for the ``ai_message_via_command`` path which
+    does not flow through the diff loop's per-op redaction.
+    """
+    sensitive = _path_matches_sensitive(op.get("path")) or (
+        op.get("op") == "rename" and _path_matches_sensitive(op.get("old_path"))
+    )
+    if sensitive:
+        return (
+            {
+                "op": op.get("op"),
+                "path": "<redacted-path>",
+                "old_path": "<redacted-path>" if op.get("old_path") else None,
+                "diff": "<redacted: sensitive path>",
+            },
+            True,
+        )
+    return (
+        {
+            "op": op.get("op"),
+            "path": op.get("path"),
+            "old_path": op.get("old_path"),
+            "diff": diffs.get(idx, ""),
+        },
+        False,
+    )
+
+
 def _basename(path: Optional[str]) -> str:
     if not path:
         return ""
