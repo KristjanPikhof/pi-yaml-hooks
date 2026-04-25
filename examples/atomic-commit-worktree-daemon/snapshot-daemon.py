@@ -175,7 +175,7 @@ def _safe_capture_then_replay(
     return the error string so callers can ack with the failure note.
     """
     try:
-        return _capture_then_replay(conn, repo_root, git_dir), None
+        published = _capture_then_replay(conn, repo_root, git_dir)
     except Exception as exc:  # noqa: BLE001 — boundary catch is intentional
         try:
             snapshot_state.set_daemon_meta(conn, "last_replay_error", str(exc))
@@ -183,6 +183,17 @@ def _safe_capture_then_replay(
         except Exception:
             pass
         return 0, str(exc)
+    # poll_once may have caught a typed internal failure (bootstrap,
+    # head-baseline, check-ignore) without raising and recorded it in
+    # ``last_capture_error``. Surface that here so blocking flushes ack
+    # with a non-zero status note instead of silently succeeding.
+    if _poll_once_wrote_internal_error(conn):
+        internal_err = (
+            snapshot_state.get_daemon_meta(conn, "last_capture_error")
+            or "internal capture error"
+        )
+        return published, internal_err
+    return published, None
 
 
 def process_requests(
