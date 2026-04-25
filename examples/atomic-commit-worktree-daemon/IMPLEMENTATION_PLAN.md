@@ -97,8 +97,10 @@ Responsibilities:
 - maintain heartbeat and pid in SQLite
 - own the watcher backend lifecycle
 - maintain a shadow tree for paths under the repo
-- write immutable capture events to SQLite
-- notify the replay worker after new events
+- write capture events to SQLite (event rows are mutated post-publish to record
+  `state` and `commit_oid`, so they are not immutable)
+- run replay in-process after new events; there is no separate replay worker
+  process to notify
 - sleep after idle by stopping active watchers while retaining process state
 - wake quickly before the next tool runs
 
