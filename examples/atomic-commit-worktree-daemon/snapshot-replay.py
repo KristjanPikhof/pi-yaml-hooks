@@ -359,7 +359,12 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
         return
 
     if reason is None:
-        reason = "branch moved during publish recovery"
+        if object_missing_exc is not None:
+            # The ref moved AND the recorded target cannot be resolved —
+            # the queue is genuinely corrupt, not just rolled back.
+            reason = f"object_missing during publish recovery: {object_missing_exc}"
+        else:
+            reason = "branch moved during publish recovery"
 
     conn.execute(
         "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
