@@ -1878,6 +1878,14 @@ def _replay_pending_events_locked(
             parent = commit_oid
             published += 1
             processed += 1
+            # ``_reconcile_live_index`` shells out to ``git reset`` so it
+            # cannot live inside the transaction, but the surrounding
+            # SQLite writes pair the row settlement with the
+            # publish_state update. A crash between mark_event_published
+            # and the published transition is recovered by the
+            # ``recover_publishing`` path on next startup; the explicit
+            # transaction here just removes that as a normal-operation
+            # failure mode.
             mark_event_published(conn, seq=int(event["seq"]), commit_oid=commit_oid)
             _reconcile_live_index(
                 repo_root,
@@ -1887,15 +1895,16 @@ def _replay_pending_events_locked(
                 captured_index=captured_index,
                 conn=conn,
             )
-            update_publish_state(
-                conn,
-                event_seq=int(event["seq"]),
-                branch_ref=branch,
-                branch_generation=int(ctx["branch_generation"]),
-                source_head=event_parent,
-                target_commit_oid=commit_oid,
-                status="published",
-            )
+            with transaction(conn):
+                update_publish_state(
+                    conn,
+                    event_seq=int(event["seq"]),
+                    branch_ref=branch,
+                    branch_generation=int(ctx["branch_generation"]),
+                    source_head=event_parent,
+                    target_commit_oid=commit_oid,
+                    status="published",
+                )
 
         # Remaining = total pending at start - rows we touched in this
         # batch. Even when ``processed < batch_size`` (an early ``break``
