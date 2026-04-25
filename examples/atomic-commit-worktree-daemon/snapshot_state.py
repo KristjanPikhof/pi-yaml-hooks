@@ -217,7 +217,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS flush_requests(
                id INTEGER PRIMARY KEY AUTOINCREMENT,
-               request_token TEXT NOT NULL,
                command TEXT NOT NULL,
                non_blocking INTEGER NOT NULL DEFAULT 0,
                requested_ts REAL NOT NULL,
