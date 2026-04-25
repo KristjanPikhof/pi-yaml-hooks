@@ -651,6 +651,9 @@ def acknowledge_flush(conn: sqlite3.Connection, request_id: int, note: str = "")
     )
 
 
+_UNSET = object()
+
+
 def set_daemon_state(
     conn: sqlite3.Connection,
     *,
@@ -659,20 +662,45 @@ def set_daemon_state(
     branch_ref: Optional[str] = None,
     branch_generation: Optional[int] = None,
     note: str = "",
+    daemon_token: Any = _UNSET,
 ) -> None:
-    conn.execute(
-        """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
-               branch_generation=?, note=?, updated_ts=? WHERE id=1""",
-        (
-            pid,
-            mode,
-            time.time(),
-            branch_ref,
-            int(branch_generation) if branch_generation is not None else None,
-            note,
-            time.time(),
-        ),
-    )
+    """Update the singleton daemon_state row.
+
+    ``daemon_token`` is an opaque identity token written by the daemon at
+    startup; controllers must verify it before sending signals, so PID reuse
+    by an unrelated process cannot be addressed by the daemonctl commands.
+    When omitted (default), the existing token is preserved; pass ``None``
+    to clear it, or a string to replace it.
+    """
+    if daemon_token is _UNSET:
+        conn.execute(
+            """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
+                   branch_generation=?, note=?, updated_ts=? WHERE id=1""",
+            (
+                pid,
+                mode,
+                time.time(),
+                branch_ref,
+                int(branch_generation) if branch_generation is not None else None,
+                note,
+                time.time(),
+            ),
+        )
+    else:
+        conn.execute(
+            """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
+                   branch_generation=?, note=?, daemon_token=?, updated_ts=? WHERE id=1""",
+            (
+                pid,
+                mode,
+                time.time(),
+                branch_ref,
+                int(branch_generation) if branch_generation is not None else None,
+                note,
+                daemon_token,
+                time.time(),
+            ),
+        )
 
 
 def heartbeat_alive(pid: int) -> bool:
