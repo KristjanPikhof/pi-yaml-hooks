@@ -835,7 +835,7 @@ def batch_ai_messages(
             f"{json.dumps({'events': batch_events}, ensure_ascii=False)}"
         )
         payload = {
-            "model": OPENAI_MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": BATCH_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
