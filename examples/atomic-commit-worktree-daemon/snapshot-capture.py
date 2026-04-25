@@ -231,11 +231,36 @@ def _is_sensitive(rel: str) -> bool:
 # so a branch swap or generation bump invalidates the cache: a same-
 # (size, mtime_ns) file whose contents differ across branches cannot reuse a
 # stale OID from the prior branch.
+#
+# We hold *at most one* entry per repo at any time. Without the eviction
+# step in ``_evict_stale_cache_keys`` this dict would grow unboundedly across
+# branch swaps and rebases (every new generation adds a key, the prior key
+# never falls out), wedging a long-running daemon's RSS open. The active
+# (branch, generation) entry is the only one a same-tick scan would hit, so
+# discarding the rest is safe.
 _STAT_CACHE: Dict[Tuple[str, str, int], Dict[str, Tuple[int, int, str]]] = {}
 
 
 def _cache_key(repo_root: Path, branch_ref: str, branch_generation: int) -> Tuple[str, str, int]:
     return (str(repo_root), branch_ref, int(branch_generation))
+
+
+def _evict_stale_cache_keys(active_key: Tuple[str, str, int]) -> None:
+    """Drop every cache entry for ``active_key``'s repo other than itself.
+
+    Called on each scan so a branch swap or generation bump does not leave
+    the prior entry resident forever. The active key may not yet exist in
+    the dict (first scan after eviction) — that's fine, the next
+    ``setdefault`` will populate it.
+    """
+    repo_root_str = active_key[0]
+    stale = [
+        key
+        for key in list(_STAT_CACHE.keys())
+        if key[0] == repo_root_str and key != active_key
+    ]
+    for key in stale:
+        _STAT_CACHE.pop(key, None)
 
 
 def _is_under_nested_repo(root_path: Path, name: str) -> bool:
