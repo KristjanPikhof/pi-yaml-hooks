@@ -252,6 +252,7 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             daemon_token=daemon_token,
         )
         conn.commit()
+        last_prune = 0.0
 
         while not stop_event.is_set():
             if wake_event.is_set():
