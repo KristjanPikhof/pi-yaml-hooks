@@ -11,6 +11,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
+
+
+# Default subprocess timeout for any daemonctl/replay invocation. Unbounded
+# subprocess.run calls in tests are a CI hazard: a wedged daemon would hang
+# the suite indefinitely. 30s is generous enough for cold cache / slow CI
+# but well under the per-test sentinel.
+_SUBPROC_TIMEOUT = 30.0
 
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
