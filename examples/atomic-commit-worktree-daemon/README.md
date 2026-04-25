@@ -415,10 +415,8 @@ and is never touched by this reset.
 - Stale `daemon.lock`: if `start` reports a stale lock and `pgrep -f
   snapshot-daemon.py` confirms no daemon is running, `rm
   <git-dir>/ai-snapshotd/daemon.lock` and re-run `start`.
-- `daemon.db` has grown large or you want a clean slate: stop the daemon with
-  `snapshot-daemonctl.py stop --repo <path>`, delete
-  `<git-dir>/ai-snapshotd/daemon.db`, then `start` again. Published commits
-  remain in git history; only audit rows are reset.
+- `daemon.db` has grown large or you want a clean slate: see
+  ["Cleanup and retention"](#cleanup-and-retention) for the supported reset.
 
 For internal PI SDK research notes and hook architecture observations, see
 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) "Appendix A: PI SDK
