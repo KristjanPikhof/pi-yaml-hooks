@@ -537,8 +537,7 @@ def record_event(
     captured_ts: Optional[float] = None,
 ) -> int:
     captured_ts = time.time() if captured_ts is None else captured_ts
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with transaction(conn):
         cur = conn.execute(
             """INSERT INTO capture_events(branch_ref, branch_generation, base_head, operation,
                    path, old_path, fidelity, captured_ts)
@@ -566,14 +565,7 @@ def record_event(
             )
         for op in ops:
             _update_shadow_path(conn, branch_ref, branch_generation, base_head, fidelity, op)
-        conn.execute("COMMIT")
-        return seq
-    except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.OperationalError:
-            pass
-        raise
+    return seq
 
 
 def _update_shadow_path(
