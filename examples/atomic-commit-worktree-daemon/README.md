@@ -344,7 +344,7 @@ Failures at tier 1 or tier 2 never block a commit or change the event state to `
 | `SNAPSHOTD_COMMIT_MESSAGE_CMD` | unset | Shell command run once per event (parsed with `shlex.split`, not a shell). The event JSON is written to stdin; stdout becomes the commit message. Used as the second-priority fallback when AI is off or produced no result. |
 | `OPENAI_API_KEY` | unset | Required to enable built-in AI mode. Leave unset to keep AI off. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for the chat-completions endpoint. Must start with `https://`; an `http://` value is rejected and AI is skipped for the entire drain cycle. |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | Model name sent in the chat-completions request. |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Model name sent in the chat-completions request. Verify this id against your account's model catalog before relying on AI commit messages; an invalid model id silently falls through to deterministic message generation. |
 | `OPENAI_API_TIMEOUT` | `15.0` | Network timeout in seconds for each OpenAI request (also applied to `SNAPSHOTD_COMMIT_MESSAGE_CMD` subprocess). |
 
 ### How batch AI works
