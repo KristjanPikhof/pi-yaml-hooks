@@ -502,6 +502,12 @@ def bootstrap_shadow(
     if stored_head == base_head:
         return 0
 
+    # If ``git ls-tree`` fails we MUST NOT proceed: the previous code path
+    # let an empty entries dict flow into ``replace_shadow_paths`` and
+    # stamped the bootstrap marker, which on next poll classified every
+    # tracked file as a fresh ``create`` (a flood of spurious events that
+    # then got committed). Leave shadow + marker untouched and propagate
+    # the failure; the daemon main loop will retry on the next tick.
     entries = _head_tree_entries(repo_root, base_head, conn=conn)
     file_entries = {
         rel: meta for rel, meta in entries.items() if str(meta.get("mode")) != "160000"
@@ -522,6 +528,8 @@ def bootstrap_shadow(
             for row in file_entries.values()
         ),
     )
+    # Only set the marker AFTER the shadow rewrite succeeded so a partial
+    # failure cannot leave a stamped-but-empty baseline behind.
     snapshot_state.set_daemon_meta(conn, marker, base_head)
     return len(file_entries)
 
