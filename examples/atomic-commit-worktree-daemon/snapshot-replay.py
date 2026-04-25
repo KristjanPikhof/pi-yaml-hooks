@@ -465,6 +465,7 @@ def _replay_pending_events_locked(
         state = dict(snapshot_state_for_index(repo_root, env))
         parent = head
         published = 0
+        processed = 0
 
         for event in pending:
             ops = [dict(row) for row in load_ops(conn, int(event["seq"]))]
@@ -480,8 +481,41 @@ def _replay_pending_events_locked(
                     error="stale branch generation",
                 )
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", ("stale branch generation", int(event["seq"])))
+                processed += 1
                 continue
-            if not _is_ancestor(repo_root, str(event["base_head"]), head):
+            try:
+                ancestor_ok = _is_ancestor(repo_root, str(event["base_head"]), head)
+            except GitObjectMissing as exc:
+                # The captured ``base_head`` cannot be resolved — typically
+                # because the object store was pruned/corrupted. Surface
+                # the real failure instead of papering over it as a
+                # generic "stale branch ancestry" blocked_conflict.
+                err_text = f"object_missing: {exc}"
+                try:
+                    set_daemon_meta(
+                        conn,
+                        "last_replay_object_missing",
+                        f"seq={int(event['seq'])}: {exc}",
+                    )
+                except Exception:
+                    pass
+                update_publish_state(
+                    conn,
+                    event_seq=int(event["seq"]),
+                    branch_ref=branch,
+                    branch_generation=int(ctx["branch_generation"]),
+                    source_head=head,
+                    target_commit_oid=None,
+                    status="failed",
+                    error=err_text,
+                )
+                conn.execute(
+                    "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
+                    (err_text, int(event["seq"])),
+                )
+                processed += 1
+                continue
+            if not ancestor_ok:
                 update_publish_state(
                     conn,
                     event_seq=int(event["seq"]),
@@ -496,6 +530,7 @@ def _replay_pending_events_locked(
                     "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
                     ("stale branch ancestry", int(event["seq"])),
                 )
+                processed += 1
                 continue
             validation_error = None
             for op in ops:
