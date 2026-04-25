@@ -66,6 +66,23 @@ def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess
     )
 
 
+def _daemonctl(*args: str, timeout: float = _SUBPROC_TIMEOUT) -> subprocess.CompletedProcess[str]:
+    """Invoke ``snapshot-daemonctl.py`` with a hard timeout.
+
+    A wedged daemon must not be allowed to hang the whole test run; every
+    daemon-spawning subprocess gets a finite deadline so a stuck publish
+    lock surfaces as a TimeoutExpired traceback instead of a CI timeout.
+    """
+    script = EXAMPLE_DIR / "snapshot-daemonctl.py"
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
 def init_repo() -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name) / "repo"
