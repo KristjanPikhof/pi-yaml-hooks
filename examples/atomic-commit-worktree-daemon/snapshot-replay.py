@@ -45,6 +45,37 @@ def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     return proc.returncode == 0
 
 
+def _validate_op(op: Dict[str, Any]) -> Optional[str]:
+    """Reject malformed ops before they touch the index.
+
+    After-fields must be set for any op that writes content. Missing values
+    historically fell through to a zero-OID placeholder which corrupted the
+    index; refuse them explicitly instead.
+    """
+    kind = op.get("op")
+    path = op.get("path")
+    if not path:
+        return f"missing path for op {kind!r}"
+    if kind in {"create", "modify", "mode", "symlink", "rename"}:
+        if not op.get("after_oid"):
+            return f"missing after_oid for {kind} {path}"
+        if not op.get("after_mode"):
+            return f"missing after_mode for {kind} {path}"
+    if kind in {"modify", "mode", "symlink", "delete"}:
+        if not op.get("before_oid"):
+            return f"missing before_oid for {kind} {path}"
+        if not op.get("before_mode"):
+            return f"missing before_mode for {kind} {path}"
+    if kind == "rename":
+        if not op.get("old_path"):
+            return f"missing old_path for rename {path}"
+        if not op.get("before_oid"):
+            return f"missing before_oid for rename {path}"
+        if not op.get("before_mode"):
+            return f"missing before_mode for rename {path}"
+    return None
+
+
 def _verify_op(op: Dict[str, Any], state: Dict[str, Tuple[str, str]]) -> Optional[str]:
     kind = op["op"]
     path = op["path"]
