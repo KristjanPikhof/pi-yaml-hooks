@@ -1357,7 +1357,24 @@ def _replay_pending_events_locked(
                         tree_proc.stderr.decode("utf-8", errors="replace").strip()
                     )
                 tree = tree_proc.stdout.decode("utf-8", errors="replace").strip()
-                message = build_message(event, ops)
+                # Fallback chain: stored AI batch message → command output →
+                # deterministic. AI/command failures NEVER mark the event
+                # failed — they silently fall through. With AI off and no
+                # command set, we route to ``build_message`` (the existing
+                # deterministic helper) so the default replay path stays
+                # byte-identical to the pre-integration behavior.
+                stored_message = _event_field(event, "message")
+                if stored_message and str(stored_message).strip():
+                    message = str(stored_message).strip()
+                elif use_command_msg:
+                    diffs = diffs_by_event.get(int(event["seq"]), {})
+                    try:
+                        cmd_msg = ai_message_via_command(event, ops, diffs)
+                    except Exception:
+                        cmd_msg = None
+                    message = cmd_msg if cmd_msg else build_message(event, ops)
+                else:
+                    message = build_message(event, ops)
                 commit_proc = subprocess.run(
                     ["git", "commit-tree", tree, "-p", event_parent],
                     cwd=str(repo_root),
