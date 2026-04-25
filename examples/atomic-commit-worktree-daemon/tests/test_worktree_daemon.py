@@ -704,21 +704,18 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         evil_dir = Path(tmp.name) / "evil"
         evil_dir.mkdir()
 
-        original_git_dir = os.environ.get("GIT_DIR")
-        original_obj_dir = os.environ.get("GIT_OBJECT_DIRECTORY")
-        os.environ["GIT_DIR"] = str(evil_dir)
-        os.environ["GIT_OBJECT_DIRECTORY"] = str(evil_dir / "objects")
-        try:
+        # mock.patch.dict guarantees the prior environment is restored even
+        # if the assertion explodes mid-test — manual save/restore around a
+        # try/finally has bitten us with "test failed but worker env is
+        # poisoned for every subsequent test" before.
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_DIR": str(evil_dir),
+                "GIT_OBJECT_DIRECTORY": str(evil_dir / "objects"),
+            },
+        ):
             oid = snapshot_state.capture_blob_for_text(repo, "sentinel payload\n")
-        finally:
-            if original_git_dir is None:
-                os.environ.pop("GIT_DIR", None)
-            else:
-                os.environ["GIT_DIR"] = original_git_dir
-            if original_obj_dir is None:
-                os.environ.pop("GIT_OBJECT_DIRECTORY", None)
-            else:
-                os.environ["GIT_OBJECT_DIRECTORY"] = original_obj_dir
 
         self.assertEqual(len(oid), 40)
         # Blob must be readable from the real repo, not the evil dir.
