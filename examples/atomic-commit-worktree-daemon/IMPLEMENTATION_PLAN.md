@@ -1,5 +1,8 @@
 # Implementation plan
 
+**Status:** Shipped polling/rescan backend. Native watcher and strict-mount
+mode remain future work; see fidelity table in README.md.
+
 This plan creates a new daemon-based snapshot example for committing every
 stable file change atomically. The first implementation should be conservative:
 watch and replay safely, reject unsupported topologies, and document capture
