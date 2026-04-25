@@ -855,12 +855,12 @@ def batch_ai_messages(
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
             },
             method="POST",
         )
         try:
-            with urllib_request.urlopen(req, timeout=OPENAI_API_TIMEOUT) as resp:
+            with opener.open(req, timeout=api_timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except (urllib_error.URLError, TimeoutError):
             continue
