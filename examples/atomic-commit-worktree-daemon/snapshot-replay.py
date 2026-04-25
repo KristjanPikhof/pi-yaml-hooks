@@ -161,6 +161,7 @@ def _tree_entries(repo_root: Path, rev: str, paths: List[str]) -> Dict[str, Tupl
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=_clean_git_env(),
     )
     if proc.returncode != 0:
         return {}
