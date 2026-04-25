@@ -29,10 +29,7 @@ suite never touches the network.
 
 from __future__ import annotations
 
-import importlib
 import json
-import os
-import sys
 import urllib.error as urllib_error
 from io import BytesIO
 from pathlib import Path
@@ -41,7 +38,6 @@ from typing import Any, Dict, List
 import pytest
 
 from test_worktree_daemon import (
-    EXAMPLE_DIR,
     init_repo,
     load_example_module,
 )
