@@ -361,7 +361,7 @@ The request uses the chat-completions API with a `json_schema` response format; 
 
 ### Redaction
 
-Before any data leaves the machine, paths matching the sensitive glob list are replaced with `<redacted: sensitive path>` in the diff payload. The same glob list that governs capture exclusions (see `SNAPSHOTD_SENSITIVE_GLOBS` above) is applied here. The full default pattern set lives in `_DEFAULT_SENSITIVE_PATTERNS` inside `snapshot-replay.py`. Setting `SNAPSHOTD_SENSITIVE_GLOBS` replaces the built-in list entirely for both capture and message generation.
+Before any data leaves the machine, paths matching the sensitive glob list are replaced with `<redacted: sensitive path>` in the diff payload. The same glob list that governs capture exclusions (see `SNAPSHOTD_SENSITIVE_GLOBS` above) is applied here. The full default pattern set lives in `_DEFAULT_SENSITIVE_PATTERNS` inside `snapshot-replay.py`. Setting `SNAPSHOTD_SENSITIVE_GLOBS` to a non-empty value replaces the built-in list entirely for both capture and message generation; an empty or whitespace-only value falls back to the built-in defaults.
 
 ### Security notes
 
