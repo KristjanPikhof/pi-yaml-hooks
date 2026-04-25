@@ -634,6 +634,7 @@ def _replay_pending_events_locked(
                     error=str(exc),
                 )
                 processed += 1
+                terminated = True
                 break
 
             update_publish_state(
