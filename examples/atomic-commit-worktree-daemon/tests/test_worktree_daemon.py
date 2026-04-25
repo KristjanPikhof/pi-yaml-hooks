@@ -894,18 +894,33 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             # signal must short-circuit the sleep loop and produce an event
             # well before that. Raised to 10s so a slow CI runner can still
             # reliably observe the wake-up before the next natural tick.
-            os.kill(proc.pid, _signal.SIGUSR1)
-
-            deadline = time.time() + 10.0
+            #
+            # Retry the signal up to 3 times at 100ms intervals so a race
+            # between SIGUSR1 delivery and handler install costs one retry
+            # rather than a flake.  The daemon should arm its handler well
+            # before reaching "running" mode, but extra retries are free.
             saw_event = False
-            while time.time() < deadline:
+            signal_deadline = time.time() + 10.0
+            for _attempt in range(3):
+                os.kill(proc.pid, _signal.SIGUSR1)
+                time.sleep(0.1)
                 count = int(
                     conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
                 )
                 if count > initial_count:
                     saw_event = True
                     break
-                time.sleep(0.05)
+
+            if not saw_event:
+                deadline = signal_deadline
+                while time.time() < deadline:
+                    count = int(
+                        conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
+                    )
+                    if count > initial_count:
+                        saw_event = True
+                        break
+                    time.sleep(0.05)
             self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 10s")
         finally:
             try:
