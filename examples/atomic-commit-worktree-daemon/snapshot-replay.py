@@ -369,6 +369,25 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                     ("stale branch ancestry", int(event["seq"])),
                 )
                 continue
+            validation_error = None
+            for op in ops:
+                validation_error = _validate_op(op)
+                if validation_error:
+                    break
+            if validation_error:
+                update_publish_state(
+                    conn,
+                    event_seq=int(event["seq"]),
+                    branch_ref=branch,
+                    branch_generation=int(ctx["branch_generation"]),
+                    source_head=head,
+                    target_commit_oid=None,
+                    status="failed",
+                    error=validation_error,
+                )
+                conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (validation_error, int(event["seq"])))
+                continue
+
             reason = None
             for op in ops:
                 reason = _verify_op(op, state)
@@ -389,6 +408,8 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                 continue
 
             saved = dict(state)
+            touched = _touched_paths(ops)
+            captured_index = _live_index_entries(repo_root, touched)
             for op in ops:
                 _apply_state(op, state)
             try:
