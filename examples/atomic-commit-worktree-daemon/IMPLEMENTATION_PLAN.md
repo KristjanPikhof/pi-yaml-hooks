@@ -241,3 +241,37 @@ Manual PI smoke:
 4. Add strict FUSE/overlay mode only after the daemon contract is stable.
 5. Keep the copyable example marked as polling/rescan fidelity until native
    watcher smoke tests pass on macOS and Linux.
+
+## Appendix A: PI SDK findings
+
+Operating constraints surfaced while wiring the daemon to PI through pi-hooks.
+These are research notes for pi-hooks maintainers, not user-facing docs.
+
+- PI exposes `session_start`, `agent_end`, `session_shutdown`,
+  `session_before_switch`, `tool_call`, and `tool_result`.
+- PI `session_start` includes a reason (`startup`, `reload`, `new`, `resume`, or
+  `fork`). pi-hooks intentionally maps only `startup` and `new` to
+  `session.created`, so daemon start is tied to genuinely new sessions.
+- pi-hooks maps `agent_end` to `session.idle` only when `ctx.isIdle()` is true
+  and `ctx.hasPendingMessages()` is false. `session.idle` is the practical
+  "after idle" hook in PI; PI has no dedicated event beyond `agent_end`.
+- `session.deleted` is intentionally lossy on PI because shutdown also fires
+  for `/new`, `/resume`, and `/fork`. `stop --flush` therefore must be
+  idempotent.
+- `tool.before.*` is the best wake point before command execution.
+- `tool.after.*` and `session.idle` are good flush points, but they are too late
+  to discover transient filesystem states by themselves.
+
+Hook architecture changes to consider (not required for the initial example):
+
+- Expose PI `session_start.reason` in hook payloads, or add `session.resumed`
+  / `session.reloaded`. The daemon currently recovers via `tool.before.*`, but
+  explicit resume would be cleaner.
+- Add a first-class `agent.started` / `agent.ended` hook pair, or expose
+  `agent_end` directly. `session.idle` works for drain today but its name hides
+  that it is tied to agent-loop completion.
+- A daemon-oriented action helper is optional. The existing `bash` action can
+  run `snapshot-daemonctl.py` safely.
+- Do not make `session.idle` async for this use case. The sleep command should
+  be quick and synchronous so queued idle file-change state is consumed only
+  after the drain request succeeds.
