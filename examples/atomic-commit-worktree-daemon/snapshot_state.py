@@ -475,11 +475,15 @@ def _update_shadow_path(
     )
 
 
-def capture_blob_for_text(repo_root: Path, text: str) -> str:
+def capture_blob_for_text(repo_root: Path, text: str, rel_path: Optional[str] = None) -> str:
+    if rel_path is not None and is_sensitive_path(rel_path):
+        raise SensitivePathRefused(f"refusing to hash sensitive path: {rel_path}")
     return _hash_blob(repo_root, text.encode("utf-8"))
 
 
-def capture_blob_for_bytes(repo_root: Path, data: bytes) -> str:
+def capture_blob_for_bytes(repo_root: Path, data: bytes, rel_path: Optional[str] = None) -> str:
+    if rel_path is not None and is_sensitive_path(rel_path):
+        raise SensitivePathRefused(f"refusing to hash sensitive path: {rel_path}")
     return _hash_blob(repo_root, data)
 
 
