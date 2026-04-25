@@ -292,7 +292,7 @@ def _scan_tree(
     # process.
     _evict_stale_cache_keys(active_key)
     cache = _STAT_CACHE.setdefault(active_key, {})
-    next_cache: Dict[str, Tuple[int, int, str]] = {}
+    next_cache: Dict[str, Tuple[int, int, int, int, str]] = {}
     pending_files: List[Tuple[str, Path, os.stat_result]] = []
     candidate_rels: List[str] = []
     submodule_paths = {
