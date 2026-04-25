@@ -208,6 +208,19 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         daemon_token = _new_daemon_token()
 
         ctx = snapshot_state.repo_context(repo_root, git_dir)
+        # Bootstrap can be many seconds on real repos — advertise a
+        # 'bootstrapping' heartbeat now so controllers waiting on readiness
+        # don't time out before the initial shadow scan finishes.
+        snapshot_state.set_daemon_state(
+            conn,
+            pid=os.getpid(),
+            mode="bootstrapping",
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            note="bootstrapping shadow tree",
+            daemon_token=daemon_token,
+        )
+        conn.commit()
         capture.bootstrap_shadow(
             conn,
             repo_root,
