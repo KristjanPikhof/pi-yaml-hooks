@@ -438,7 +438,7 @@ def _head_tree_entries(
     if not head:
         return {}
     proc = subprocess.run(
-        ["git", "ls-tree", "-r", "-z", head],
+        [git_bin(), "ls-tree", "-r", "-z", head],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
