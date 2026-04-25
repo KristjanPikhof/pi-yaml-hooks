@@ -812,14 +812,18 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             else:
                 self.fail("daemon never reported running")
 
-            # Drop a file the daemon would only see after a poll, then signal.
-            (repo / "wake-target.txt").write_text("wake\n", encoding="utf-8")
+            # Let the bootstrap-driven first poll settle before timing the wake.
+            time.sleep(0.5)
             initial_count = int(
                 conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
             )
+            (repo / "wake-target.txt").write_text("wake\n", encoding="utf-8")
+            # POLL_INTERVAL=5 means the natural next poll is ~5s away. The
+            # signal must short-circuit the sleep loop and produce an event
+            # well before that.
             os.kill(proc.pid, _signal.SIGUSR1)
 
-            deadline = time.time() + 5.0
+            deadline = time.time() + 3.0
             saw_event = False
             while time.time() < deadline:
                 count = int(
@@ -829,7 +833,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                     saw_event = True
                     break
                 time.sleep(0.05)
-            self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 5s")
+            self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 3s")
         finally:
             try:
                 os.kill(proc.pid, _signal.SIGTERM)
