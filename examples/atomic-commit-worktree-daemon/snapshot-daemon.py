@@ -221,8 +221,12 @@ def process_requests(
             )
         else:
             flush_note = f"flush acknowledged with error; coalesced={len(flush_ids)}; error={err}"
-        for rid in flush_ids:
-            _ack(conn, rid, flush_note)
+        # Atomic batch: a crash mid-loop must not leave half the coalesced
+        # acks recorded and half pending — controllers would see a flush
+        # "succeed" while their sibling timed out.
+        with snapshot_state.transaction(conn):
+            for rid in flush_ids:
+                _ack(conn, rid, flush_note)
 
     if stop_ids:
         # Stop does its own final capture+replay so any work queued after the
@@ -236,21 +240,25 @@ def process_requests(
             )
         else:
             stop_note = f"stop acknowledged with error; coalesced={len(stop_ids)}; error={err}"
-        for rid in stop_ids:
-            _ack(conn, rid, stop_note)
+        with snapshot_state.transaction(conn):
+            for rid in stop_ids:
+                _ack(conn, rid, stop_note)
         sleeping = True
         stop_event.set()
 
-    for request_id, command in other:
-        if command == "wake":
-            sleeping = False
-            note = "wake acknowledged"
-        elif command == "sleep":
-            sleeping = True
-            note = "sleep acknowledged"
-        else:
-            note = f"ignored command={command}"
-        _ack(conn, request_id, note)
+    if other:
+        # Same all-or-nothing invariant for wake/sleep/unknown commands.
+        with snapshot_state.transaction(conn):
+            for request_id, command in other:
+                if command == "wake":
+                    sleeping = False
+                    note = "wake acknowledged"
+                elif command == "sleep":
+                    sleeping = True
+                    note = "sleep acknowledged"
+                else:
+                    note = f"ignored command={command}"
+                _ack(conn, request_id, note)
     return sleeping
 
 
