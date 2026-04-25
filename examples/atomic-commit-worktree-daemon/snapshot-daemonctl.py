@@ -133,10 +133,26 @@ def cmd_start(repo_root: Path, git_dir: Path) -> int:
         conn.close()
 
 
-def _signal_daemon(conn, sig: signal.Signals) -> bool:
+def _signal_daemon(conn, sig: signal.Signals, expected_token: Optional[str] = None) -> bool:
+    """Send ``sig`` to the recorded daemon pid, guarding against PID reuse.
+
+    The daemon writes a random ``daemon_token`` into daemon_state on startup.
+    If ``expected_token`` is passed, the row must still advertise that token
+    before we signal — otherwise a recycled PID belonging to an unrelated
+    process could receive our signal. When no expected token is supplied we
+    fall back to the current row's token (caller-less flows like SIGUSR1
+    wake-ups that just re-read state).
+    """
     row = _daemon_row(conn)
     pid = int(row.get("pid") or 0)
     if pid <= 0 or not heartbeat_alive(pid):
+        return False
+    row_token = row.get("daemon_token")
+    if expected_token is not None and row_token != expected_token:
+        return False
+    if row_token is None:
+        # No identity on record — refuse rather than risk signaling an
+        # unrelated process that happens to share the pid.
         return False
     try:
         os.kill(pid, sig)
