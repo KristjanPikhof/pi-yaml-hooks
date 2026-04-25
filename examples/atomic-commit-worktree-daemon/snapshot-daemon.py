@@ -128,6 +128,12 @@ def _heartbeat(conn, pid: int, mode: str, ctx: Dict[str, Any], note: str = "") -
     )
 
 
+def _new_daemon_token() -> str:
+    return hashlib.sha256(
+        f"{uuid.uuid4()}|{os.getpid()}|{time.time_ns()}".encode("utf-8")
+    ).hexdigest()
+
+
 def run_daemon(repo_root: Path, git_dir: Path) -> int:
     conn = snapshot_state.ensure_state(git_dir)
     lock_path = snapshot_state.lock_path(git_dir)
@@ -139,7 +145,19 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         try:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return 0
+            # Another daemon holds the flock. Surface this distinctly so the
+            # controller can distinguish "peer running" from "started cleanly".
+            snapshot_state.set_daemon_state(
+                conn,
+                pid=os.getpid(),
+                mode="lock-contended",
+                note="peer daemon holds flock",
+                daemon_token=_new_daemon_token(),
+            )
+            conn.commit()
+            return EX_TEMPFAIL
+
+        daemon_token = _new_daemon_token()
 
         ctx = snapshot_state.repo_context(repo_root, git_dir)
         capture.bootstrap_shadow(
@@ -164,7 +182,15 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         signal.signal(signal.SIGUSR1, _wake)
 
         sleeping = False
-        _heartbeat(conn, os.getpid(), "running", ctx, note="daemon started")
+        snapshot_state.set_daemon_state(
+            conn,
+            pid=os.getpid(),
+            mode="running",
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            note="daemon started",
+            daemon_token=daemon_token,
+        )
         conn.commit()
 
         while not stop_event.is_set():
