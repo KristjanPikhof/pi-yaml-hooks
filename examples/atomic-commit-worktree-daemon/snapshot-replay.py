@@ -135,58 +135,80 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-SNAPSHOTD_AI_ENABLE = _env_truthy("SNAPSHOTD_AI_ENABLE")
-SNAPSHOTD_AI_MAX_QUEUE_DEPTH = _env_int("SNAPSHOTD_AI_MAX_QUEUE_DEPTH", 2, lo=0)
-SNAPSHOTD_AI_CHUNK_SIZE = _env_int("SNAPSHOTD_AI_CHUNK_SIZE", 20, lo=1, hi=100)
-SNAPSHOTD_COMMIT_MESSAGE_CMD = os.environ.get("SNAPSHOTD_COMMIT_MESSAGE_CMD", "").strip()
-
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
-OPENAI_API_TIMEOUT = _env_float("OPENAI_API_TIMEOUT", 15.0)
+def _ai_enable() -> bool:
+    return _env_truthy("SNAPSHOTD_AI_ENABLE")
 
 
-# Default-deny redaction list. Matches snapshot-worker semantics: an empty
-# override is ignored and the safe baseline still applies. Operators can
-# extend or replace via ``SNAPSHOTD_SENSITIVE_GLOBS`` (comma-separated).
-_DEFAULT_SENSITIVE_PATTERNS: Tuple[str, ...] = (
-    ".env",
-    ".env.*",
-    "**/.env",
-    "**/.env.*",
-    "**/id_rsa*",
-    "**/*.pem",
-    "**/*.key",
-    "**/*.p12",
-    "**/*.pfx",
-    "**/secrets/*",
-    "**/credentials*",
-)
+def _ai_max_queue_depth() -> int:
+    return _env_int("SNAPSHOTD_AI_MAX_QUEUE_DEPTH", 2, lo=0)
 
 
-def _sensitive_patterns() -> Tuple[str, ...]:
-    override = os.environ.get("SNAPSHOTD_SENSITIVE_GLOBS")
-    if override is None or not override.strip():
-        return _DEFAULT_SENSITIVE_PATTERNS
-    parsed = tuple(p.strip() for p in override.split(",") if p.strip())
-    return parsed or _DEFAULT_SENSITIVE_PATTERNS
+def _ai_chunk_size() -> int:
+    return _env_int("SNAPSHOTD_AI_CHUNK_SIZE", 20, lo=1, hi=100)
+
+
+def _commit_message_cmd() -> str:
+    return os.environ.get("SNAPSHOTD_COMMIT_MESSAGE_CMD", "").strip()
+
+
+def _openai_api_key() -> str:
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
+def _openai_base_url() -> str:
+    return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+
+def _openai_model() -> str:
+    return os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+
+
+def _openai_api_timeout() -> float:
+    return _env_float("OPENAI_API_TIMEOUT", 15.0)
+
+
+def _ai_max_blob_bytes() -> int:
+    """Per-call cap on cat-file blob bodies in the AI/diff pre-pass.
+
+    Defaults to 1 MiB. Anything larger is replaced with the
+    ``<oversized>`` sentinel so a giant binary cannot blow process
+    memory or balloon the OpenAI prompt.
+    """
+    return _env_int("SNAPSHOTD_AI_MAX_BLOB_BYTES", 1 << 20, lo=0)
+
+
+# Module-level constants captured at import time exist only to keep the
+# existing test contract (which reloads the module after monkeypatching
+# env). Production helpers below always call the per-call helpers above
+# so a live env change is observed without reimport.
+SNAPSHOTD_AI_ENABLE = _ai_enable()
+SNAPSHOTD_AI_MAX_QUEUE_DEPTH = _ai_max_queue_depth()
+SNAPSHOTD_AI_CHUNK_SIZE = _ai_chunk_size()
+SNAPSHOTD_COMMIT_MESSAGE_CMD = _commit_message_cmd()
+
+OPENAI_API_KEY = _openai_api_key()
+OPENAI_BASE_URL = _openai_base_url()
+OPENAI_MODEL = _openai_model()
+OPENAI_API_TIMEOUT = _openai_api_timeout()
+
+
+# Sensitive blob sentinel. Returned by ``batch_cat_file`` for any blob
+# whose declared size exceeds the per-call cap; the diff renderer then
+# emits the standard ``<binary content changed>`` marker so downstream
+# code never sees the raw body.
+_OVERSIZED_BLOB: bytes = b"<oversized>"
 
 
 def _path_matches_sensitive(path: Optional[str]) -> bool:
+    """Compatibility shim around ``snapshot_state.is_sensitive_path``.
+
+    Kept so existing tests that import the helper by name continue to
+    pass while the canonical implementation lives in ``snapshot_state``
+    (single source of truth for the default-deny glob list).
+    """
     if not path:
         return False
-    from fnmatch import fnmatch
-
-    for pattern in _sensitive_patterns():
-        if fnmatch(path, pattern):
-            return True
-        # gitignore-style ``**/X`` should also match the bare top-level ``X``;
-        # fnmatch lacks recursive ``**`` semantics so pair the two forms.
-        if pattern.startswith("**/"):
-            tail = pattern[3:]
-            if tail and fnmatch(path, tail):
-                return True
-    return False
+    return is_sensitive_path(path)
 
 
 AI_SYSTEM_PROMPT = (
