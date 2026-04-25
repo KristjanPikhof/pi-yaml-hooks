@@ -2,12 +2,36 @@
 #
 # Copy this file into <project>/.pi/hook/hooks.yaml (preferred) or
 # <project>/.pi/hooks.yaml, trust the repo/worktree anchor, then replace
-# <example-dir> with the real absolute path to this example directory.
+# every <example-dir> placeholder with the real absolute path to this
+# example directory.
+#
+# **Setup validation:** if you forget to substitute <example-dir>, every
+# hook will fail with `python3: can't open file '<example-dir>/...'` at
+# runtime. Recommended pre-flight check:
+#
+#   grep -n '<example-dir>' .pi/hook/hooks.yaml
+#
+# should print nothing once the file is correctly configured.
 #
 # This is an opt-in example pack, not a built-in pi-hooks product feature.
 # It uses bash actions only; PI command: actions are unsupported.
 
 hooks:
+  # Safety check: run FIRST on session.created so a mis-configured copy fails
+  # loudly instead of silently passing the literal placeholder to python3.
+  # Exit 2 is the pi-hooks "hook error" code; it surfaces a visible message
+  # in the PI session and blocks the remaining session.created hooks.
+  - id: snapshot-daemon-preflight
+    event: session.created
+    actions:
+      - bash: |
+          if grep -qF '<example-dir>' "$PI_HOOK_FILE" 2>/dev/null || grep -qF '<example-dir>' "${BASH_SOURCE[0]}" 2>/dev/null; then
+            echo "ERROR: hooks.yaml still contains the literal <example-dir> placeholder." >&2
+            echo "Replace every <example-dir> with the absolute path to this example directory" >&2
+            echo "before using this hook pack." >&2
+            exit 2
+          fi
+
   # Start the per-worktree daemon for genuinely new/startup sessions.
   - id: snapshot-daemon-start
     event: session.created
