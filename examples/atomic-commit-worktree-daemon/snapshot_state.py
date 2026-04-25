@@ -628,6 +628,13 @@ def capture_blob_for_bytes(repo_root: Path, data: bytes, rel_path: Optional[str]
 
 
 def current_branch(repo_root: Path) -> Optional[str]:
+    """Resolve HEAD to a symbolic ref, or ``None`` for detached/unborn HEAD.
+
+    Distinguishes git's documented "not a symbolic ref" exit (returncode 1)
+    from any other failure mode — a transient lock contention, broken HEAD,
+    or permissions error should bubble up rather than silently pose as a
+    detached HEAD and confuse downstream callers.
+    """
     proc = subprocess.run(
         ["git", "symbolic-ref", "-q", "HEAD"],
         cwd=str(repo_root),
@@ -635,8 +642,13 @@ def current_branch(repo_root: Path) -> Optional[str]:
         stderr=subprocess.PIPE,
         env=_clean_git_env(),
     )
-    if proc.returncode != 0:
+    if proc.returncode == 1:
         return None
+    if proc.returncode != 0:
+        raise RuntimeError(
+            proc.stderr.decode("utf-8", errors="replace").strip()
+            or f"git symbolic-ref failed with exit {proc.returncode}"
+        )
     out = proc.stdout.decode("utf-8", errors="replace").strip()
     return out or None
 
