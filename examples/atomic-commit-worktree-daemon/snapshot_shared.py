@@ -435,6 +435,17 @@ def ensure_branch_registry(
 
         current_token = branch_incarnation_token(repo_root, branch_ref)
 
+        # Bump generation contract:
+        #   1. Non-fast-forward HEAD movement (rebase / reset / force-push):
+        #      detected by previous_head != head AND previous_head is not an
+        #      ancestor of head. A pure fast-forward keeps generation steady
+        #      so still-pending capture_events remain valid.
+        #   2. Branch ref disappearing entirely (delete + recreate window).
+        #   3. Ownership transfer to a different worktree git dir.
+        # The incarnation_token is now content-derived (rev-parse hash); it is
+        # persisted for diagnostic visibility but no longer triggers a bump on
+        # its own — that previously orphaned events on every commit because
+        # the mtime-based token mutated even for fast-forwards.
         bump_generation = False
         if (
             previous_head
@@ -442,7 +453,11 @@ def ensure_branch_registry(
             and not is_ancestor(repo_root, previous_head, head)
         ):
             bump_generation = True
-        if previous_token and current_token != previous_token:
+        if (
+            previous_token
+            and previous_token != "missing"
+            and current_token == "missing"
+        ):
             bump_generation = True
         if claim_owner and owner_git_dir and Path(owner_git_dir).resolve() != git_dir:
             bump_generation = True
