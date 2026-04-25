@@ -660,25 +660,38 @@ def _apply_event(conn, ctx: Dict[str, Any], event: Dict[str, Any]) -> int:
 
 def poll_once(conn, repo_root: Path, git_dir: Path) -> List[int]:
     ctx = snapshot_state.repo_context(repo_root, git_dir)
-    bootstrap_shadow(
-        conn,
-        repo_root,
-        branch_ref=ctx["branch_ref"],
-        branch_generation=ctx["branch_generation"],
-        base_head=ctx["base_head"],
-    )
+    try:
+        bootstrap_shadow(
+            conn,
+            repo_root,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+    except _HeadTreeReadFailed as exc:
+        # ``git ls-tree`` failed before we had a usable baseline. Leaving
+        # the shadow + marker untouched is the whole point of raising —
+        # we've already recorded ``last_bootstrap_error`` from inside
+        # ``_head_tree_entries``; just bail without emitting events.
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", f"bootstrap: {exc}")
+        return []
     shadow = _shadow_map(
         conn,
         branch_ref=ctx["branch_ref"],
         branch_generation=ctx["branch_generation"],
     )
-    head_baseline = _head_tree_with_submodules(repo_root, ctx["base_head"], conn)
+    try:
+        head_baseline = _head_tree_with_submodules(repo_root, ctx["base_head"], conn)
+    except _HeadTreeReadFailed as exc:
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", f"head-baseline: {exc}")
+        return []
     try:
         live = _scan_tree(
             repo_root,
             branch_ref=ctx["branch_ref"],
             branch_generation=ctx["branch_generation"],
             head_baseline=head_baseline,
+            conn=conn,
         )
     except _IgnoreCheckFailed as exc:
         # Fail closed: a broken `git check-ignore` invocation must NOT cause
