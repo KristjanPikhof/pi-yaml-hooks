@@ -715,15 +715,14 @@ def _build_batch_event_payload(
 
 
 def _is_unsafe_host(host: str) -> bool:
-    """Return True if ``host`` resolves to a literal loopback/private/link-local IP.
+    """Return True if ``host`` is a literal loopback/private/link-local IP.
 
-    DNS-only hostnames are deferred to ``_validate_openai_endpoint``'s
-    allowlist gate; this helper only blocks the obvious cases where
-    the operator typed a literal address that points back at the host
-    or into RFC1918 ranges. We never resolve A/AAAA records ourselves —
-    that would race the actual connect — so a hostile DNS server can
-    still steer traffic, but the allowlist + HTTPS combination keeps
-    the bar high enough.
+    Blocks the obvious cases where the operator typed a literal address
+    that points back at the host or into RFC1918 ranges. We never resolve
+    A/AAAA records ourselves — that would race the actual connect — so a
+    hostile DNS server can still steer traffic. The HTTPS scheme + the
+    no-redirect opener together keep ``Authorization`` from being replayed
+    cross-origin, which is the practical defense.
     """
     host = host.strip().strip("[]").lower()
     if not host:
@@ -741,26 +740,14 @@ def _is_unsafe_host(host: str) -> bool:
     return False
 
 
-def _allowed_openai_hosts() -> Tuple[str, ...]:
-    """Return the active host allowlist.
-
-    Defaults to ``("api.openai.com",)``. Operators add to it via
-    ``SNAPSHOTD_AI_ALLOW_HOST`` (comma-separated, additive — the
-    default is always included so removing it requires an explicit
-    code change).
-    """
-    extra = os.environ.get("SNAPSHOTD_AI_ALLOW_HOST", "")
-    parsed = [h.strip().lower() for h in extra.split(",") if h.strip()]
-    return tuple(["api.openai.com", *parsed])
-
-
 def _validate_openai_endpoint(base_url: str) -> Optional[str]:
     """Validate ``base_url`` and return the endpoint URL or ``None``.
 
-    Enforces: scheme==https, non-empty host, host on the operator
-    allowlist (default ``api.openai.com``), and the resolved-literal
-    host is not loopback / private / link-local. Returns the full
-    chat-completions URL on success.
+    Enforces: scheme==https, non-empty host, and the host is not a literal
+    loopback / private / link-local address. Any HTTPS host is otherwise
+    accepted — operators routinely point this at Azure OpenAI, vLLM,
+    LiteLLM, OpenRouter, or self-hosted proxies, so a host allowlist would
+    just be friction. Returns the full chat-completions URL on success.
     """
     try:
         parsed = urllib_parse.urlparse(base_url)
@@ -772,8 +759,6 @@ def _validate_openai_endpoint(base_url: str) -> Optional[str]:
     if not host:
         return None
     if _is_unsafe_host(host):
-        return None
-    if host not in _allowed_openai_hosts():
         return None
     return base_url.rstrip("/") + "/chat/completions"
 
