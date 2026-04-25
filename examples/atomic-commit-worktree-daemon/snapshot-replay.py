@@ -414,6 +414,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
         state = dict(snapshot_state_for_index(repo_root, env))
         parent = head
         published = 0
+        processed = 0
 
         for event in pending:
             ops = [dict(row) for row in load_ops(conn, int(event["seq"]))]
