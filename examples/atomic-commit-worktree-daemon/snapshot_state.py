@@ -163,6 +163,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                branch_ref TEXT,
                branch_generation INTEGER,
                note TEXT,
+               daemon_token TEXT,
                updated_ts REAL NOT NULL
            )"""
     )
