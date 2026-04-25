@@ -14,12 +14,15 @@ from pathlib import Path
 from unittest import mock
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
 
 import snapshot_state  # noqa: E402
 
-from tests.test_worktree_daemon import init_repo, load_example_module  # noqa: E402
+from test_worktree_daemon import init_repo, load_example_module  # noqa: E402
 
 
 def _stamp_running_daemon(conn, pid: int, fingerprint: str = "fake-fp") -> str:
