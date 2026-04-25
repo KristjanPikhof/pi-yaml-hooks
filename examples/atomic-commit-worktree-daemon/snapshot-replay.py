@@ -859,8 +859,7 @@ def batch_ai_messages(
             method="POST",
         )
         try:
-            resp_ctx = _open_openai(req, timeout=api_timeout)
-            with resp_ctx as resp:
+            with _open_openai(req, timeout=api_timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except (urllib_error.URLError, TimeoutError):
             continue
