@@ -372,6 +372,19 @@ def cmd_status(repo_root: Path, git_dir: Path) -> int:
         payload["git_dir"] = str(git_dir)
         payload["daemon_script"] = str(daemon_script_path())
         payload["daemon_script_present"] = daemon_script_path().exists()
+        # Read-only stale-heartbeat overlay: don't mutate the row, but if it
+        # claims to be alive while the heartbeat has gone cold, surface that
+        # so operators see the truth without manual log digging.
+        active_modes = {"running", "sleeping", "starting", "bootstrapping"}
+        daemon_row = payload.get("daemon") or {}
+        if daemon_row.get("mode") in active_modes and not _fresh_heartbeat(daemon_row):
+            heartbeat_ts = float(daemon_row.get("heartbeat_ts") or 0)
+            payload["daemon"] = {
+                **daemon_row,
+                "mode": "stale-heartbeat",
+                "reported_mode": daemon_row.get("mode"),
+                "heartbeat_age_seconds": round(time.time() - heartbeat_ts, 3),
+            }
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     finally:
