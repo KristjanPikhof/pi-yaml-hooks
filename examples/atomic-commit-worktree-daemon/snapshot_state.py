@@ -381,6 +381,12 @@ def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
         # v4 added a publish-time stamp so retention can be measured from
         # publish, not capture, for events that sat pending across a window.
         conn.execute("ALTER TABLE capture_events ADD COLUMN published_ts REAL")
+    if capture_cols and "message" not in capture_cols:
+        # Additive: store the AI-generated commit text alongside the event so
+        # the replay loop can reuse it instead of regenerating on retry.
+        # Defaulting to NULL — replay-lane is the writer; this lane is just
+        # making the column available.
+        conn.execute("ALTER TABLE capture_events ADD COLUMN message TEXT")
 
 
 def open_state(git_dir: Path, allow_reset: bool = True) -> sqlite3.Connection:
