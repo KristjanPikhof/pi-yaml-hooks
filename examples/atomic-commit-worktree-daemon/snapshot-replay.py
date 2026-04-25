@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import ipaddress
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from snapshot_state import (
@@ -28,7 +30,9 @@ from snapshot_state import (
     apply_ops_to_index,
     build_message,
     ensure_state,
+    git_bin,
     index_path,
+    is_sensitive_path,
     load_ops,
     load_pending_events,
     mark_event_published,
