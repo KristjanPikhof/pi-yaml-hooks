@@ -39,6 +39,11 @@ def _mode_for_stat(st: os.stat_result) -> str:
 
 
 def _read_path_bytes(path: Path) -> bytes:
+    # Per git's symlink convention, a symlink's blob content IS the literal
+    # link target. That means absolute targets (e.g. /home/alice/.ssh/id_rsa)
+    # become readable strings inside .git/objects. Defence-in-depth here is
+    # the SNAPSHOTD_SENSITIVE_GLOBS filter (see snapshot_state.is_sensitive_path),
+    # which blocks the matching paths before the blob is written.
     if path.is_symlink():
         return os.readlink(path).encode("utf-8")
     return path.read_bytes()
