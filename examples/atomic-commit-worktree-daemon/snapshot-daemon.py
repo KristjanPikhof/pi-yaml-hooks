@@ -422,11 +422,36 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                 try:
                     seqs = capture.poll_once(conn, repo_root, git_dir)
                     produced_events = len(seqs) if seqs else 0
-                    snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
-                    snapshot_state.set_daemon_meta(
-                        conn, "consecutive_capture_errors", "0"
-                    )
-                    consecutive_capture_errors = 0
+                    # poll_once may have returned [] AND recorded an internal
+                    # error (bootstrap, head-baseline, or check-ignore failure)
+                    # via daemon_meta.last_capture_error. Unconditionally
+                    # clearing here would mask that. Mirror the guard used by
+                    # _capture_then_replay so the error survives until the
+                    # underlying issue clears.
+                    if _poll_once_wrote_internal_error(conn):
+                        internal_err = (
+                            snapshot_state.get_daemon_meta(conn, "last_capture_error")
+                            or "internal capture error"
+                        )
+                        consecutive_capture_errors += 1
+                        snapshot_state.set_daemon_meta(
+                            conn,
+                            "consecutive_capture_errors",
+                            str(consecutive_capture_errors),
+                        )
+                        _heartbeat(
+                            conn,
+                            os.getpid(),
+                            "running",
+                            ctx,
+                            note=f"capture error #{consecutive_capture_errors}: {internal_err}",
+                        )
+                    else:
+                        snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
+                        snapshot_state.set_daemon_meta(
+                            conn, "consecutive_capture_errors", "0"
+                        )
+                        consecutive_capture_errors = 0
                 except Exception as exc:
                     consecutive_capture_errors += 1
                     snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
