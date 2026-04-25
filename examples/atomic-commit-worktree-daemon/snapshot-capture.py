@@ -733,20 +733,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"published": published}, sort_keys=True))
             return 0
         ctx = snapshot_state.repo_context(repo_root, git_dir)
-        print(
-            json.dumps(
-                {
-                    "scanned": bootstrap_shadow(
-                        conn,
-                        repo_root,
-                        branch_ref=ctx["branch_ref"],
-                        branch_generation=ctx["branch_generation"],
-                        base_head=ctx["base_head"],
-                    )
-                },
-                sort_keys=True,
+        try:
+            scanned = bootstrap_shadow(
+                conn,
+                repo_root,
+                branch_ref=ctx["branch_ref"],
+                branch_generation=ctx["branch_generation"],
+                base_head=ctx["base_head"],
             )
-        )
+        except _HeadTreeReadFailed as exc:
+            print(f"bootstrap failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"scanned": scanned}, sort_keys=True))
         return 0
     finally:
         conn.close()
