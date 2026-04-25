@@ -323,6 +323,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=_SUBPROC_TIMEOUT,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("published=0", proc.stdout)
