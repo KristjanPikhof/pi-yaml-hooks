@@ -468,21 +468,25 @@ def _update_shadow_path(
 ) -> None:
     now = time.time()
     if op["op"] == "delete":
-        conn.execute("DELETE FROM shadow_paths WHERE path=?", (op["path"],))
+        conn.execute(
+            "DELETE FROM shadow_paths WHERE branch_ref=? AND branch_generation=? AND path=?",
+            (branch_ref, branch_generation, op["path"]),
+        )
         return
     if op["op"] == "rename" and op.get("old_path"):
-        conn.execute("DELETE FROM shadow_paths WHERE path=?", (op["old_path"],))
+        conn.execute(
+            "DELETE FROM shadow_paths WHERE branch_ref=? AND branch_generation=? AND path=?",
+            (branch_ref, branch_generation, op["old_path"]),
+        )
     conn.execute(
         """INSERT INTO shadow_paths(path, operation, mode, oid, old_path,
                branch_ref, branch_generation, base_head, fidelity, updated_ts)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(path) DO UPDATE SET
+           ON CONFLICT(branch_ref, branch_generation, path) DO UPDATE SET
               operation=excluded.operation,
               mode=excluded.mode,
               oid=excluded.oid,
               old_path=excluded.old_path,
-              branch_ref=excluded.branch_ref,
-              branch_generation=excluded.branch_generation,
               base_head=excluded.base_head,
               fidelity=excluded.fidelity,
               updated_ts=excluded.updated_ts""",
