@@ -361,11 +361,25 @@ def _scan_tree(
             # are recorded.
             try:
                 if stat.S_ISLNK(st.st_mode):
-                    if not _symlink_target_is_safe(path, repo_root):
+                    # Read once, validate the same bytes we will store.
+                    target = _validated_symlink_target_bytes(path, repo_root)
+                    if target is None:
                         continue
-                    data = _read_symlink_target_bytes(path)
+                    data = target
                 else:
-                    data = _open_regular_file_safely(path, st, repo_root)
+                    try:
+                        data = _open_regular_file_safely(path, st, repo_root)
+                    except _LargeFileSkipped as skipped:
+                        if conn is not None:
+                            try:
+                                snapshot_state.set_daemon_meta(
+                                    conn,
+                                    f"capture-skip-large:{rel}",
+                                    f"size={skipped.size}>cap={skipped.cap}",
+                                )
+                            except Exception:
+                                pass
+                        continue
                     if data is None:
                         continue
             except FileNotFoundError:
