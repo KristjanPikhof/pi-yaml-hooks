@@ -599,13 +599,15 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         snapshot_state.request_flush(conn, "stop", False, note="stop")
 
         replay_calls: list[tuple[Path, Path]] = []
-        original = getattr(daemon, "_replay_pending")
-        setattr(
-            daemon,
-            "_replay_pending",
-            lambda _conn, repo_root, git_dir: replay_calls.append((repo_root, git_dir)) or 1,
-        )
-        try:
+
+        def _stub_replay(_conn, repo_root, git_dir):
+            replay_calls.append((repo_root, git_dir))
+            return 1
+
+        # patch.object restores the original attribute even on assertion
+        # failure (the bare setattr/finally form leaked when the test body
+        # raised before reaching ``finally`` at module-import time).
+        with mock.patch.object(daemon, "_replay_pending", _stub_replay):
             sleeping = daemon.process_requests(
                 conn,
                 repo,
@@ -613,8 +615,6 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                 sleeping=True,
                 stop_event=threading.Event(),
             )
-        finally:
-            setattr(daemon, "_replay_pending", original)
 
         self.assertTrue(sleeping)
         self.assertEqual(len(replay_calls), 2)
