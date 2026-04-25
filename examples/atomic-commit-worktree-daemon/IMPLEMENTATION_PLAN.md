@@ -109,26 +109,30 @@ heartbeat freshness check, matching the current snapshot worker pattern.
 
 ## 4. Implement watcher backends
 
-Start with two tiers:
+Two tiers are planned. Only the polling tier is shipped today.
 
-1. Native best-effort watcher:
-   - Linux: inotify via a small optional dependency or `ctypes`.
-   - macOS: FSEvents via a small optional dependency or polling fallback.
-2. Portable polling fallback:
+1. Portable polling fallback (shipped):
    - scan mtime/size/inode/mode
    - hash changed files after they are stable
    - detect missing paths from the shadow tree
 
-Document the fidelity difference. Native watchers can catch more transient
-states. Polling can still miss create-delete cycles between scans.
+The polling fallback compares the live tree to `shadow_paths` and waits for a
+path to remain stable across the debounce window before hashing. It emits fewer
+events than a native watcher would, and every polling-derived operation is
+marked `rescan` so users know the event was inferred from snapshots rather than
+observed as a lifecycle transition.
 
-The polling fallback must compare the live tree to `shadow_paths` and should
-wait for a path to remain stable across the debounce window before hashing. It
-is acceptable for polling to emit fewer events than a native watcher, but every
-polling-derived operation must be marked `rescan` so users know the event was
-inferred from snapshots rather than observed as a lifecycle transition.
+### Future work
 
-Long-term strict mode:
+2. Native best-effort watcher (future):
+   - Linux: inotify via a small optional dependency or `ctypes`.
+   - macOS: FSEvents via a small optional dependency or polling fallback.
+
+Native watchers can catch more transient states. Polling can still miss
+create-delete cycles between scans. Document the fidelity difference when the
+native tier lands.
+
+Long-term strict mode (future):
 
 - add FUSE/macFUSE or overlayfs recorder mode
 - require users to work inside the mounted view
