@@ -298,6 +298,7 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     live_head = str(ctx["base_head"])
 
     target_reachable = False
+    object_missing_exc: Optional[GitObjectMissing] = None
     reason: Optional[str] = None
     if branch != live_branch or expected_generation != live_generation:
         reason = "stale branch during publish recovery"
@@ -305,11 +306,16 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
         try:
             target_reachable = _is_ancestor(repo_root, target, live_head)
         except GitObjectMissing as exc:
+            # Defer the "real error" decision: if the ref never moved
+            # (live_head == source_head), the target was a placeholder
+            # for a commit that was never created, and the rollback path
+            # below is the correct outcome. Only surface object_missing
+            # as a hard failure when we cannot rollback either.
+            object_missing_exc = exc
             try:
                 set_daemon_meta(conn, "last_replay_object_missing", f"recover:{exc}")
             except Exception:
                 pass
-            reason = f"object_missing during publish recovery: {exc}"
 
     if target_reachable:
         ops = [dict(op) for op in load_ops(conn, event_seq)]
