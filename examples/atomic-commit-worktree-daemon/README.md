@@ -171,6 +171,27 @@ publisher settles the event as `blocked_conflict` with an explicit reason. It
 must not replay stale events opportunistically onto a rewritten or recreated
 branch.
 
+### Switching branches with the daemon running
+
+`git checkout <other>` mid-session is supported and does not require restarting
+the daemon. On the next poll tick (within `SNAPSHOTD_POLL_INTERVAL`):
+
+- The daemon re-reads the live branch and bumps to the new `(branch_ref,
+  branch_generation)` context.
+- A scoped `bootstrap_shadow` rebuilds the shadow tree from `git ls-tree -r
+  HEAD` of the new branch. Shadow rows for the previous branch stay in the
+  table but are filtered out — no phantom delete/create events leak across.
+- Any `pending` events captured under the previous branch are settled as
+  `blocked_conflict` ("stale branch generation") on the next replay; they
+  never accidentally commit onto the new branch.
+- An in-flight publish that was mid-CAS gets resolved by `recover_publishing`
+  on next replay: rewound to `pending` if the ref never moved, or marked
+  `published` if the commit landed before the crash.
+
+If `HEAD` is detached or the branch is owned by another worktree, the daemon
+records `last_capture_error` instead of capturing; flushes will report this
+back through `status` until you return to a supported topology.
+
 ## Hook wiring
 
 Use the daemon controller from a trusted project hook file:
