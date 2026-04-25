@@ -633,57 +633,25 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
 
-        script = EXAMPLE_DIR / "snapshot-daemonctl.py"
-
-        start1 = subprocess.run(
-            [sys.executable, str(script), "start", "--repo", str(repo)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        start1 = _daemonctl("start", "--repo", str(repo))
         self.assertEqual(start1.returncode, 0, start1.stderr)
 
-        start2 = subprocess.run(
-            [sys.executable, str(script), "start", "--repo", str(repo)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        start2 = _daemonctl("start", "--repo", str(repo))
         self.assertEqual(start2.returncode, 0, start2.stderr)
 
-        flush = subprocess.run(
-            [sys.executable, str(script), "flush", "--repo", str(repo), "--non-blocking"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        flush = _daemonctl("flush", "--repo", str(repo), "--non-blocking")
         self.assertEqual(flush.returncode, 0, flush.stderr)
 
-        status = subprocess.run(
-            [sys.executable, str(script), "status", "--repo", str(repo)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        status = _daemonctl("status", "--repo", str(repo))
         self.assertEqual(status.returncode, 0, status.stderr)
         payload = json.loads(status.stdout)
         self.assertTrue(payload["daemon_script_present"])
         self.assertGreaterEqual(payload["flush_requests"], 1)
 
-        stop = subprocess.run(
-            [sys.executable, str(script), "stop", "--repo", str(repo)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        stop = _daemonctl("stop", "--repo", str(repo))
         self.assertEqual(stop.returncode, 0, stop.stderr)
 
-        status_after_stop = subprocess.run(
-            [sys.executable, str(script), "status", "--repo", str(repo)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        status_after_stop = _daemonctl("status", "--repo", str(repo))
         self.assertEqual(status_after_stop.returncode, 0, status_after_stop.stderr)
         conn = snapshot_state.ensure_state(git_dir)
         self.addCleanup(conn.close)
