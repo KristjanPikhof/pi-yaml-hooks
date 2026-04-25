@@ -3,15 +3,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
 import os
 import errno
+import stat
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 
 STATE_SUBDIR = "ai-snapshotd"
