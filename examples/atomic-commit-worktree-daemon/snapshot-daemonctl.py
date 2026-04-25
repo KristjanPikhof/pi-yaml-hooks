@@ -123,7 +123,7 @@ def _maybe_start(repo_root: Path, git_dir: Path, conn, note: str = "") -> Dict[s
             return {"started": False, "reason": "daemon exited during startup", "daemon": _daemon_row(conn)}
         current = _daemon_row(conn)
         current_pid = int(current.get("pid") or 0)
-        if current_pid == proc.pid and current.get("mode") == "running":
+        if current_pid == proc.pid and current.get("mode") in {"bootstrapping", "running"}:
             return {"started": True, "pid": proc.pid, "daemon": current}
         time.sleep(0.05)
     return {"started": True, "pid": proc.pid, "ready": False, "reason": "daemon readiness timeout", "daemon": _daemon_row(conn)}
