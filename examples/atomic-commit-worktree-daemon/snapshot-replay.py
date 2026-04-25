@@ -1495,7 +1495,14 @@ def replay_pending_events(
 
 
 def _replay_pending_events_locked(
-    conn, repo_root: Path, git_dir: Path, *, batch_limit: Optional[int] = None
+    conn,
+    repo_root: Path,
+    git_dir: Path,
+    *,
+    batch_limit: Optional[int] = None,
+    prepared_messages: Optional[Dict[int, str]] = None,
+    prepared_diffs: Optional[Dict[int, Dict[int, str]]] = None,
+    prepared_ops: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> Tuple[int, int, int, bool]:
     """Process up to ``batch_limit`` pending events under publish_lock.
 
@@ -1509,11 +1516,24 @@ def _replay_pending_events_locked(
         caller must not re-enter, since later pending events depend on
         this event's after-state and the next replay cycle has to
         rebuild the index from the live HEAD first.
+
+    ``prepared_messages``/``prepared_diffs``/``prepared_ops`` are
+    populated by ``replay_pending_events`` outside ``publish_lock`` so
+    HTTP/diff work no longer blocks sibling tools. When invoked
+    directly (legacy callers, tests) this function falls back to
+    running the AI/command pre-pass under the lock — preserving the
+    original contract — so the only behavioural change for the
+    orchestrated path is the lock window.
     """
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
     head = ctx["base_head"]
+    # ``replay_pending_events`` already ran ``recover_publishing`` and
+    # ``_settle_branch_swap_pending`` in phase 1; calling them again is
+    # idempotent and matters when this function is invoked directly
+    # by legacy callers/tests.
     recover_publishing(conn, repo_root, ctx)
+    _settle_branch_swap_pending(conn, ctx)
     pending = load_pending_events(conn, branch)
     if not pending:
         return 0, 0, 0, False
@@ -1521,50 +1541,63 @@ def _replay_pending_events_locked(
     if batch_limit is not None and batch_limit > 0:
         pending = pending[:batch_limit]
 
-    # ----- AI / command pre-pass --------------------------------------- #
-    # Decide whether either of the message-generation paths needs op diffs.
-    # When neither is enabled the default-deterministic path must remain
-    # byte-identical to the historical ``build_message`` output, and we
-    # must NOT pay the cost of computing diffs.
+    # ----- AI / command pre-pass (only when not pre-prepared) --------- #
+    # The orchestrated caller (``replay_pending_events``) supplies
+    # ``prepared_messages`` / ``prepared_diffs`` already; legacy
+    # callers fall through this branch and the AI HTTP runs under the
+    # lock — back-compat for tests and direct invocation. The queue-
+    # depth gate uses ``total_pending`` (the unsliced count) so a deep
+    # backlog cannot bypass the guard one batch at a time.
     use_batch_ai = (
-        SNAPSHOTD_AI_ENABLE
-        and bool(OPENAI_API_KEY)
-        and len(pending) <= SNAPSHOTD_AI_MAX_QUEUE_DEPTH
+        _ai_enable()
+        and bool(_openai_api_key())
+        and total_pending <= _ai_max_queue_depth()
     )
-    use_command_msg = bool(SNAPSHOTD_COMMIT_MESSAGE_CMD)
+    use_command_msg = bool(_commit_message_cmd())
     need_diffs = use_batch_ai or use_command_msg
 
-    # Pre-load ops once per event so the commit loop and the diff pre-pass
-    # share the same data. Existing per-event ops loads inside the loop are
-    # replaced by lookups into this map.
-    ops_by_seq: Dict[int, List[Dict[str, Any]]] = {}
+    ops_by_seq: Dict[int, List[Dict[str, Any]]] = (
+        dict(prepared_ops) if prepared_ops else {}
+    )
     for event in pending:
-        ops_by_seq[int(event["seq"])] = [
-            dict(row) for row in load_ops(conn, int(event["seq"]))
-        ]
+        seq = int(event["seq"])
+        if seq not in ops_by_seq:
+            ops_by_seq[seq] = [dict(row) for row in load_ops(conn, seq)]
 
-    diffs_by_event: Dict[int, Dict[int, str]] = {}
-    if need_diffs:
+    diffs_by_event: Dict[int, Dict[int, str]] = (
+        {int(k): dict(v) for k, v in prepared_diffs.items()}
+        if prepared_diffs
+        else {}
+    )
+    if (
+        need_diffs
+        and prepared_messages is None
+        and prepared_diffs is None
+    ):
         for event in pending:
             seq = int(event["seq"])
-            # Skip diff computation for events that already have a stored
-            # message — the chain will pick that up directly without
-            # consulting AI/command.
-            existing = _event_field(event, "message")
-            if existing:
+            if _event_field(event, "message"):
                 continue
-            diffs_by_event[seq] = compute_diffs_for_event(repo_root, ops_by_seq[seq])
+            if seq in diffs_by_event:
+                continue
+            diffs_by_event[seq] = compute_diffs_for_event(
+                repo_root, ops_by_seq[seq]
+            )
 
-    if use_batch_ai:
+    generated: Dict[int, str] = (
+        dict(prepared_messages) if prepared_messages else {}
+    )
+    if use_batch_ai and prepared_messages is None:
         events_needing_msg: List[Tuple[Any, List[Mapping[str, Any]]]] = [
             (event, ops_by_seq[int(event["seq"])])
             for event in pending
             if not _event_field(event, "message")
         ]
-        generated: Dict[int, str] = {}
         if events_needing_msg:
             try:
-                generated = batch_ai_messages(events_needing_msg, diffs_by_event)
+                generated = batch_ai_messages(
+                    events_needing_msg, diffs_by_event
+                )
             except Exception:
                 generated = {}
         if generated:
@@ -1572,24 +1605,29 @@ def _replay_pending_events_locked(
                 with transaction(conn):
                     for seq, message in generated.items():
                         set_event_message(conn, int(seq), message)
-            except Exception:
-                # Persistence failure is never fatal — the same messages are
-                # still available in-memory below via ``generated``, and the
-                # next replay cycle can re-derive any that are missing.
-                pass
-        # Reflect newly-stored messages into the in-memory rows so the
-        # commit loop's ``event["message"]`` lookup sees them without a
-        # second SELECT.
-        if generated:
-            refreshed: List[Any] = []
-            for event in pending:
-                seq = int(event["seq"])
-                stored = _event_field(event, "message")
-                if not stored and seq in generated:
-                    refreshed.append({**dict(event), "message": generated[seq]})
-                else:
-                    refreshed.append(event)
-            pending = refreshed
+            except Exception as exc:
+                # Surface persist failures so operators see repeated
+                # AI re-billing instead of a silent loop.
+                try:
+                    set_daemon_meta(
+                        conn, "last_ai_persist_error", str(exc)
+                    )
+                except Exception:
+                    pass
+
+    if generated:
+        # Reflect newly-stored messages into the in-memory rows so
+        # the commit loop's ``event["message"]`` lookup picks them
+        # up without re-issuing a SELECT.
+        refreshed: List[Any] = []
+        for event in pending:
+            seq = int(event["seq"])
+            stored = _event_field(event, "message")
+            if not stored and seq in generated:
+                refreshed.append({**dict(event), "message": generated[seq]})
+            else:
+                refreshed.append(event)
+        pending = refreshed
 
     env = _clean_git_env({"GIT_INDEX_FILE": str(index_path(git_dir))})
 
