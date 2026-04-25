@@ -364,6 +364,11 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
 
         def _stop(*_args: Any) -> None:
             stop_event.set()
+            # Also wake the sleep loop so SIGTERM/SIGINT exits in O(0)
+            # instead of waiting up to ``interval`` seconds for the next
+            # poll tick. Setting wake_event here is safe because the loop
+            # checks stop_event immediately after waking.
+            wake_event.set()
 
         def _wake(*_args: Any) -> None:
             wake_event.set()
