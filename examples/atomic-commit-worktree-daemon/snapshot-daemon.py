@@ -126,7 +126,11 @@ def _pending_event_count(conn) -> int:
 # returned cleanly but caught an internal failure and wrote a real error
 # we must NOT silently overwrite." Keep this string in sync with the
 # matching prefix in ``snapshot-capture.py::poll_once``.
-_POLL_ONCE_INTERNAL_ERROR_PREFIXES = ("check-ignore:",)
+_POLL_ONCE_INTERNAL_ERROR_PREFIXES = (
+    "check-ignore:",
+    "bootstrap:",
+    "head-baseline:",
+)
 
 
 def _poll_once_wrote_internal_error(conn) -> bool:
