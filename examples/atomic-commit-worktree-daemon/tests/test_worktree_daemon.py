@@ -852,28 +852,61 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
     def test_pid_reuse_rejected_via_identity_token(self) -> None:
         """A daemon row whose token doesn't match must not receive signals.
 
-        Models PID reuse: the recorded daemon exited and an unrelated process
-        (here a sleep child we spawn) was assigned the same pid. The token
-        recorded in daemon_state belongs to the dead daemon, so _signal_daemon
-        must refuse to deliver SIGUSR1 to the sleep process.
+        Effect-level assertion: instead of trusting ``_signal_daemon``'s
+        boolean return, we spawn a python child that installs a SIGUSR1
+        handler which writes a sentinel file and then sleeps. If the
+        controller mistakenly forwards the signal to that child, the
+        sentinel materializes; the test asserts it does NOT exist after
+        both the mismatched-token and absent-token call sites return.
         """
         import signal as _signal
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
 
-        sleep_proc = subprocess.Popen(
-            ["/bin/sleep", "30"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        sentinel = Path(tmp.name) / "sigusr1_sentinel"
+        # Inline child program: installs SIGUSR1 handler that writes the
+        # sentinel, then sleeps. ``signal.pause`` is not used so the wake
+        # cleanup path can SIGTERM the child without races.
+        child_prog = (
+            "import os, signal, sys, time\n"
+            f"sentinel = {str(sentinel)!r}\n"
+            "def _h(signum, frame):\n"
+            "    open(sentinel, 'w').write('hit')\n"
+            "signal.signal(signal.SIGUSR1, _h)\n"
+            "sys.stdout.write('ready\\n')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"
         )
-        self.addCleanup(lambda: (sleep_proc.terminate(), sleep_proc.wait(timeout=5)))
+        child = subprocess.Popen(
+            [sys.executable, "-u", "-c", child_prog],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+        def _cleanup_child() -> None:
+            try:
+                child.terminate()
+            except OSError:
+                pass
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=2)
+
+        self.addCleanup(_cleanup_child)
+        # Wait until the handler is installed; without this synchronization,
+        # the controller's signal could lose the race against handler setup.
+        ready = child.stdout.readline() if child.stdout else ""
+        self.assertEqual(ready.strip(), "ready", "child did not arm SIGUSR1 handler")
 
         conn = snapshot_state.ensure_state(git_dir)
         self.addCleanup(conn.close)
-        # Stamp a stale daemon row pointing at the sleep pid with a fake token.
+        # Stamp a stale daemon row pointing at the child pid with a fake token.
         snapshot_state.set_daemon_state(
             conn,
-            pid=sleep_proc.pid,
+            pid=child.pid,
             mode="running",
             note="synthesized stale row",
             daemon_token="not-a-real-token",
@@ -888,7 +921,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         # Even without an expected token, an unverified row should not signal.
         snapshot_state.set_daemon_state(
             conn,
-            pid=sleep_proc.pid,
+            pid=child.pid,
             mode="running",
             note="cleared token",
             daemon_token=None,
@@ -896,6 +929,16 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         conn.commit()
         sent2 = daemonctl._signal_daemon(conn, _signal.SIGUSR1)
         self.assertFalse(sent2, "controller signaled a process with no token recorded")
+
+        # Effect check: the child's handler must not have fired. Give the
+        # signal a brief moment to land if the controller's identity check
+        # was a no-op — without this delay we'd assert before the signal
+        # could be delivered, masking a real regression.
+        time.sleep(0.2)
+        self.assertFalse(
+            sentinel.exists(),
+            "controller delivered SIGUSR1 to a process whose identity did not verify",
+        )
 
     def test_branch_swap_during_session(self) -> None:
         """A branch swap must not leak the prior branch's edits into the new branch.
