@@ -621,7 +621,12 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                 status="published",
             )
 
-        return published
+        # Remaining = total pending at start - rows we touched in this
+        # batch. Even when ``processed < batch_size`` (an early ``break``
+        # hit a fail/conflict), we still report the still-queued tail so
+        # the outer loop can surface ``deferred=N`` accurately.
+        remaining = max(0, total_pending - processed)
+        return published, processed, remaining
     finally:
         try:
             index_path(git_dir).unlink(missing_ok=True)
