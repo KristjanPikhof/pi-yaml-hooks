@@ -761,7 +761,7 @@ def apply_ops_to_index(repo_root: Path, env: Dict[str, str], ops: List[Dict[str,
         return
     payload = b"\x00".join(lines) + b"\x00"
     proc = subprocess.run(
-        ["git", "update-index", "-z", "--index-info"],
+        [git_bin(), "update-index", "-z", "--index-info"],
         cwd=str(repo_root),
         input=payload,
         stdout=subprocess.PIPE,
