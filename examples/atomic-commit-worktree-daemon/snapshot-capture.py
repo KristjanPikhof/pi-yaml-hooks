@@ -22,6 +22,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import snapshot_state  # noqa: E402
+from snapshot_shared import git_bin  # noqa: E402
 
 
 IGNORE_NAMES = {".git", snapshot_state.STATE_SUBDIR}
