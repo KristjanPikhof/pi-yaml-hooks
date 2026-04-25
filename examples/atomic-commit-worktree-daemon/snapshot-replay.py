@@ -807,15 +807,19 @@ def batch_ai_messages(
     """
     if not events_with_ops:
         return {}
-    if not SNAPSHOTD_AI_ENABLE or not OPENAI_API_KEY:
+    api_key = _openai_api_key()
+    if not _ai_enable() or not api_key:
         return {}
-    if not OPENAI_BASE_URL.lower().startswith("https://"):
+    endpoint = _validate_openai_endpoint(_openai_base_url())
+    if endpoint is None:
         return {}
 
-    endpoint = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+    opener = _build_openai_opener()
+    api_timeout = _openai_api_timeout()
+    model = _openai_model()
     out: Dict[int, str] = {}
 
-    chunk_size = max(1, SNAPSHOTD_AI_CHUNK_SIZE)
+    chunk_size = max(1, _ai_chunk_size())
     for start in range(0, len(events_with_ops), chunk_size):
         chunk = events_with_ops[start : start + chunk_size]
         chunk_seqs = [int(_event_field(ev, "seq", 0) or 0) for ev, _ops in chunk]
