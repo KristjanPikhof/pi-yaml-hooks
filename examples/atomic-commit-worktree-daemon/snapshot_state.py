@@ -9,7 +9,6 @@ incompatible local state instead of trying to muddle through.
 
 from __future__ import annotations
 
-import sys
 import fcntl
 import errno
 import hashlib
@@ -22,12 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
-HERE = Path(__file__).resolve().parent
-WORKER_DIR = HERE.parent / "atomic-commit-snapshot-worker"
-if str(WORKER_DIR) not in sys.path:
-    sys.path.insert(0, str(WORKER_DIR))
-
-from snapshot_shared import (  # type: ignore[reportMissingImports]
+from snapshot_shared import (
     IncompatibleLocalStateError,
     branch_worktree_git_dirs,
     current_head,
@@ -35,7 +29,6 @@ from snapshot_shared import (  # type: ignore[reportMissingImports]
     local_state_dir,
     quarantine_incompatible_local_state,
     resolve_repo_paths as _resolve_repo_paths,
-    run_git,
 )
 
 
