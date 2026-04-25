@@ -398,7 +398,7 @@ def _scan_tree(
                 oid = snapshot_state.capture_blob_for_bytes(repo_root, data, rel_path=rel)
             except snapshot_state.SensitivePathRefused:
                 continue
-        next_cache[rel] = (sig[0], sig[1], oid)
+        next_cache[rel] = (sig[0], sig[1], sig[2], sig[3], oid)
         entries[rel] = {
             "path": rel,
             "mode": _mode_for_stat(st),
