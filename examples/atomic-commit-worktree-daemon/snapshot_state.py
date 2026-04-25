@@ -732,6 +732,37 @@ def set_daemon_state(
         )
 
 
+def prune_expired(
+    conn: sqlite3.Connection,
+    *,
+    retention_seconds: float,
+    flush_retention_seconds: float = 86400.0,
+) -> Dict[str, int]:
+    """Trim acked flush rows and terminal capture_events older than the window.
+
+    capture_ops cascades on capture_events delete via the FK. Live state
+    (pending events, unacked flushes) is left alone so an outage that left
+    the daemon stopped does not eat user-visible queued work.
+    """
+    now = time.time()
+    flush_cutoff = now - max(0.0, flush_retention_seconds)
+    event_cutoff = now - max(0.0, retention_seconds)
+    flush_cur = conn.execute(
+        "DELETE FROM flush_requests WHERE acknowledged_ts IS NOT NULL AND acknowledged_ts < ?",
+        (flush_cutoff,),
+    )
+    event_cur = conn.execute(
+        """DELETE FROM capture_events
+           WHERE state IN ('published','failed','blocked_conflict')
+             AND captured_ts < ?""",
+        (event_cutoff,),
+    )
+    return {
+        "flush_requests": int(flush_cur.rowcount or 0),
+        "capture_events": int(event_cur.rowcount or 0),
+    }
+
+
 def heartbeat_alive(pid: int) -> bool:
     if pid <= 0:
         return False
