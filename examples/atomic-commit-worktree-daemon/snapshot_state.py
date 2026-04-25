@@ -801,7 +801,7 @@ def acknowledge_flush(conn: sqlite3.Connection, request_id: int, note: str = "")
     )
 
 
-_UNSET = object()
+_UNSET: Any = object()
 
 
 def set_daemon_state(
@@ -813,44 +813,46 @@ def set_daemon_state(
     branch_generation: Optional[int] = None,
     note: str = "",
     daemon_token: Any = _UNSET,
+    daemon_fingerprint: Any = _UNSET,
 ) -> None:
     """Update the singleton daemon_state row.
 
     ``daemon_token`` is an opaque identity token written by the daemon at
     startup; controllers must verify it before sending signals, so PID reuse
-    by an unrelated process cannot be addressed by the daemonctl commands.
-    When omitted (default), the existing token is preserved; pass ``None``
-    to clear it, or a string to replace it.
+    by an unrelated process cannot be addressed by daemonctl commands.
+
+    ``daemon_fingerprint`` is an OS-bound identity (process start time) that
+    closes the residual PID-reuse window the bare token check left open: a
+    recycled PID owned by a different process has a different start time.
+
+    Both columns default to ``_UNSET`` meaning "preserve the existing value".
+    Pass ``None`` to clear, or a string to replace. Type-checked to catch
+    accidental misuse (booleans, ints) silently writing garbage.
     """
-    if daemon_token is _UNSET:
-        conn.execute(
-            """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
-                   branch_generation=?, note=?, updated_ts=? WHERE id=1""",
-            (
-                pid,
-                mode,
-                time.time(),
-                branch_ref,
-                int(branch_generation) if branch_generation is not None else None,
-                note,
-                time.time(),
-            ),
+    if daemon_token is not _UNSET and daemon_token is not None and not isinstance(daemon_token, str):
+        raise TypeError(f"daemon_token must be str or None, got {type(daemon_token).__name__}")
+    if daemon_fingerprint is not _UNSET and daemon_fingerprint is not None and not isinstance(daemon_fingerprint, str):
+        raise TypeError(
+            f"daemon_fingerprint must be str or None, got {type(daemon_fingerprint).__name__}"
         )
-    else:
-        conn.execute(
-            """UPDATE daemon_state SET pid=?, mode=?, heartbeat_ts=?, branch_ref=?,
-                   branch_generation=?, note=?, daemon_token=?, updated_ts=? WHERE id=1""",
-            (
-                pid,
-                mode,
-                time.time(),
-                branch_ref,
-                int(branch_generation) if branch_generation is not None else None,
-                note,
-                daemon_token,
-                time.time(),
-            ),
-        )
+    now = time.time()
+    sets = ["pid=?", "mode=?", "heartbeat_ts=?", "branch_ref=?", "branch_generation=?", "note=?", "updated_ts=?"]
+    params: List[Any] = [
+        pid,
+        mode,
+        now,
+        branch_ref,
+        int(branch_generation) if branch_generation is not None else None,
+        note,
+        now,
+    ]
+    if daemon_token is not _UNSET:
+        sets.append("daemon_token=?")
+        params.append(daemon_token)
+    if daemon_fingerprint is not _UNSET:
+        sets.append("daemon_fingerprint=?")
+        params.append(daemon_fingerprint)
+    conn.execute(f"UPDATE daemon_state SET {', '.join(sets)} WHERE id=1", params)
 
 
 def prune_expired(
