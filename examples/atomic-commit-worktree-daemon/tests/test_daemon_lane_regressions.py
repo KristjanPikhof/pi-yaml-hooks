@@ -103,9 +103,7 @@ class LastCaptureErrorPreservationTests(unittest.TestCase):
             )
             return []
 
-        original = capture.poll_once
-        capture.poll_once = _poll_once_internal_error
-        try:
+        with mock.patch.object(capture, "poll_once", _poll_once_internal_error):
             # Force a baseline last_capture_error so we can observe the
             # daemon's blanket-clear behavior versus the new preserve path.
             snapshot_state.set_daemon_meta(
@@ -114,8 +112,6 @@ class LastCaptureErrorPreservationTests(unittest.TestCase):
             # _capture_then_replay must NOT erase the error to "" because the
             # value carries the poll_once-internal prefix.
             daemon._capture_then_replay(conn, repo, git_dir)
-        finally:
-            capture.poll_once = original
 
         current = snapshot_state.get_daemon_meta(conn, "last_capture_error") or ""
         self.assertTrue(
