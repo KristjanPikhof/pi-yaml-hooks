@@ -279,9 +279,10 @@ Useful settings:
 | --- | --- | --- |
 | `SNAPSHOTD_POLL_INTERVAL` | `0.75` | Seconds between active polling scans |
 | `SNAPSHOTD_SLEEP_INTERVAL` | `2.0` | Sleep-loop interval after `sleep` requests |
-| `SNAPSHOTD_ACK_TIMEOUT` | `2.0` | Blocking controller wait for daemon acknowledgements |
+| `SNAPSHOTD_ACK_TIMEOUT` | `30` | Seconds the controller waits for a daemon ack on blocking flush/stop before escalating. |
 | `SNAPSHOTD_HEARTBEAT_FRESH_SECONDS` | `15.0` | Age at which controller treats a heartbeat as stale |
-| `SNAPSHOTD_SENSITIVE_GLOBS` | `.env,*.pem,*.key,…` | Comma-separated paths excluded from polling capture |
+| `SNAPSHOTD_SENSITIVE_GLOBS` | see below | Comma-separated globs excluded from polling capture. Defaults cover env files (`.env`, `.env.*`), credential files (`.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`), kubeconfig variants (`kubeconfig`, `**/.kube/config`), `**/.aws/credentials`, `**/.docker/config.json`, SSH keys (`**/id_rsa*`, `**/id_ed25519*`, `**/id_ecdsa*`), TLS material (`**/*.pem`, `**/*.key`, `**/*.p12`, `**/*.pfx`, `**/*.crt`, `**/*.pkcs8`, `**/*.kdbx`), service-account JSON (`**/service-account*.json`), GPG/ASC files (`**/*.gpg`, `**/*.asc`), and the catch-alls `**/secrets/*` and `**/credentials*`. The full list lives in `snapshot_state.DEFAULT_SENSITIVE_GLOBS`. |
+| `SNAPSHOTD_RETENTION_DAYS` | `7` | Days of acked flush rows and terminal `capture_events` kept in `daemon.db` before the daemon prunes them. |
 | `SNAPSHOTD_START_READY_TIMEOUT` | `1.0` | Seconds `start` waits for daemon heartbeat readiness |
 
 ## Troubleshooting
