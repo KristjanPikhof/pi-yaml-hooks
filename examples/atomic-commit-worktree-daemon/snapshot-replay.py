@@ -549,6 +549,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                     status="failed",
                     error=str(exc),
                 )
+                processed += 1
                 break
 
             update_publish_state(
