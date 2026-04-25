@@ -374,6 +374,25 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
         except TimeoutError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        except FlushFailedError as exc:
+            # The daemon acked the row but capture/replay raised. Returning
+            # ok=true here would silently swallow data-loss; surface the
+            # failure with a non-zero exit so callers can react.
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "action": "flush",
+                        "request_id": request_id,
+                        "branch": branch,
+                        "status": "failed",
+                        "error": exc.note or str(exc),
+                    },
+                    indent=2,
+                ),
+                file=sys.stderr,
+            )
+            return 2
         print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": branch}, indent=2))
         return 0
     except DetachedHeadError as exc:
