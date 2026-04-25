@@ -149,7 +149,7 @@ def _live_index_entries(repo_root: Path, paths: List[str]) -> Dict[str, Tuple[st
         meta, _tab, path_bytes = chunk.partition(b"\t")
         parts = meta.split()
         if len(parts) >= 2:
-            entries[path_bytes.decode("utf-8", errors="replace")] = (parts[0].decode(), parts[1].decode())
+            entries[os.fsdecode(path_bytes)] = (parts[0].decode(), parts[1].decode())
     return entries
 
 
@@ -171,7 +171,7 @@ def _tree_entries(repo_root: Path, rev: str, paths: List[str]) -> Dict[str, Tupl
         meta, _tab, path_bytes = chunk.partition(b"\t")
         parts = meta.split()
         if len(parts) >= 3:
-            entries[path_bytes.decode("utf-8", errors="replace")] = (parts[0].decode(), parts[2].decode())
+            entries[os.fsdecode(path_bytes)] = (parts[0].decode(), parts[2].decode())
     return entries
 
 
