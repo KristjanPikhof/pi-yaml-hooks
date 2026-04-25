@@ -55,11 +55,16 @@ hooks:
   # PI has no distinct "after idle" hook. pi-hooks maps PI agent_end to
   # session.idle only when the current session is idle and no messages are
   # pending, which makes this the right place to drain and pause the daemon.
+  # flush must complete before sleep so that all pending events are committed
+  # before the daemon pauses polling; combining into one bash block keeps the
+  # two steps sequential under a single action.
   - id: snapshot-daemon-sleep-on-idle
     event: session.idle
     actions:
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR"'
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR"'
+      - bash: |
+          SNAPSHOT_DAEMON_DIR="<example-dir>"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR"
 
   # session.deleted is intentionally lossy on PI and can fire for session
   # switches such as /new, /resume, and /fork. The controller must make stop
