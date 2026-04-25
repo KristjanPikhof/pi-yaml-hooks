@@ -1654,20 +1654,21 @@ def _replay_pending_events_locked(
                     )
                 except Exception:
                     pass
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
-                    target_commit_oid=None,
-                    status="failed",
-                    error=err_text,
-                )
-                conn.execute(
-                    "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
-                    (err_text, int(event["seq"])),
-                )
+                with transaction(conn):
+                    update_publish_state(
+                        conn,
+                        event_seq=int(event["seq"]),
+                        branch_ref=branch,
+                        branch_generation=int(ctx["branch_generation"]),
+                        source_head=head,
+                        target_commit_oid=None,
+                        status="failed",
+                        error=err_text,
+                    )
+                    conn.execute(
+                        "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
+                        (err_text, int(event["seq"])),
+                    )
                 processed += 1
                 continue
             if not ancestor_ok:
