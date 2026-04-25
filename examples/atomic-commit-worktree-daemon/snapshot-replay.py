@@ -297,46 +297,46 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     live_generation = int(ctx["branch_generation"])
     live_head = str(ctx["base_head"])
 
+    target_reachable = False
+    reason: Optional[str] = None
     if branch != live_branch or expected_generation != live_generation:
         reason = "stale branch during publish recovery"
-    else:
+    elif target:
         try:
-            target_reachable = bool(target) and _is_ancestor(repo_root, target, live_head)
+            target_reachable = _is_ancestor(repo_root, target, live_head)
         except GitObjectMissing as exc:
             try:
                 set_daemon_meta(conn, "last_replay_object_missing", f"recover:{exc}")
             except Exception:
                 pass
             reason = f"object_missing during publish recovery: {exc}"
-            target_reachable = False
-        else:
-            if target_reachable:
-                ops = [dict(op) for op in load_ops(conn, event_seq)]
-                paths = _touched_paths(ops)
-                _reconcile_live_index(
-                    repo_root,
-                    paths,
-                    _tree_entries(repo_root, source_head, paths),
-                    _tree_entries(repo_root, target, paths),
-                    conn=conn,
-                )
-                # Route through mark_event_published so published_ts is set
-                # consistently — without it, recovered events were eligible
-                # for retention pruning the moment the next sweep ran.
-                mark_event_published(conn, seq=event_seq, commit_oid=target)
-                update_publish_state(
-                    conn,
-                    event_seq=event_seq,
-                    branch_ref=live_branch,
-                    branch_generation=live_generation,
-                    source_head=source_head,
-                    target_commit_oid=target,
-                    status="published",
-                )
-                return
-        if target_reachable:
-            return  # unreachable; kept for clarity
-    if 'reason' not in locals() and live_head == source_head:
+
+    if target_reachable:
+        ops = [dict(op) for op in load_ops(conn, event_seq)]
+        paths = _touched_paths(ops)
+        _reconcile_live_index(
+            repo_root,
+            paths,
+            _tree_entries(repo_root, source_head, paths),
+            _tree_entries(repo_root, target, paths),
+            conn=conn,
+        )
+        # Route through mark_event_published so published_ts is set
+        # consistently — without it, recovered events were eligible for
+        # retention pruning the moment the next sweep ran.
+        mark_event_published(conn, seq=event_seq, commit_oid=target)
+        update_publish_state(
+            conn,
+            event_seq=event_seq,
+            branch_ref=live_branch,
+            branch_generation=live_generation,
+            source_head=source_head,
+            target_commit_oid=target,
+            status="published",
+        )
+        return
+
+    if reason is None and live_head == source_head:
         conn.execute(
             "UPDATE capture_events SET state='pending', commit_oid=NULL, error=NULL WHERE seq=?",
             (event_seq,),
@@ -351,7 +351,8 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
             status="idle",
         )
         return
-    else:
+
+    if reason is None:
         reason = "branch moved during publish recovery"
 
     conn.execute(
