@@ -85,7 +85,7 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
             entries[rel] = {
                 "path": rel,
                 "mode": _mode_for_stat(st),
-                "oid": snapshot_state.capture_blob_for_bytes(repo_root, data),
+                "oid": snapshot_state.capture_blob_for_bytes(repo_root, data, rel_path=rel),
             }
     return entries
 
