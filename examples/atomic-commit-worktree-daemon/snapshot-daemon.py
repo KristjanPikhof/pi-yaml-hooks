@@ -313,29 +313,16 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         try:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            # Another daemon holds the flock. Don't clobber its state row if
-            # it still has a fresh heartbeat — just record a short note on the
-            # existing row and exit with EX_TEMPFAIL so the caller can tell
-            # "peer running" from "started cleanly".
-            row = conn.execute(
-                "SELECT pid, mode, heartbeat_ts FROM daemon_state WHERE id=1"
-            ).fetchone()
-            peer_pid = int(row["pid"]) if row and row["pid"] is not None else 0
-            peer_fresh = (
-                row is not None
-                and peer_pid > 0
-                and snapshot_state.heartbeat_alive(peer_pid)
-                and (time.time() - float(row["heartbeat_ts"] or 0)) < 15.0
-            )
-            if not peer_fresh:
-                snapshot_state.set_daemon_state(
-                    conn,
-                    pid=os.getpid(),
-                    mode="lock-contended",
-                    note="peer daemon holds flock",
-                    daemon_token=_new_daemon_token(),
-                )
-                conn.commit()
+            # Another daemon holds the flock. We are NOT the live daemon, so
+            # we must not write our own pid / token / fingerprint into the
+            # singleton daemon_state row — doing so would clobber the live
+            # peer's identity and could fool controllers into signaling THIS
+            # process (which is about to exit) instead of the real daemon.
+            # The peer's own heartbeat is the source of truth; we exit with
+            # EX_TEMPFAIL so the caller can distinguish "peer running" from
+            # "started cleanly". A stalled-but-flock-holding peer is a kernel
+            # invariant — flock is released on process exit — so we treat
+            # the contention as "peer alive" by definition.
             return EX_TEMPFAIL
 
         daemon_token = _new_daemon_token()
