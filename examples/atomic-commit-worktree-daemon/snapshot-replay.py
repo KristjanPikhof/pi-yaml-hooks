@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from snapshot_state import (
+    _clean_git_env,
     apply_ops_to_index,
     build_message,
     ensure_state,
