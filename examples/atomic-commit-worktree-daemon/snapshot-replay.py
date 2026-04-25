@@ -372,7 +372,12 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
 
 
 def replay_pending_events(
-    conn, repo_root: Path, git_dir: Path, *, lock_timeout: Optional[float] = None
+    conn,
+    repo_root: Path,
+    git_dir: Path,
+    *,
+    lock_timeout: Optional[float] = None,
+    batch_max: Optional[int] = None,
 ) -> int:
     """Drain pending events into commits, bounded by ``lock_timeout`` seconds.
 
@@ -381,6 +386,13 @@ def replay_pending_events(
     ``PublishLockBusy`` to the caller. The caller (the daemon main loop)
     records the error in ``daemon_meta.last_publish_error`` and acks queued
     flush rows with the failure note rather than leaving controllers hung.
+
+    The drain is split into batches of at most ``batch_max`` events
+    (``SNAPSHOTD_REPLAY_BATCH_MAX`` env var, default 200). Between
+    batches we release ``publish_lock`` so sibling tools and the
+    daemon's flush ackers get a turn. ``daemon_meta.last_replay_deferred``
+    is updated with the still-queued count after each batch (0 when the
+    lane drains).
     """
     timeout = REPLAY_PUBLISH_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
     limit = batch_max if batch_max is not None else _replay_batch_max()
