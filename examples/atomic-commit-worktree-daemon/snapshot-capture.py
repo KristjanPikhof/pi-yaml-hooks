@@ -299,7 +299,11 @@ def poll_once(conn, repo_root: Path, git_dir: Path) -> List[int]:
         branch_generation=ctx["branch_generation"],
         base_head=ctx["base_head"],
     )
-    shadow = _shadow_map(conn)
+    shadow = _shadow_map(
+        conn,
+        branch_ref=ctx["branch_ref"],
+        branch_generation=ctx["branch_generation"],
+    )
     live = _scan_tree(repo_root)
     events = _classify_changes(shadow, live)
     seqs: List[int] = []
