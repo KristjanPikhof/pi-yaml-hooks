@@ -555,7 +555,7 @@ def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> D
 
 def _check_ref_format(ref: str) -> bool:
     proc = subprocess.run(
-        ["git", "check-ref-format", ref],
+        [git_bin(), "check-ref-format", ref],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=_clean_git_env(),
@@ -565,7 +565,7 @@ def _check_ref_format(ref: str) -> bool:
 
 def _hash_blob(repo_root: Path, data: bytes) -> str:
     proc = subprocess.run(
-        ["git", "hash-object", "-w", "--stdin"],
+        [git_bin(), "hash-object", "-w", "--stdin"],
         cwd=str(repo_root),
         input=data,
         stdout=subprocess.PIPE,
