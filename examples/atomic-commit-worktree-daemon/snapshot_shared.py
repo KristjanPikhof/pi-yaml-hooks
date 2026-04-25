@@ -398,9 +398,16 @@ def ensure_branch_registry(
     claim_owner: bool = True,
 ) -> Dict[str, Any]:
     lock_path = registry_lock_path(common_dir, branch_ref)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # Route the registry directory through the hardened state-dir helper so
+    # the directory is owner-only (0700), is not a symlink, and is owned by
+    # the running user. Without this the registry inherited the parent's
+    # default mode, leaving lock files group/world readable on shared hosts.
+    ensure_state_dir(lock_path.parent)
     git_dir = git_dir.resolve()
-    with lock_path.open("a+") as lock_fh:
+    with restricted_umask():
+        lock_fh = lock_path.open("a+")
+    restrict_file_perms(lock_path)
+    with lock_fh:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
         checked_out_dirs = tuple(
             p.resolve() for p in branch_worktree_git_dirs(repo_root, branch_ref)
