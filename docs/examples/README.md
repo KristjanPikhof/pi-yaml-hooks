@@ -21,6 +21,7 @@ These examples are designed to be copied into `hooks.yaml` with minimal editing.
 - [`../../examples/pre-tool-developer-guards/`](../../examples/pre-tool-developer-guards/) — pre-tool guards for risky bash, protected files, and dependency installs
 - [`../../examples/post-tool-developer-feedback/`](../../examples/post-tool-developer-feedback/) — post-tool logging, status, and follow-up prompts for developer workflows
 - [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/) — advanced snapshot worker example
+- [`../../examples/atomic-commit-worktree-daemon/`](../../examples/atomic-commit-worktree-daemon/) — daemon snapshot example for long-running tool/file lifecycle capture
 
 ## Before you paste
 

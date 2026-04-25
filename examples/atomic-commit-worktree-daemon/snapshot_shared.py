@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""Shared branch-registry helpers for snapshot hook and worker."""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import errno
+import shutil
+import stat
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Dict, Iterator, Optional, Tuple
+
+
+STATE_SUBDIR = "ai-snapshotd"
+REGISTRY_SUBDIR = f"{STATE_SUBDIR}/branch-registry"
+REGISTRY_SCHEMA = 1
+LOCAL_STATE_SCHEMA_VERSION = 4
+RESET_LOCK_NAME = f"{STATE_SUBDIR}.reset.lock"
+WORKER_LOCK_SUBPATH = f"{STATE_SUBDIR}/worker.lock"
+
+# Default-deny umask for state-directory writes. 0o077 strips group + other
+# bits so daemon.db, lock files, and worktree-local indexes are owner-only on
+# shared multi-user systems. Callers wrap fs writes in `_restricted_umask()`.
+STATE_FILE_MODE = 0o600
+STATE_DIR_MODE = 0o700
+
+
+class IncompatibleLocalStateError(RuntimeError):
+    """Raised when worktree-local snapshot state is from an incompatible schema."""
+
+
+_GIT_ENV_ALLOWLIST = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_DATE",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_DATE",
+)
+
+
+# Pinned safe PATH used to resolve ``git`` once at import time. The user's
+# inherited PATH is intentionally ignored here so an attacker who can drop a
+# fake ``git`` script earlier on PATH cannot redirect daemon-side git calls.
+# We also reuse this PATH inside ``_clean_git_env`` so child git processes
+# (which themselves may exec helpers like ``git-remote-https``) only see this
+# trusted path.
+_SAFE_PATH = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/sbin:/sbin"
+
+
+def _resolve_git_binary() -> str:
+    """Locate a trusted ``git`` binary, ignoring the inherited PATH.
+
+    Resolution preference: ``SNAPSHOTD_GIT_BIN`` (operator override; must be an
+    absolute path to an executable file), then ``shutil.which("git",
+    path=_SAFE_PATH)``. Raises if neither yields an executable file — the
+    daemon must not silently fall back to an attacker-controlled PATH.
+    """
+    override = os.environ.get("SNAPSHOTD_GIT_BIN")
+    if override:
+        candidate = Path(override)
+        if candidate.is_absolute() and candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+        raise RuntimeError(
+            f"SNAPSHOTD_GIT_BIN={override!r} is not an absolute path to an executable file"
+        )
+    found = shutil.which("git", path=_SAFE_PATH)
+    if found:
+        return found
+    # Last-resort fall-back: the inherited PATH. Only used when the safe PATH
+    # contains no git at all (e.g. unusual container layouts). We log via
+    # exception so the operator notices and can pin SNAPSHOTD_GIT_BIN.
+    inherited = shutil.which("git")
+    if inherited:
+        return inherited
+    raise RuntimeError(
+        "git binary not found in safe PATH; set SNAPSHOTD_GIT_BIN to an absolute path"
+    )
+
+
+_GIT_BIN: Optional[str] = None
+
+
+def git_bin() -> str:
+    """Return the cached absolute path to ``git``, resolving lazily.
+
+    Lazy resolution avoids an import-time crash on systems where git lives
+    outside ``_SAFE_PATH`` and the operator hasn't set ``SNAPSHOTD_GIT_BIN``
+    yet — the error surfaces only when the daemon actually tries to run git.
+    """
+    global _GIT_BIN
+    if _GIT_BIN is None:
+        _GIT_BIN = _resolve_git_binary()
+    return _GIT_BIN
+
+
+def _clean_git_env() -> Dict[str, str]:
+    base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    for name in _GIT_ENV_ALLOWLIST:
+        value = os.environ.get(name)
+        if value is not None:
+            base[name] = value
+    base.setdefault("GIT_TERMINAL_PROMPT", "0")
+    # Override PATH with the same trusted PATH used to resolve ``git`` so
+    # child git processes that exec sub-helpers do not pick up attacker-
+    # controlled binaries from the inherited PATH.
+    base["PATH"] = _SAFE_PATH
+    return base
+
+
+def run_git(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(
+        [git_bin(), *args],
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_clean_git_env(),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            proc.stderr.decode("utf-8", errors="replace").strip()
+            or f"git {' '.join(args)} failed"
+        )
+    return proc.stdout.decode("utf-8", errors="replace").rstrip("\n")
+
+
+def maybe_git(cwd: Path, *args: str) -> Tuple[int, str, str]:
+    proc = subprocess.run(
+        [git_bin(), *args],
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_clean_git_env(),
+    )
+    return (
+        proc.returncode,
+        proc.stdout.decode("utf-8", errors="replace").rstrip("\n"),
+        proc.stderr.decode("utf-8", errors="replace").rstrip("\n"),
+    )
+
+
+def resolve_repo_paths(cwd: Path) -> Tuple[Path, Path, Path]:
+    repo_root = Path(run_git(cwd, "rev-parse", "--show-toplevel"))
+    git_dir = Path(run_git(cwd, "rev-parse", "--absolute-git-dir"))
+    common_dir = Path(run_git(cwd, "rev-parse", "--git-common-dir"))
+    if not common_dir.is_absolute():
+        common_dir = (cwd.resolve() / common_dir).resolve()
+    return repo_root, git_dir, common_dir
+
+
+def current_head(cwd: Path) -> Optional[str]:
+    code, out, _err = maybe_git(cwd, "rev-parse", "HEAD")
+    if code != 0:
+        return None
+    return out.strip() or None
+
+
+def is_ancestor(cwd: Path, commit: str, descendant: str) -> bool:
+    code, _out, _err = maybe_git(cwd, "merge-base", "--is-ancestor", commit, descendant)
+    return code == 0
+
+
+def registry_dir(common_dir: Path) -> Path:
+    return common_dir / REGISTRY_SUBDIR
+
+
+def registry_path(common_dir: Path, branch_ref: str) -> Path:
+    digest = hashlib.sha256(branch_ref.encode("utf-8")).hexdigest()[:16]
+    return registry_dir(common_dir) / f"{digest}.json"
+
+
+def registry_lock_path(common_dir: Path, branch_ref: str) -> Path:
+    digest = hashlib.sha256(branch_ref.encode("utf-8")).hexdigest()[:16]
+    return registry_dir(common_dir) / f"{digest}.lock"
+
+
+def reset_lock_path(git_dir: Path) -> Path:
+    return git_dir / RESET_LOCK_NAME
+
+
+def worker_lock_path(git_dir: Path) -> Path:
+    return git_dir / WORKER_LOCK_SUBPATH
+
+
+def local_state_dir(git_dir: Path) -> Path:
+    return git_dir / STATE_SUBDIR
+
+
+@contextlib.contextmanager
+def restricted_umask() -> Iterator[None]:
+    """Force `0o077` umask for the duration of state-file creation."""
+    previous = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+def ensure_state_dir(path: Path) -> Path:
+    """Create ``path`` (and parents) with 0700 perms; chmod if it already exists.
+
+    Refuses to use a state directory that's a symlink or that's owned by a
+    different user — both indicate the worktree is not safe to write daemon
+    state under.
+    """
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
+    if path.is_symlink():
+        raise RuntimeError(f"state dir {path} is a symlink; refusing to use")
+    path.mkdir(exist_ok=True, mode=STATE_DIR_MODE)
+    try:
+        st = path.stat()
+        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise RuntimeError(
+                f"state dir {path} is owned by uid {st.st_uid}, expected {os.geteuid()}"
+            )
+        # Best-effort tighten; raced perms (e.g. parent dir) are not fatal.
+        if (st.st_mode & 0o077) != 0:
+            try:
+                os.chmod(path, STATE_DIR_MODE)
+            except OSError:
+                pass
+    except FileNotFoundError:
+        pass
+    return path
+
+
+def restrict_file_perms(path: Path) -> None:
+    """Tighten an existing state file to 0600 if it lives on a fs that supports it."""
+    try:
+        os.chmod(path, STATE_FILE_MODE)
+    except OSError:
+        pass
+
+
+def _lock_is_held(lock_path: Path) -> bool:
+    if not lock_path.exists():
+        return False
+    with lock_path.open("a+") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                return True
+            raise
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    return False
+
+
+def quarantine_incompatible_local_state(git_dir: Path, reason: str) -> Optional[Path]:
+    state_dir = local_state_dir(git_dir)
+    if not state_dir.exists():
+        return None
+    lock_path = reset_lock_path(git_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        if not state_dir.exists():
+            return None
+        if _lock_is_held(worker_lock_path(git_dir)):
+            raise RuntimeError(
+                "snapshot state is incompatible but worker.lock is held; retry after the active worker exits"
+            )
+        # Daemon-side locks live inside ``local_state_dir`` itself. Renaming
+        # the state directory while ``snapshot-daemon`` (or any controller
+        # mid-publish/control RPC) still holds one of those flocks would
+        # silently break that holder's view of the world (its open fd would
+        # point at the quarantined path while peers create a fresh state
+        # tree). Probe each non-blockingly; refuse the quarantine if any
+        # peer is alive.
+        for lock_name in ("daemon.lock", "publish.lock", "control.lock"):
+            if _lock_is_held(state_dir / lock_name):
+                raise RuntimeError(
+                    "daemon active; cannot quarantine state "
+                    f"({lock_name} is held by another process)"
+                )
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        target = git_dir / f"{STATE_SUBDIR}.incompatible-{stamp}-{os.getpid()}"
+        counter = 1
+        while target.exists():
+            counter += 1
+            target = (
+                git_dir / f"{STATE_SUBDIR}.incompatible-{stamp}-{os.getpid()}-{counter}"
+            )
+        state_dir.replace(target)
+        note = target / "INCOMPATIBLE_STATE.txt"
+        note.write_text(
+            f"reason: {reason}\nquarantined_ts: {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+            encoding="utf-8",
+        )
+        return target
+
+
+def _git_path(repo_root: Path, name: str) -> Path:
+    return Path(run_git(repo_root, "rev-parse", "--git-path", name)).resolve()
+
+
+def load_branch_registry(common_dir: Path, branch_ref: str) -> Optional[Dict[str, Any]]:
+    path = registry_path(common_dir, branch_ref)
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema") != REGISTRY_SCHEMA:
+        raise RuntimeError(f"unsupported branch registry format at {path}")
+    if data.get("branch_ref") != branch_ref:
+        raise RuntimeError(f"branch registry mismatch at {path}")
+    return data
+
+
+def write_branch_registry(
+    common_dir: Path, branch_ref: str, data: Dict[str, Any]
+) -> None:
+    """Atomically replace the registry file, fsync'ing data and parent dir.
+
+    The fsync calls turn a "atomic for readers" rename into a "durable across
+    power loss" rename — without them, the kernel can buffer the write past a
+    crash and resurface a stale or empty registry on reboot, which
+    contaminates the generation counter.
+    """
+    path = registry_path(common_dir, branch_ref)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
+    payload = dict(data)
+    payload["schema"] = REGISTRY_SCHEMA
+    payload["branch_ref"] = branch_ref
+    payload["updated_ts"] = time.time()
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    with restricted_umask():
+        fd = os.open(
+            str(tmp),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            STATE_FILE_MODE,
+        )
+        try:
+            os.write(fd, body)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        # fsync the parent directory so the rename itself is durable.
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(dir_fd)
+
+
+def branch_worktree_git_dirs(repo_root: Path, branch_ref: str) -> Tuple[Path, ...]:
+    code, out, err = maybe_git(repo_root, "worktree", "list", "--porcelain")
+    if code != 0:
+        raise RuntimeError(err or "git worktree list --porcelain failed")
+    matches = []
+    worktree_path: Optional[Path] = None
+    worktree_branch: Optional[str] = None
+    for line in out.splitlines() + [""]:
+        if not line:
+            if worktree_path is not None and worktree_branch == branch_ref:
+                matches.append(
+                    Path(
+                        run_git(worktree_path, "rev-parse", "--absolute-git-dir")
+                    ).resolve()
+                )
+            worktree_path = None
+            worktree_branch = None
+            continue
+        if line.startswith("worktree "):
+            worktree_path = Path(line.split(" ", 1)[1]).resolve()
+            continue
+        if line.startswith("branch "):
+            worktree_branch = line.split(" ", 1)[1].strip()
+    return tuple(matches)
+
+
+def branch_incarnation_token(repo_root: Path, branch_ref: str) -> str:
+    """Content fingerprint of a branch ref for generation-bump detection.
+
+    Returns a hash of ``git rev-parse <ref>`` so the token reflects the
+    branch's current commit identity rather than reflog file mtime. The
+    previous mtime-based form bumped the token on every commit (including
+    fast-forwards), which combined with the unconditional token-mismatch
+    trigger in ``ensure_branch_registry`` produced spurious generation
+    bumps that orphaned still-pending capture events.
+
+    Returns ``"missing"`` when the ref does not resolve. The caller treats
+    a missing-to-present transition as a registry-fresh state, not as a
+    generation bump.
+    """
+    code, out, _err = maybe_git(repo_root, "rev-parse", "--verify", "--quiet", branch_ref)
+    if code != 0 or not out.strip():
+        return "missing"
+    return "rev:" + hashlib.sha256(out.strip().encode("utf-8")).hexdigest()[:32]
+
+
+def ensure_branch_registry(
+    repo_root: Path,
+    git_dir: Path,
+    common_dir: Path,
+    branch_ref: str,
+    head: str,
+    claim_owner: bool = True,
+) -> Dict[str, Any]:
+    lock_path = registry_lock_path(common_dir, branch_ref)
+    # Route the registry directory through the hardened state-dir helper so
+    # the directory is owner-only (0700), is not a symlink, and is owned by
+    # the running user. Without this the registry inherited the parent's
+    # default mode, leaving lock files group/world readable on shared hosts.
+    ensure_state_dir(lock_path.parent)
+    git_dir = git_dir.resolve()
+    with restricted_umask():
+        lock_fh = lock_path.open("a+")
+    restrict_file_perms(lock_path)
+    with lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        checked_out_dirs = tuple(
+            p.resolve() for p in branch_worktree_git_dirs(repo_root, branch_ref)
+        )
+        if len(set(checked_out_dirs)) > 1:
+            joined = ", ".join(str(p) for p in checked_out_dirs)
+            raise RuntimeError(
+                f"branch {branch_ref} is checked out in multiple worktrees: {joined}"
+            )
+        if claim_owner and checked_out_dirs and git_dir not in checked_out_dirs:
+            raise RuntimeError(
+                f"branch {branch_ref} is checked out in another worktree: {checked_out_dirs[0]}"
+            )
+
+        existing = load_branch_registry(common_dir, branch_ref)
+        generation = 1
+        owner_git_dir: Optional[str] = None
+        previous_head: Optional[str] = None
+        previous_token: Optional[str] = None
+        if existing is not None:
+            generation = int(existing.get("generation") or 1)
+            owner_git_dir = str(existing.get("owner_git_dir") or "") or None
+            previous_head = str(existing.get("head") or "") or None
+            previous_token = str(existing.get("incarnation_token") or "") or None
+
+        current_token = branch_incarnation_token(repo_root, branch_ref)
+
+        # Bump generation contract:
+        #   1. Non-fast-forward HEAD movement (rebase / reset / force-push):
+        #      detected by previous_head != head AND previous_head is not an
+        #      ancestor of head. A pure fast-forward keeps generation steady
+        #      so still-pending capture_events remain valid.
+        #   2. Branch ref disappearing entirely (delete + recreate window).
+        #   3. Ownership transfer to a different worktree git dir.
+        # The incarnation_token is now content-derived (rev-parse hash); it is
+        # persisted for diagnostic visibility but no longer triggers a bump on
+        # its own — that previously orphaned events on every commit because
+        # the mtime-based token mutated even for fast-forwards.
+        bump_generation = False
+        if (
+            previous_head
+            and previous_head != head
+            and not is_ancestor(repo_root, previous_head, head)
+        ):
+            bump_generation = True
+        if (
+            previous_token
+            and previous_token != "missing"
+            and current_token == "missing"
+        ):
+            bump_generation = True
+        if claim_owner and owner_git_dir and Path(owner_git_dir).resolve() != git_dir:
+            bump_generation = True
+        if bump_generation:
+            generation += 1
+
+        data = {
+            "generation": generation,
+            "owner_git_dir": str(git_dir) if claim_owner else owner_git_dir,
+            "owner_repo_root": str(repo_root),
+            "head": head,
+            "incarnation_token": current_token,
+        }
+        write_branch_registry(common_dir, branch_ref, data)
+        return data

@@ -1,0 +1,76 @@
+# pi-hooks example: atomic-commit-worktree-daemon
+#
+# Copy this file into <project>/.pi/hook/hooks.yaml (preferred) or
+# <project>/.pi/hooks.yaml, trust the repo/worktree anchor, then replace
+# every <example-dir> placeholder with the real absolute path to this
+# example directory.
+#
+# **Setup validation:** if you forget to substitute <example-dir>, every
+# hook will fail with `python3: can't open file '<example-dir>/...'` at
+# runtime. Recommended pre-flight check:
+#
+#   grep -n '<example-dir>' .pi/hook/hooks.yaml
+#
+# should print nothing once the file is correctly configured.
+#
+# This is an opt-in example pack, not a built-in pi-hooks product feature.
+# It uses bash actions only; PI command: actions are unsupported.
+
+hooks:
+  # Safety check: run FIRST on session.created so a mis-configured copy fails
+  # loudly instead of silently passing the literal placeholder to python3.
+  # Exit 2 is the pi-hooks "hook error" code; it surfaces a visible message
+  # in the PI session and blocks the remaining session.created hooks.
+  - id: snapshot-daemon-preflight
+    event: session.created
+    actions:
+      - bash: |
+          if grep -qF '<example-dir>' "$PI_HOOK_FILE" 2>/dev/null || grep -qF '<example-dir>' "${BASH_SOURCE[0]}" 2>/dev/null; then
+            echo "ERROR: hooks.yaml still contains the literal <example-dir> placeholder." >&2
+            echo "Replace every <example-dir> with the absolute path to this example directory" >&2
+            echo "before using this hook pack." >&2
+            exit 2
+          fi
+
+  # Start the per-worktree daemon for genuinely new/startup sessions.
+  - id: snapshot-daemon-start
+    event: session.created
+    actions:
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" start --repo "$PI_PROJECT_DIR"'
+
+  # Wake before tools run so long-running bash commands are observed while they
+  # execute, not only after PI reports the tool result.
+  - id: snapshot-daemon-wake-before-tool
+    event: tool.before.*
+    actions:
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" wake --repo "$PI_PROJECT_DIR"'
+
+  # Ask the daemon to publish recent events after every tool. This is
+  # non-blocking so normal agent work is not delayed by commit creation.
+  - id: snapshot-daemon-flush-after-tool
+    event: tool.after.*
+    actions:
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR" --non-blocking'
+
+  # PI has no distinct "after idle" hook. pi-hooks maps PI agent_end to
+  # session.idle only when the current session is idle and no messages are
+  # pending, which makes this the right place to drain and pause the daemon.
+  # flush must complete before sleep so that all pending events are committed
+  # before the daemon pauses polling; combining into one bash block keeps the
+  # two steps sequential under a single action.
+  - id: snapshot-daemon-sleep-on-idle
+    event: session.idle
+    actions:
+      - bash: |
+          set -e
+          SNAPSHOT_DAEMON_DIR="<example-dir>"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR"
+
+  # session.deleted is intentionally lossy on PI and can fire for session
+  # switches such as /new, /resume, and /fork. The controller must make stop
+  # --flush idempotent.
+  - id: snapshot-daemon-stop-on-delete
+    event: session.deleted
+    actions:
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" stop --repo "$PI_PROJECT_DIR" --flush'
