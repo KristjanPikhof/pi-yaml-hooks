@@ -216,6 +216,9 @@ See [`hooks.yaml`](./hooks.yaml) for the copyable hook shape and
 | `snapshot-capture.py` | Portable polling/rescan capture backend. |
 | `snapshot-replay.py` | Commit publisher adapted from the current snapshot worker. |
 | `snapshot_state.py` | SQLite schema, branch registry, shadow tree, and locks. |
+| `hooks.yaml` | Copy this into your project hook file. |
+| `IMPLEMENTATION_PLAN.md` | Design and build plan; see status banner. |
+| `tests/` | Pytest regression tests for capture, replay, and daemon control flow. |
 
 The split keeps hook actions cheap. Hooks only control the daemon. Capture and
 commit replay happen in long-lived processes.
