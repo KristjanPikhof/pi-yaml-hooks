@@ -45,6 +45,61 @@ _GIT_ENV_ALLOWLIST = (
 )
 
 
+# Pinned safe PATH used to resolve ``git`` once at import time. The user's
+# inherited PATH is intentionally ignored here so an attacker who can drop a
+# fake ``git`` script earlier on PATH cannot redirect daemon-side git calls.
+# We also reuse this PATH inside ``_clean_git_env`` so child git processes
+# (which themselves may exec helpers like ``git-remote-https``) only see this
+# trusted path.
+_SAFE_PATH = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/sbin:/sbin"
+
+
+def _resolve_git_binary() -> str:
+    """Locate a trusted ``git`` binary, ignoring the inherited PATH.
+
+    Resolution preference: ``SNAPSHOTD_GIT_BIN`` (operator override; must be an
+    absolute path to an executable file), then ``shutil.which("git",
+    path=_SAFE_PATH)``. Raises if neither yields an executable file — the
+    daemon must not silently fall back to an attacker-controlled PATH.
+    """
+    override = os.environ.get("SNAPSHOTD_GIT_BIN")
+    if override:
+        candidate = Path(override)
+        if candidate.is_absolute() and candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+        raise RuntimeError(
+            f"SNAPSHOTD_GIT_BIN={override!r} is not an absolute path to an executable file"
+        )
+    found = shutil.which("git", path=_SAFE_PATH)
+    if found:
+        return found
+    # Last-resort fall-back: the inherited PATH. Only used when the safe PATH
+    # contains no git at all (e.g. unusual container layouts). We log via
+    # exception so the operator notices and can pin SNAPSHOTD_GIT_BIN.
+    inherited = shutil.which("git")
+    if inherited:
+        return inherited
+    raise RuntimeError(
+        "git binary not found in safe PATH; set SNAPSHOTD_GIT_BIN to an absolute path"
+    )
+
+
+_GIT_BIN: Optional[str] = None
+
+
+def git_bin() -> str:
+    """Return the cached absolute path to ``git``, resolving lazily.
+
+    Lazy resolution avoids an import-time crash on systems where git lives
+    outside ``_SAFE_PATH`` and the operator hasn't set ``SNAPSHOTD_GIT_BIN``
+    yet — the error surfaces only when the daemon actually tries to run git.
+    """
+    global _GIT_BIN
+    if _GIT_BIN is None:
+        _GIT_BIN = _resolve_git_binary()
+    return _GIT_BIN
+
+
 def _clean_git_env() -> Dict[str, str]:
     base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     for name in _GIT_ENV_ALLOWLIST:
@@ -52,12 +107,16 @@ def _clean_git_env() -> Dict[str, str]:
         if value is not None:
             base[name] = value
     base.setdefault("GIT_TERMINAL_PROMPT", "0")
+    # Override PATH with the same trusted PATH used to resolve ``git`` so
+    # child git processes that exec sub-helpers do not pick up attacker-
+    # controlled binaries from the inherited PATH.
+    base["PATH"] = _SAFE_PATH
     return base
 
 
 def run_git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
-        ["git", *args],
+        [git_bin(), *args],
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -73,7 +132,7 @@ def run_git(cwd: Path, *args: str) -> str:
 
 def maybe_git(cwd: Path, *args: str) -> Tuple[int, str, str]:
     proc = subprocess.run(
-        ["git", *args],
+        [git_bin(), *args],
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
