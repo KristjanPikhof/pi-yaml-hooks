@@ -1005,5 +1005,259 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                 )
 
 
+    def test_branch_swap_blocks_in_flight_publish_recovery(self) -> None:
+        """recover_publishing must block when HEAD swapped to a foreign branch.
+
+        Setup: record a 'publishing' event under branch A (main), then
+        switch HEAD to branch B (feature). When recover_publishing runs
+        with the new ctx, branch A != live_branch — the ``stale branch``
+        guard must short-circuit BEFORE the ancestor check, mark the
+        event ``blocked_conflict``, and refuse to mark it published. The
+        regression this guards against: an in-flight publish replaying
+        onto the wrong branch and corrupting branch B's history.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        ctx_a = snapshot_state.repo_context(repo, git_dir)
+        base_head = ctx_a["base_head"]
+        branch_a = ctx_a["branch_ref"]
+        gen_a = ctx_a["branch_generation"]
+
+        blob = snapshot_state.capture_blob_for_text(repo, "swap target\n")
+        seq = snapshot_state.record_event(
+            conn,
+            branch_ref=branch_a,
+            branch_generation=gen_a,
+            base_head=base_head,
+            operation="create",
+            path="swap.txt",
+            old_path=None,
+            fidelity="watcher",
+            ops=[
+                {
+                    "op": "create",
+                    "path": "swap.txt",
+                    "before_oid": None,
+                    "before_mode": None,
+                    "after_oid": blob,
+                    "after_mode": "100644",
+                }
+            ],
+        )
+
+        # Synthesize a publishing record on branch A. We use a synthetic
+        # target_commit_oid that doesn't actually exist — the branch-swap
+        # guard must trigger BEFORE recover_publishing tries to resolve it,
+        # otherwise the test would conflate two failure modes.
+        snapshot_state.update_publish_state(
+            conn,
+            event_seq=seq,
+            branch_ref=branch_a,
+            branch_generation=gen_a,
+            source_head=base_head,
+            target_commit_oid="0" * 40,
+            status="publishing",
+        )
+        conn.execute("UPDATE capture_events SET state='publishing' WHERE seq=?", (seq,))
+        conn.commit()
+        conn.close()
+
+        # Swap HEAD to a brand-new branch B. ``ctx`` then describes B,
+        # not A — the trigger condition for the guard.
+        co = git(repo, "checkout", "-b", "feature-after-swap")
+        self.assertEqual(co.returncode, 0, co.stderr)
+
+        replay = load_example_module("snapshot_replay_swap", "snapshot-replay.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx_b = snapshot_state.repo_context(repo, git_dir)
+        self.assertNotEqual(ctx_b["branch_ref"], branch_a)
+        replay.recover_publishing(conn, repo, ctx_b)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT state, error FROM capture_events WHERE seq=?",
+            (seq,),
+        ).fetchone()
+        self.assertEqual(row["state"], "blocked_conflict")
+        self.assertIsNotNone(row["error"])
+        publish = conn.execute(
+            "SELECT status, error FROM publish_state WHERE id=1"
+        ).fetchone()
+        self.assertEqual(publish["status"], "blocked_conflict")
+        # Ref tip on branch B must not have moved.
+        rev = git(repo, "rev-parse", "HEAD")
+        self.assertEqual(rev.returncode, 0, rev.stderr)
+        # Branch B's HEAD is a fresh checkout off A's base — it must still
+        # equal base_head, never the synthetic target oid.
+        self.assertEqual(rev.stdout.strip(), base_head)
+
+    def test_submodule_contents_are_pruned_from_capture(self) -> None:
+        """A 160000 entry (gitlink) plus a `.git` file must keep the scanner out.
+
+        Manufactured submodule: write a top-level `.gitmodules`, write a
+        directory ``sub/`` containing a ``.git`` file (gitlink form) and
+        an internal source file, then add a 160000 entry to the index
+        with ``git update-index --add --cacheinfo``. ``poll_once`` must
+        treat ``sub/`` as a submodule boundary and emit zero events for
+        ``sub/<anything>``. The previous test used ``git submodule add``
+        which silently fell through to a skip when no upstream URL was
+        reachable, so the regression went uncovered.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Step 1: prepare a fake gitlink in HEAD. The 160000 mode entry
+        # must exist in the committed tree so the head_baseline returned
+        # by _head_tree_with_submodules carries the submodule mark — the
+        # scanner reads ``submodule_paths`` from there.
+        sub_dir = repo / "sub"
+        sub_dir.mkdir()
+        (sub_dir / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
+        (sub_dir / "secret.txt").write_text("submodule contents\n", encoding="utf-8")
+        (repo / ".gitmodules").write_text(
+            '[submodule "sub"]\n\tpath = sub\n\turl = ./sub\n',
+            encoding="utf-8",
+        )
+        # Manufacture a synthetic "commit" oid the gitlink can point at —
+        # the bytes don't have to resolve to a real object for the
+        # capture-side test (the scanner reads the mode, not the oid).
+        synthetic = "0" * 40
+        cacheinfo = git(
+            repo,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{synthetic},sub",
+        )
+        self.assertEqual(cacheinfo.returncode, 0, cacheinfo.stderr)
+        add = git(repo, "add", ".gitmodules")
+        self.assertEqual(add.returncode, 0, add.stderr)
+        commit = git(repo, "commit", "-m", "register fake submodule")
+        self.assertEqual(commit.returncode, 0, commit.stderr)
+
+        capture = load_example_module("snapshot_capture_submodule", "snapshot-capture.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+
+        # Touch a file inside the submodule. If the boundary leaks, this
+        # would surface as a 'create' event for ``sub/secret.txt``.
+        (sub_dir / "secret.txt").write_text("submodule contents v2\n", encoding="utf-8")
+
+        seqs = capture.poll_once(conn, repo, git_dir)
+        rows = conn.execute(
+            "SELECT path FROM capture_events ORDER BY seq"
+        ).fetchall()
+        leaked = [row["path"] for row in rows if row["path"].startswith("sub/")]
+        self.assertEqual(
+            leaked,
+            [],
+            f"submodule contents leaked into capture: {leaked} (seqs={seqs})",
+        )
+
+    def test_batch_check_ignored_uses_clean_git_env(self) -> None:
+        """Fail-closed semantics + a clean env are inseparable contracts.
+
+        ``_batch_check_ignored`` must always invoke ``git check-ignore``
+        with ``snapshot_state._clean_git_env()`` so a poisoned ``GIT_DIR``
+        in the parent process cannot redirect the ignore check at the
+        attacker's repo. If the env arg is missing or contains GIT_DIR,
+        we have a confused-deputy regression.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        capture = load_example_module("snapshot_capture_envcheck", "snapshot-capture.py")
+        captured: dict[str, Any] = {}
+
+        original_run = capture.subprocess.run
+
+        def _spy(args, *pargs, **kwargs):
+            # Only record calls into git check-ignore — the helper may run
+            # other git invocations during its lifetime; we don't want
+            # those to overwrite the captured kwargs.
+            if (
+                isinstance(args, (list, tuple))
+                and len(args) >= 2
+                and args[0] == "git"
+                and args[1] == "check-ignore"
+            ):
+                captured["args"] = list(args)
+                captured["kwargs"] = dict(kwargs)
+            return original_run(args, *pargs, **kwargs)
+
+        with mock.patch.object(capture.subprocess, "run", _spy):
+            ignored = capture._batch_check_ignored(repo, ["foo.txt", "bar.log"])
+
+        self.assertIsInstance(ignored, set)
+        self.assertIn("args", captured)
+        env = captured["kwargs"].get("env")
+        self.assertIsNotNone(
+            env,
+            "_batch_check_ignored must pass env=_clean_git_env(); a missing env "
+            "arg means the subprocess inherits the daemon's environment, including "
+            "any attacker-controlled GIT_DIR",
+        )
+        self.assertNotIn(
+            "GIT_DIR",
+            env,
+            "_clean_git_env() must strip GIT_DIR; its presence here proves "
+            "the env was not sanitized",
+        )
+        self.assertNotIn("GIT_OBJECT_DIRECTORY", env)
+        self.assertNotIn("GIT_INDEX_FILE", env)
+
+    def test_stop_flush_is_idempotent(self) -> None:
+        """Calling ``stop --flush`` twice must succeed both times.
+
+        After the first invocation the daemon is stopped and the flush
+        queue is drained; the second call must not error out — it should
+        no-op (no daemon present), settle any new flush row, and exit 0.
+        Regression for the case where ``stop --flush`` against a
+        previously-stopped daemon left an unacknowledged flush row
+        stranded forever.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Bring up a daemon so the first stop has something to drain.
+        start = _daemonctl("start", "--repo", str(repo))
+        self.assertEqual(start.returncode, 0, start.stderr)
+
+        first = _daemonctl("stop", "--repo", str(repo), "--flush")
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        # Second call: no daemon present, but it must still exit cleanly.
+        second = _daemonctl("stop", "--repo", str(repo), "--flush")
+        self.assertEqual(
+            second.returncode,
+            0,
+            f"second stop --flush failed; stderr={second.stderr!r} "
+            f"stdout={second.stdout!r}",
+        )
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        unacked = conn.execute(
+            "SELECT COUNT(*) FROM flush_requests WHERE acknowledged_ts IS NULL"
+        ).fetchone()[0]
+        self.assertEqual(
+            unacked,
+            0,
+            "second stop --flush stranded an unacknowledged flush row — "
+            "controller should settle queued requests when no daemon is present",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
