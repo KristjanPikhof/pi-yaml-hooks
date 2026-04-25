@@ -270,33 +270,39 @@ def batch_cat_file(repo_root: Path, oids: Iterable[str]) -> Dict[str, bytes]:
 
     Returns a mapping of OID to raw blob bytes. Missing or non-blob OIDs are
     silently dropped — callers fall back to ``<binary content changed>`` or
-    deterministic messaging when a blob cannot be resolved.
+    deterministic messaging when a blob cannot be resolved. Blobs whose
+    declared size exceeds ``SNAPSHOTD_AI_MAX_BLOB_BYTES`` (default 1 MiB)
+    are drained from the stream but stored as the ``_OVERSIZED_BLOB``
+    sentinel so a giant binary cannot blow process memory or balloon the
+    AI prompt.
     """
     unique = sorted({oid for oid in oids if oid and set(oid) != {"0"}})
     if not unique:
         return {}
-    proc = subprocess.Popen(
-        ["git", "cat-file", "--batch"],
+    max_blob_bytes = _ai_max_blob_bytes()
+    out: Dict[str, bytes] = {}
+    # ``with subprocess.Popen(...)`` ensures the child is reaped on any
+    # exception — including KeyboardInterrupt — without the manual
+    # try/kill/wait dance the previous code used. The context manager
+    # closes stdin/stdout/stderr and waits for the process to exit on
+    # block exit, so the caller never sees a leaked file descriptor or
+    # zombie git process.
+    with subprocess.Popen(
+        [git_bin(), "cat-file", "--batch"],
         cwd=str(repo_root),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=_clean_git_env(),
-    )
-    assert proc.stdin is not None and proc.stdout is not None
-    try:
-        proc.stdin.write(("\n".join(unique) + "\n").encode("utf-8"))
-        proc.stdin.close()
-    except Exception:
-        proc.kill()
+    ) as proc:
+        assert proc.stdin is not None and proc.stdout is not None
         try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
-        return {}
+            proc.stdin.write(("\n".join(unique) + "\n").encode("utf-8"))
+            proc.stdin.close()
+        except Exception:
+            proc.kill()
+            return {}
 
-    out: Dict[str, bytes] = {}
-    try:
         for _ in unique:
             header = proc.stdout.readline()
             if not header:
@@ -310,6 +316,19 @@ def batch_cat_file(repo_root: Path, oids: Iterable[str]) -> Dict[str, bytes]:
                 size = int(parts[2])
             except ValueError:
                 continue
+            if max_blob_bytes > 0 and size > max_blob_bytes:
+                # Drain ``size`` bytes plus the trailing newline without
+                # buffering them into Python memory; record the sentinel
+                # so the diff renderer downgrades gracefully.
+                remaining = size
+                while remaining > 0:
+                    chunk = proc.stdout.read(min(remaining, 65536))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                proc.stdout.read(1)
+                out[oid] = _OVERSIZED_BLOB
+                continue
             data = b""
             while len(data) < size:
                 chunk = proc.stdout.read(size - len(data))
@@ -318,11 +337,6 @@ def batch_cat_file(repo_root: Path, oids: Iterable[str]) -> Dict[str, bytes]:
                 data += chunk
             proc.stdout.read(1)  # trailing newline
             out[oid] = data
-    finally:
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
     return out
 
 
