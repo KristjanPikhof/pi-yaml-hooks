@@ -472,9 +472,13 @@ and is never touched by this reset.
 - The final tree does not contain a file that was created and deleted: check
   `git log --oneline`; the daemon should still have published the intermediate
   create, modify, and delete commits if polling observed each state.
-- Stale `daemon.lock`: if `start` reports a stale lock and `pgrep -f
-  snapshot-daemon.py` confirms no daemon is running, `rm
-  <git-dir>/ai-snapshotd/daemon.lock` and re-run `start`.
+- Stale `daemon.lock`: if `start` reports a stale lock, run
+  `python3 snapshot-daemonctl.py status` first. Only remove the lock file
+  (`rm <git-dir>/ai-snapshotd/daemon.lock`) if status reports `mode='stopped'`
+  or `mode='stale-heartbeat'`; then re-run `start`. **Warning:** in
+  multi-worktree or multi-container setups `pgrep` is unreliable — verify
+  no peer daemon is running on any worktree or container before deleting the
+  lock, as removing it while a peer holds it corrupts the peer's session.
 - `daemon.db` has grown large or you want a clean slate: see
   ["Cleanup and retention"](#cleanup-and-retention) for the supported reset.
 
