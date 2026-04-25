@@ -582,30 +582,27 @@ def test_sensitive_path_redacted_in_ai_payload(
         # Decode the request body as JSON and walk the structure rather
         # than relying on string encoding variants.
         body_json = json.loads(body_text)
-        # The events list is embedded as a JSON string inside the chat
-        # user-message content; decode it to extract seq values.
+        # The events JSON blob is embedded as plain text inside the user
+        # message content string: "Generate commit messages …\n\n<JSON>".
+        # Extract it by finding the last '{' that starts a valid JSON object.
         seqs_in_payload: list[int] = []
         for msg in body_json.get("messages", []):
+            if msg.get("role") != "user":
+                continue
             content = msg.get("content", "")
-            if isinstance(content, str):
-                try:
-                    inner = json.loads(content)
-                    seqs_in_payload.extend(
-                        e.get("seq") for e in inner.get("events", []) if "seq" in e
-                    )
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict):
-                        text = part.get("text", "")
-                        try:
-                            inner = json.loads(text)
-                            seqs_in_payload.extend(
-                                e.get("seq") for e in inner.get("events", []) if "seq" in e
-                            )
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
+            if not isinstance(content, str):
+                continue
+            # The JSON blob starts after the last double-newline separator.
+            json_start = content.rfind("{")
+            if json_start == -1:
+                continue
+            try:
+                inner = json.loads(content[json_start:])
+                seqs_in_payload.extend(
+                    e.get("seq") for e in inner.get("events", []) if "seq" in e
+                )
+            except (json.JSONDecodeError, AttributeError):
+                pass
         assert seq in seqs_in_payload, (
             f"seq={seq} not found in OpenAI payload events; "
             f"seqs present: {seqs_in_payload!r}; body[:200]={body_text[:200]!r}"
