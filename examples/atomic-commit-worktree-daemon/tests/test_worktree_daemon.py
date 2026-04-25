@@ -672,5 +672,42 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertEqual(unacked, 0)
 
 
+    def test_hostile_git_env_does_not_redirect_daemon_operations(self) -> None:
+        """A poisoned GIT_DIR/GIT_OBJECT_DIRECTORY must not redirect blob writes.
+
+        Regression for P0-2: if the parent environment sets GIT_DIR to an
+        attacker-controlled path, _clean_git_env() must strip it before each
+        git subprocess so blobs still land in the real repo's object DB.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        evil_dir = Path(tmp.name) / "evil"
+        evil_dir.mkdir()
+
+        original_git_dir = os.environ.get("GIT_DIR")
+        original_obj_dir = os.environ.get("GIT_OBJECT_DIRECTORY")
+        os.environ["GIT_DIR"] = str(evil_dir)
+        os.environ["GIT_OBJECT_DIRECTORY"] = str(evil_dir / "objects")
+        try:
+            oid = snapshot_state.capture_blob_for_text(repo, "sentinel payload\n")
+        finally:
+            if original_git_dir is None:
+                os.environ.pop("GIT_DIR", None)
+            else:
+                os.environ["GIT_DIR"] = original_git_dir
+            if original_obj_dir is None:
+                os.environ.pop("GIT_OBJECT_DIRECTORY", None)
+            else:
+                os.environ["GIT_OBJECT_DIRECTORY"] = original_obj_dir
+
+        self.assertEqual(len(oid), 40)
+        # Blob must be readable from the real repo, not the evil dir.
+        check = git(repo, "cat-file", "-e", oid)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        # Evil dir must not contain the written object.
+        self.assertFalse((evil_dir / "objects").exists() and any((evil_dir / "objects").iterdir()))
+
+
 if __name__ == "__main__":
     unittest.main()
