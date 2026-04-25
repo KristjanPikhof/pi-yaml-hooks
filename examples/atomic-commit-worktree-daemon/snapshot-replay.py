@@ -665,34 +665,127 @@ def _build_batch_event_payload(
     ops: List[Mapping[str, Any]],
     diffs: Mapping[int, str],
 ) -> Dict[str, Any]:
-    """Shape one event for inclusion in a batch request, redacting any
-    op diff whose path matches a sensitive glob.
+    """Shape one event for inclusion in a batch request.
+
+    Sensitive ops are redacted in three places: the per-op ``path``
+    and ``old_path`` are replaced with ``"<redacted-path>"``, the diff
+    body is scrubbed, AND the entry is omitted from the top-level
+    ``paths`` array (replaced with the same redacted-path marker so
+    the array length still matches ``ops``). This prevents a sensitive
+    filename from leaking via the metadata even when the diff itself
+    is already scrubbed.
 
     Daemon-adapted: ``tool_name`` is the literal ``"daemon"``; the daemon's
     capture row has no per-event tool column, so we never leak whatever the
     operator's environment may have set in ``CLAUDE_TOOL_NAME`` or similar.
     """
     op_entries: List[Dict[str, Any]] = []
+    safe_paths: List[Optional[str]] = []
     for idx, op in enumerate(ops):
-        redact = _path_matches_sensitive(op.get("path")) or (
-            op.get("op") == "rename" and _path_matches_sensitive(op.get("old_path"))
-        )
-        diff_text = "<redacted: sensitive path>" if redact else diffs.get(idx, "")
-        op_entries.append(
-            {
-                "op": op.get("op"),
-                "path": op.get("path"),
-                "old_path": op.get("old_path"),
-                "diff": diff_text,
-            }
-        )
+        entry, sensitive = _redacted_op_payload(op, idx, diffs)
+        op_entries.append(entry)
+        safe_paths.append("<redacted-path>" if sensitive else op.get("path"))
     return {
         "seq": int(_event_field(event, "seq", 0) or 0),
         "tool_name": DAEMON_TOOL_NAME,
         "branch_ref": _event_field(event, "branch_ref", ""),
-        "paths": [op.get("path") for op in ops],
+        "paths": safe_paths,
         "ops": op_entries,
     }
+
+
+def _is_unsafe_host(host: str) -> bool:
+    """Return True if ``host`` resolves to a literal loopback/private/link-local IP.
+
+    DNS-only hostnames are deferred to ``_validate_openai_endpoint``'s
+    allowlist gate; this helper only blocks the obvious cases where
+    the operator typed a literal address that points back at the host
+    or into RFC1918 ranges. We never resolve A/AAAA records ourselves —
+    that would race the actual connect — so a hostile DNS server can
+    still steer traffic, but the allowlist + HTTPS combination keeps
+    the bar high enough.
+    """
+    host = host.strip().strip("[]").lower()
+    if not host:
+        return True
+    if host in {"localhost", "ip6-localhost", "ip6-loopback"}:
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if addr.is_loopback or addr.is_private or addr.is_link_local:
+        return True
+    if addr.is_reserved or addr.is_multicast or addr.is_unspecified:
+        return True
+    return False
+
+
+def _allowed_openai_hosts() -> Tuple[str, ...]:
+    """Return the active host allowlist.
+
+    Defaults to ``("api.openai.com",)``. Operators add to it via
+    ``SNAPSHOTD_AI_ALLOW_HOST`` (comma-separated, additive — the
+    default is always included so removing it requires an explicit
+    code change).
+    """
+    extra = os.environ.get("SNAPSHOTD_AI_ALLOW_HOST", "")
+    parsed = [h.strip().lower() for h in extra.split(",") if h.strip()]
+    return tuple(["api.openai.com", *parsed])
+
+
+def _validate_openai_endpoint(base_url: str) -> Optional[str]:
+    """Validate ``base_url`` and return the endpoint URL or ``None``.
+
+    Enforces: scheme==https, non-empty host, host on the operator
+    allowlist (default ``api.openai.com``), and the resolved-literal
+    host is not loopback / private / link-local. Returns the full
+    chat-completions URL on success.
+    """
+    try:
+        parsed = urllib_parse.urlparse(base_url)
+    except (TypeError, ValueError):
+        return None
+    if parsed.scheme.lower() != "https":
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    if _is_unsafe_host(host):
+        return None
+    if host not in _allowed_openai_hosts():
+        return None
+    return base_url.rstrip("/") + "/chat/completions"
+
+
+class _NoRedirectHandler(urllib_request.HTTPRedirectHandler):
+    """Refuse all redirects on the OpenAI endpoint.
+
+    OpenAI's chat-completions API does not redirect; treating any 3xx
+    as an error prevents an attacker on the network path from sending
+    a redirect to a host that would happily log the ``Authorization``
+    header. urllib's default redirect handler would otherwise replay
+    the headers verbatim on the followed request.
+    """
+
+    def http_error_301(self, req, fp, code, msg, headers):  # noqa: D401, ARG002
+        raise urllib_error.HTTPError(
+            req.full_url, code, "redirect refused", headers, fp
+        )
+
+    http_error_302 = http_error_301
+    http_error_303 = http_error_301
+    http_error_307 = http_error_301
+    http_error_308 = http_error_301
+
+
+def _build_openai_opener() -> urllib_request.OpenerDirector:
+    """Build an OpenerDirector that refuses redirects.
+
+    Used in place of ``urllib_request.urlopen(req)`` so the
+    ``Authorization`` header can never be replayed cross-origin.
+    """
+    return urllib_request.build_opener(_NoRedirectHandler())
 
 
 def batch_ai_messages(
