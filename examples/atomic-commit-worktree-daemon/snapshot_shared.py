@@ -267,6 +267,19 @@ def quarantine_incompatible_local_state(git_dir: Path, reason: str) -> Optional[
             raise RuntimeError(
                 "snapshot state is incompatible but worker.lock is held; retry after the active worker exits"
             )
+        # Daemon-side locks live inside ``local_state_dir`` itself. Renaming
+        # the state directory while ``snapshot-daemon`` (or any controller
+        # mid-publish/control RPC) still holds one of those flocks would
+        # silently break that holder's view of the world (its open fd would
+        # point at the quarantined path while peers create a fresh state
+        # tree). Probe each non-blockingly; refuse the quarantine if any
+        # peer is alive.
+        for lock_name in ("daemon.lock", "publish.lock", "control.lock"):
+            if _lock_is_held(state_dir / lock_name):
+                raise RuntimeError(
+                    "daemon active; cannot quarantine state "
+                    f"({lock_name} is held by another process)"
+                )
         stamp = time.strftime("%Y%m%d-%H%M%S")
         target = git_dir / f"{STATE_SUBDIR}.incompatible-{stamp}-{os.getpid()}"
         counter = 1
