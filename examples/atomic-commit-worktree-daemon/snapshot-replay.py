@@ -223,6 +223,8 @@ def _reconcile_live_index(
             set_daemon_meta(conn, "last_reconcile_error", stderr_text or f"git reset exited {proc.returncode}")
         except Exception:
             pass
+
+
 def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     """Reconcile a crash between commit creation, update-ref, and DB settlement.
 
