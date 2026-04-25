@@ -283,26 +283,37 @@ def _settle_pending_requests(conn, note: str, request_id: int) -> None:
 
 def _record_flush(
     repo_root: Path, conn, non_blocking: bool
-) -> Tuple[int, bool, str, bool, Optional[str]]:
+) -> Tuple[int, bool, str, bool, bool, Optional[str]]:
     """Insert the flush row and signal the daemon while we still hold control_lock.
 
-    Returns ``(request_id, signaled, branch_ref, daemon_present, warning)``
+    Returns ``(request_id, signaled, branch_ref, daemon_live, script_present, warning)``
     so callers can release the control_lock immediately and then wait for
     the ack in unlocked space. Holding control_lock across the (possibly
     30-second) ack wait used to starve every other controller command.
+
+    ``daemon_live`` is true ONLY when ``_signal_daemon`` succeeded — i.e.
+    there is a verified, reachable daemon that will actually ack the flush
+    row. ``script_present`` indicates the daemon binary exists and so a
+    fresh daemon could be spawned. The previous combined "daemon_present"
+    flag conflated the two and caused blocking flushes against a crashed
+    daemon to wait the full ACK_TIMEOUT for an ack nobody would write.
     """
     ctx = _light_context(repo_root)
     request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
     signaled = _signal_daemon(conn, signal.SIGUSR1)
     script_present = daemon_script_path().exists()
-    daemon_present = signaled or script_present
     warning: Optional[str] = None
     if not signaled and not script_present:
         # No daemon and no way to spawn one: the flush row will sit
         # unacknowledged forever. Surface this rather than hang or pretend
         # success — the caller decides whether to error or warn.
         warning = "no daemon to honor flush; events recorded but not replayed"
-    return request_id, signaled, ctx["branch_ref"], daemon_present, warning
+    elif not signaled and script_present:
+        # Script exists but no live daemon to ack: the row will sit
+        # unacknowledged unless we spawn one. Surface this so the caller
+        # can decide between spawn-and-wait and erroring out.
+        warning = "no live daemon to ack flush; daemon script available for spawn"
+    return request_id, signaled, ctx["branch_ref"], signaled, script_present, warning
 
 
 class FlushFailedError(RuntimeError):
