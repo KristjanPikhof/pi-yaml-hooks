@@ -463,6 +463,7 @@ def _replay_pending_events_locked(
         parent = head
         published = 0
         processed = 0
+        terminated = False
 
         for event in pending:
             ops = [dict(row) for row in load_ops(conn, int(event["seq"]))]
