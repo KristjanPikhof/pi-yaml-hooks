@@ -282,6 +282,19 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                     _heartbeat(conn, os.getpid(), "running", ctx, note=f"capture error: {exc}")
                 conn.commit()
 
+            now_wall = time.time()
+            if (now_wall - last_prune) >= PRUNE_INTERVAL_SECONDS:
+                try:
+                    snapshot_state.prune_expired(
+                        conn,
+                        retention_seconds=RETENTION_DAYS * 86400.0,
+                    )
+                    conn.commit()
+                except Exception as exc:
+                    snapshot_state.set_daemon_meta(conn, "last_prune_error", str(exc))
+                    conn.commit()
+                last_prune = now_wall
+
             interval = SLEEP_INTERVAL if sleeping else POLL_INTERVAL
             deadline = time.time() + interval
             while time.time() < deadline and not stop_event.is_set() and not wake_event.is_set():
