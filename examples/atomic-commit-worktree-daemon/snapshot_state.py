@@ -662,11 +662,10 @@ def update_publish_state(
 
 
 def request_flush(conn: sqlite3.Connection, command: str, non_blocking: bool, note: str = "") -> int:
-    token = hashlib.sha256(f"{command}:{time.time_ns()}:{os.getpid()}".encode()).hexdigest()[:16]
     cur = conn.execute(
-        """INSERT INTO flush_requests(request_token, command, non_blocking, requested_ts, status, note)
-           VALUES (?, ?, ?, ?, 'pending', ?)""",
-        (token, command, 1 if non_blocking else 0, time.time(), note),
+        """INSERT INTO flush_requests(command, non_blocking, requested_ts, status, note)
+           VALUES (?, ?, ?, 'pending', ?)""",
+        (command, 1 if non_blocking else 0, time.time(), note),
     )
     return int(cur.lastrowid or 0)
 
