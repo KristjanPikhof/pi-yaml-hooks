@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import fcntl
 import errno
-import hashlib
-import json
 import os
 import sqlite3
 import subprocess
@@ -23,12 +21,18 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from snapshot_shared import (
     IncompatibleLocalStateError,
+    LOCAL_STATE_SCHEMA_VERSION,
+    STATE_DIR_MODE,
+    STATE_FILE_MODE,
     branch_worktree_git_dirs,
     current_head,
     ensure_branch_registry,
+    ensure_state_dir,
     local_state_dir,
     quarantine_incompatible_local_state,
     resolve_repo_paths as _resolve_repo_paths,
+    restrict_file_perms,
+    restricted_umask,
 )
 
 
@@ -38,7 +42,7 @@ LOCK_NAME = "daemon.lock"
 CONTROL_LOCK_NAME = "control.lock"
 PUBLISH_LOCK_NAME = "publish.lock"
 INDEX_NAME = "worker.index"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = LOCAL_STATE_SCHEMA_VERSION  # single source of truth across processes
 
 
 # Only identity/commit metadata and a narrow, explicitly-passed GIT_INDEX_FILE
