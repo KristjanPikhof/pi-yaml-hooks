@@ -463,6 +463,10 @@ def set_daemon_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+class DetachedHeadError(RuntimeError):
+    """Raised when HEAD does not point at a writable branch under refs/heads/."""
+
+
 def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> Dict[str, Any]:
     repo_root, git_dir, common_dir = resolve_repo_paths(repo_input)
     if explicit_git_dir is not None:
@@ -470,7 +474,15 @@ def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> D
     branch = current_branch(repo_root)
     head = current_head(repo_root)
     if branch is None:
-        raise RuntimeError("detached or unborn HEAD is not replay-safe")
+        raise DetachedHeadError("detached or unborn HEAD is not replay-safe")
+    if not branch.startswith("refs/heads/"):
+        # update-ref with a refs/tags/ or refs/remotes/ target would silently
+        # move that ref. The daemon's safety model assumes a local branch.
+        raise DetachedHeadError(
+            f"HEAD points at {branch}, not a refs/heads/ branch — refusing to replay"
+        )
+    if not _check_ref_format(branch):
+        raise DetachedHeadError(f"HEAD ref {branch} is not a valid ref name")
     if head is None:
         raise RuntimeError("unable to resolve HEAD")
     if len(branch_worktree_git_dirs(repo_root, branch)) > 1:
@@ -485,6 +497,16 @@ def repo_context(repo_input: Path, explicit_git_dir: Optional[Path] = None) -> D
         "branch_generation": int(branch_state["generation"]),
         "owner_git_dir": str(branch_state.get("owner_git_dir") or git_dir),
     }
+
+
+def _check_ref_format(ref: str) -> bool:
+    proc = subprocess.run(
+        ["git", "check-ref-format", ref],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=_clean_git_env(),
+    )
+    return proc.returncode == 0
 
 
 def _hash_blob(repo_root: Path, data: bytes) -> str:
