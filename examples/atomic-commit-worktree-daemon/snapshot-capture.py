@@ -56,6 +56,7 @@ def _is_git_ignored(repo_root: Path, rel: str) -> bool:
         cwd=str(repo_root),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=snapshot_state._clean_git_env(),
     )
     return proc.returncode == 0
 
