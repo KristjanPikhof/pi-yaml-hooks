@@ -1695,17 +1695,21 @@ def _replay_pending_events_locked(
                 if validation_error:
                     break
             if validation_error:
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
-                    target_commit_oid=None,
-                    status="failed",
-                    error=validation_error,
-                )
-                conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (validation_error, int(event["seq"])))
+                with transaction(conn):
+                    update_publish_state(
+                        conn,
+                        event_seq=int(event["seq"]),
+                        branch_ref=branch,
+                        branch_generation=int(ctx["branch_generation"]),
+                        source_head=head,
+                        target_commit_oid=None,
+                        status="failed",
+                        error=validation_error,
+                    )
+                    conn.execute(
+                        "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
+                        (validation_error, int(event["seq"])),
+                    )
                 processed += 1
                 continue
 
