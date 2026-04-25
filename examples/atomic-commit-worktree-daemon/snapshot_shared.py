@@ -370,23 +370,23 @@ def branch_worktree_git_dirs(repo_root: Path, branch_ref: str) -> Tuple[Path, ..
 
 
 def branch_incarnation_token(repo_root: Path, branch_ref: str) -> str:
-    """Cheap fingerprint of a branch ref for generation-bump detection.
+    """Content fingerprint of a branch ref for generation-bump detection.
 
-    Inode reuse on tmpfs/NFS could in principle defeat this if a ref file is
-    deleted and recreated and the filesystem hands out the same inode; we
-    accept that risk because branches under refs/heads/ live on the same fs as
-    .git/objects/, where ext4/APFS/NTFS reserve inodes long enough to make
-    reuse vanishingly rare in practice. mtime_ns is included as a tiebreaker.
+    Returns a hash of ``git rev-parse <ref>`` so the token reflects the
+    branch's current commit identity rather than reflog file mtime. The
+    previous mtime-based form bumped the token on every commit (including
+    fast-forwards), which combined with the unconditional token-mismatch
+    trigger in ``ensure_branch_registry`` produced spurious generation
+    bumps that orphaned still-pending capture events.
+
+    Returns ``"missing"`` when the ref does not resolve. The caller treats
+    a missing-to-present transition as a registry-fresh state, not as a
+    generation bump.
     """
-    reflog_path = _git_path(repo_root, f"logs/{branch_ref}")
-    if reflog_path.exists():
-        st = reflog_path.stat()
-        return f"reflog:{st.st_ino}:{st.st_mtime_ns}"
-    ref_path = _git_path(repo_root, branch_ref)
-    if ref_path.exists():
-        st = ref_path.stat()
-        return f"ref:{st.st_ino}:{st.st_mtime_ns}"
-    return "missing"
+    code, out, _err = maybe_git(repo_root, "rev-parse", "--verify", "--quiet", branch_ref)
+    if code != 0 or not out.strip():
+        return "missing"
+    return "rev:" + hashlib.sha256(out.strip().encode("utf-8")).hexdigest()[:32]
 
 
 def ensure_branch_registry(
