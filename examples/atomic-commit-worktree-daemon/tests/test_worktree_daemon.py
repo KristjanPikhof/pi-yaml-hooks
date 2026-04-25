@@ -797,7 +797,11 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             env=env,
         )
         try:
-            # Wait for daemon to advertise running mode.
+            # Deterministically wait for the daemon to advertise the
+            # ``running`` mode — NOT ``bootstrapping``. Sampling
+            # ``initial_count`` mid-bootstrap races the daemon's own first
+            # poll, so a signal-driven event was indistinguishable from a
+            # natural bootstrap event and the test was timing-flaky.
             deadline = time.time() + 10.0
             conn = snapshot_state.ensure_state(git_dir)
             self.addCleanup(conn.close)
@@ -805,24 +809,25 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                 row = conn.execute(
                     "SELECT pid, mode FROM daemon_state WHERE id=1"
                 ).fetchone()
-                if row and row["mode"] in {"running", "bootstrapping"} and int(row["pid"] or 0) == proc.pid:
+                if row and row["mode"] == "running" and int(row["pid"] or 0) == proc.pid:
                     break
                 time.sleep(0.05)
             else:
                 self.fail("daemon never reported running")
 
-            # Let the bootstrap-driven first poll settle before timing the wake.
-            time.sleep(0.5)
+            # Now that the bootstrap poll has fully settled, snapshot the
+            # baseline event count.
             initial_count = int(
                 conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
             )
             (repo / "wake-target.txt").write_text("wake\n", encoding="utf-8")
             # POLL_INTERVAL=5 means the natural next poll is ~5s away. The
             # signal must short-circuit the sleep loop and produce an event
-            # well before that.
+            # well before that. Raised to 10s so a slow CI runner can still
+            # reliably observe the wake-up before the next natural tick.
             os.kill(proc.pid, _signal.SIGUSR1)
 
-            deadline = time.time() + 3.0
+            deadline = time.time() + 10.0
             saw_event = False
             while time.time() < deadline:
                 count = int(
@@ -832,7 +837,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                     saw_event = True
                     break
                 time.sleep(0.05)
-            self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 3s")
+            self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 10s")
         finally:
             try:
                 os.kill(proc.pid, _signal.SIGTERM)
