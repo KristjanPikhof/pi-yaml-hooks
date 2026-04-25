@@ -43,6 +43,7 @@ def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=_clean_git_env(),
     )
     return proc.returncode == 0
 
