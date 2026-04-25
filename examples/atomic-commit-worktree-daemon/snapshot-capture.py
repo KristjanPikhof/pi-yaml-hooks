@@ -403,6 +403,18 @@ def _bootstrap_meta_key(branch_ref: str, branch_generation: int) -> str:
     return f"shadow_bootstrapped:{branch_ref}:{branch_generation}"
 
 
+class _HeadTreeReadFailed(RuntimeError):
+    """Raised when ``git ls-tree`` fails so callers can leave shadow state alone.
+
+    The previous behaviour swallowed the error and returned an empty dict,
+    which let ``bootstrap_shadow`` overwrite the real shadow map with an
+    empty baseline and stamp the bootstrap marker — every file in the
+    worktree then re-classified as ``create`` on the next poll. Surfacing
+    the failure as an exception lets callers leave both the shadow and the
+    marker untouched so the next attempt can recover.
+    """
+
+
 def _head_tree_entries(
     repo_root: Path, head: str, conn: Optional[Any] = None
 ) -> Dict[str, Dict[str, Any]]:
@@ -417,9 +429,10 @@ def _head_tree_entries(
     feed into the index against the parent repo, so callers should not feed
     them through `_classify_changes` as ordinary files.
 
-    Failures are surfaced via ``daemon_meta.last_bootstrap_error`` (when a
-    ``conn`` is provided) so a silent empty bootstrap doesn't reclassify
-    every file as ``create`` on the first poll.
+    Failures are recorded via ``daemon_meta.last_bootstrap_error`` (when a
+    ``conn`` is provided) AND surfaced as ``_HeadTreeReadFailed`` so a
+    silent empty bootstrap can't reclassify every file as ``create`` on the
+    first poll.
     """
     if not head:
         return {}
@@ -431,17 +444,18 @@ def _head_tree_entries(
         env=snapshot_state._clean_git_env(),
     )
     if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()
+        message = err or f"git ls-tree exited {proc.returncode}"
         if conn is not None:
-            err = proc.stderr.decode("utf-8", errors="replace").strip()
             try:
                 snapshot_state.set_daemon_meta(
                     conn,
                     "last_bootstrap_error",
-                    err or f"git ls-tree exited {proc.returncode}",
+                    message,
                 )
             except Exception:
                 pass
-        return {}
+        raise _HeadTreeReadFailed(message)
     entries: Dict[str, Dict[str, Any]] = {}
     for chunk in proc.stdout.split(b"\x00"):
         if not chunk:
