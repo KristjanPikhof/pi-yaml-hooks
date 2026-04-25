@@ -179,20 +179,26 @@ def transaction(conn: sqlite3.Connection) -> Iterator[None]:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA user_version")
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS daemon_state(
-               id INTEGER PRIMARY KEY CHECK (id = 1),
-               pid INTEGER NOT NULL DEFAULT 0,
-               mode TEXT NOT NULL DEFAULT 'stopped',
-               heartbeat_ts REAL NOT NULL DEFAULT 0,
-               branch_ref TEXT,
-               branch_generation INTEGER,
-               note TEXT,
-               daemon_token TEXT,
-               updated_ts REAL NOT NULL
-           )"""
-    )
+    """Create tables if missing and bump user_version atomically.
+
+    Wrapped in BEGIN IMMEDIATE so a crash mid-bootstrap cannot leave half the
+    schema present with an unset version.
+    """
+    with transaction(conn):
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS daemon_state(
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   pid INTEGER NOT NULL DEFAULT 0,
+                   mode TEXT NOT NULL DEFAULT 'stopped',
+                   heartbeat_ts REAL NOT NULL DEFAULT 0,
+                   branch_ref TEXT,
+                   branch_generation INTEGER,
+                   note TEXT,
+                   daemon_token TEXT,
+                   daemon_fingerprint TEXT,
+                   updated_ts REAL NOT NULL
+               )"""
+        )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS shadow_paths(
                branch_ref TEXT NOT NULL,
