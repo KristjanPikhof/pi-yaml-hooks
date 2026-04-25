@@ -33,7 +33,7 @@ from snapshot_state import (
 )
 
 
-ACK_TIMEOUT = float(os.environ.get("SNAPSHOTD_ACK_TIMEOUT", "2.0"))
+ACK_TIMEOUT = float(os.environ.get("SNAPSHOTD_ACK_TIMEOUT", "30.0"))
 FRESH_HEARTBEAT_SECONDS = float(os.environ.get("SNAPSHOTD_HEARTBEAT_FRESH_SECONDS", "15.0"))
 START_READY_TIMEOUT = float(os.environ.get("SNAPSHOTD_START_READY_TIMEOUT", "1.0"))
 
