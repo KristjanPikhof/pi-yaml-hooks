@@ -1822,16 +1822,20 @@ def _replay_pending_events_locked(
                 terminated = True
                 break
 
-            update_publish_state(
-                conn,
-                event_seq=int(event["seq"]),
-                branch_ref=branch,
-                branch_generation=int(ctx["branch_generation"]),
-                source_head=event_parent,
-                target_commit_oid=commit_oid,
-                status="publishing",
-            )
-            conn.execute("UPDATE capture_events SET state='publishing' WHERE seq=?", (int(event["seq"]),))
+            with transaction(conn):
+                update_publish_state(
+                    conn,
+                    event_seq=int(event["seq"]),
+                    branch_ref=branch,
+                    branch_generation=int(ctx["branch_generation"]),
+                    source_head=event_parent,
+                    target_commit_oid=commit_oid,
+                    status="publishing",
+                )
+                conn.execute(
+                    "UPDATE capture_events SET state='publishing' WHERE seq=?",
+                    (int(event["seq"]),),
+                )
 
             try:
                 proc = subprocess.run(
