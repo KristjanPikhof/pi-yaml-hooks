@@ -29,6 +29,47 @@ IGNORE_NAMES = {".git", snapshot_state.STATE_SUBDIR}
 # fast-path filter here and the defence-in-depth guard inside capture_blob_*
 # can never drift. SNAPSHOTD_SENSITIVE_GLOBS overrides at runtime.
 
+# Default ceiling for bytes hashed from a single regular file. A worktree may
+# legitimately contain large generated artefacts (videos, datasets, build
+# outputs) but accumulating them into one Python ``bytes`` and feeding the
+# whole thing to ``git hash-object -w --stdin`` is a memory-blow-up risk —
+# we read the whole blob into RAM before handing it off. The default mirrors
+# git's own ``core.bigFileThreshold`` neighbourhood while staying conservative
+# for daemon use; operators can override via ``SNAPSHOTD_MAX_FILE_BYTES``.
+_DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024
+
+
+class _LargeFileSkipped(RuntimeError):
+    """Raised when a regular file exceeds the configured size cap.
+
+    Carries the on-disk size at the time of the check so callers can record
+    a daemon_meta entry that is more useful than just the path.
+    """
+
+    def __init__(self, size: int, cap: int) -> None:
+        super().__init__(f"file size {size} exceeds cap {cap}")
+        self.size = size
+        self.cap = cap
+
+
+def _max_file_bytes() -> int:
+    """Resolve the per-file size ceiling from env (defaults to 100MB).
+
+    A non-positive or unparseable override falls back to the default rather
+    than disabling the guard — an operator who wants no cap should set a
+    very large positive number, not ``0``.
+    """
+    raw = os.environ.get("SNAPSHOTD_MAX_FILE_BYTES")
+    if raw is None:
+        return _DEFAULT_MAX_FILE_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_FILE_BYTES
+    if value <= 0:
+        return _DEFAULT_MAX_FILE_BYTES
+    return value
+
 
 def _mode_for_stat(st: os.stat_result) -> str:
     if stat.S_ISLNK(st.st_mode):
@@ -38,15 +79,86 @@ def _mode_for_stat(st: os.stat_result) -> str:
     return "100644"
 
 
-def _read_path_bytes(path: Path) -> bytes:
+class _IgnoreCheckFailed(RuntimeError):
+    """Raised when ``git check-ignore`` errors so callers can fail closed."""
+
+
+def _read_symlink_target_bytes(path: Path) -> bytes:
     # Per git's symlink convention, a symlink's blob content IS the literal
-    # link target. That means absolute targets (e.g. /home/alice/.ssh/id_rsa)
-    # become readable strings inside .git/objects. Defence-in-depth here is
-    # the SNAPSHOTD_SENSITIVE_GLOBS filter (see snapshot_state.is_sensitive_path),
-    # which blocks the matching paths before the blob is written.
-    if path.is_symlink():
-        return os.readlink(path).encode("utf-8")
-    return path.read_bytes()
+    # link target. The sensitive-path filter only sees the *path*, not the
+    # target, so we additionally reject targets that match sensitive globs
+    # or escape the worktree root.
+    return os.readlink(path).encode("utf-8")
+
+
+def _open_regular_file_safely(
+    path: Path, expected_st: os.stat_result, repo_root: Path
+) -> Optional[bytes]:
+    """Read a regular file with O_NOFOLLOW and verify it didn't change.
+
+    Closes the TOCTOU between our `lstat()` (which classified the path as a
+    benign regular file) and `read()`: if the file got swapped for a
+    symlink in between, ``O_NOFOLLOW`` rejects it; if the inode/device
+    changed, we discard the read so a freshly-replaced file isn't hashed
+    under the prior path classification. Returns ``None`` to skip the file.
+    """
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None
+    try:
+        try:
+            actual = os.fstat(fd)
+        except OSError:
+            return None
+        if (
+            actual.st_dev != expected_st.st_dev
+            or actual.st_ino != expected_st.st_ino
+            or stat.S_IFMT(actual.st_mode) != stat.S_IFREG
+        ):
+            return None
+        chunks: List[bytes] = []
+        while True:
+            try:
+                chunk = os.read(fd, 1 << 20)
+            except OSError:
+                return None
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _symlink_target_is_safe(path: Path, repo_root: Path) -> bool:
+    """Reject symlinks whose resolved target is sensitive or escapes the repo."""
+    try:
+        raw_target = os.readlink(path)
+    except OSError:
+        return False
+    if os.path.isabs(raw_target):
+        absolute = Path(raw_target)
+    else:
+        absolute = (path.parent / raw_target)
+    try:
+        resolved = absolute.resolve()
+    except OSError:
+        return False
+    try:
+        rel_to_repo = resolved.relative_to(repo_root.resolve())
+    except ValueError:
+        # Target escapes the worktree — never write it as a blob.
+        return False
+    if snapshot_state.is_sensitive_path(rel_to_repo.as_posix()):
+        return False
+    return True
 
 
 def _is_git_ignored(repo_root: Path, rel: str) -> bool:
@@ -65,6 +177,10 @@ def _batch_check_ignored(repo_root: Path, paths: List[str]) -> set[str]:
     """Return the subset of ``paths`` that git considers ignored.
 
     One subprocess for the whole tick beats N subprocesses on a 5k-file repo.
+    Fails *closed*: a non-zero/non-one exit (broken patterns, permissions,
+    repository state error) raises ``_IgnoreCheckFailed`` so the caller can
+    abort the poll cycle rather than letting the boundary fail open and
+    accidentally hash files that should have been ignored.
     """
     if not paths:
         return set()
@@ -79,7 +195,10 @@ def _batch_check_ignored(repo_root: Path, paths: List[str]) -> set[str]:
     )
     # exit 0 = some matched; exit 1 = none matched; >1 = real error.
     if proc.returncode > 1:
-        return set()
+        raise _IgnoreCheckFailed(
+            proc.stderr.decode("utf-8", errors="replace").strip()
+            or f"git check-ignore exited {proc.returncode}"
+        )
     ignored: set[str] = set()
     for chunk in proc.stdout.split(b"\x00"):
         if not chunk:
@@ -92,24 +211,68 @@ def _is_sensitive(rel: str) -> bool:
     return snapshot_state.is_sensitive_path(rel)
 
 
-# Stat cache: rel-path -> (size, mtime_ns, oid). Lets _scan_tree skip the
-# capture_blob_for_bytes call (and the implicit `git hash-object -w`) when a
-# file has not changed since the previous tick. The cache is module-scoped so
-# it survives across poll_once calls within a single daemon process.
-_STAT_CACHE: Dict[str, Dict[str, Tuple[int, int, str]]] = {}
+# Stat-signature cache. Keyed by `(repo_root, branch_ref, branch_generation)`
+# so a branch swap or generation bump invalidates the cache: a same-
+# (size, mtime_ns) file whose contents differ across branches cannot reuse a
+# stale OID from the prior branch.
+_STAT_CACHE: Dict[Tuple[str, str, int], Dict[str, Tuple[int, int, str]]] = {}
 
 
-def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
+def _cache_key(repo_root: Path, branch_ref: str, branch_generation: int) -> Tuple[str, str, int]:
+    return (str(repo_root), branch_ref, int(branch_generation))
+
+
+def _is_under_nested_repo(root_path: Path, name: str) -> bool:
+    """A nested repo or submodule is signaled by ``.git`` (file or dir).
+
+    Modern submodules use a ``.git`` *file* (a gitlink pointing at
+    ``../../.git/modules/...``), older / unusual layouts use a directory.
+    Either way, descending into them and capturing their working files would
+    overwrite the parent's gitlink with submodule internals on the next
+    classify pass.
+    """
+    return (root_path / name / ".git").exists()
+
+
+def _scan_tree(
+    repo_root: Path,
+    *,
+    branch_ref: str,
+    branch_generation: int,
+    head_baseline: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
     entries: Dict[str, Dict[str, Any]] = {}
-    cache_key = str(repo_root)
-    cache = _STAT_CACHE.setdefault(cache_key, {})
+    cache = _STAT_CACHE.setdefault(_cache_key(repo_root, branch_ref, branch_generation), {})
     next_cache: Dict[str, Tuple[int, int, str]] = {}
-    pending: List[Tuple[str, Path, os.stat_result]] = []
+    pending_files: List[Tuple[str, Path, os.stat_result]] = []
     candidate_rels: List[str] = []
+    submodule_paths = {
+        rel.split("/", 1)[0]
+        for rel, meta in (head_baseline or {}).items()
+        if str(meta.get("mode")) == "160000"
+    }
 
     for root, dirs, files in os.walk(repo_root, topdown=True, followlinks=False):
         root_path = Path(root)
-        dirs[:] = [name for name in dirs if name not in IGNORE_NAMES]
+        try:
+            rel_root = root_path.relative_to(repo_root).as_posix()
+        except ValueError:
+            rel_root = ""
+        # Prune ignored dirs, our own state dir, AND any nested repo /
+        # submodule directory (it has its own .git pointer). Walking into a
+        # submodule and hashing its files would corrupt the parent history.
+        kept_dirs: List[str] = []
+        for name in dirs:
+            if name in IGNORE_NAMES:
+                continue
+            sub_rel = f"{rel_root}/{name}".lstrip("/")
+            if sub_rel in submodule_paths:
+                continue
+            if _is_under_nested_repo(root_path, name):
+                continue
+            kept_dirs.append(name)
+        dirs[:] = kept_dirs
+
         for name in files:
             if name in IGNORE_NAMES:
                 continue
@@ -118,7 +281,7 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
                 st = path.lstat()
             except FileNotFoundError:
                 continue
-            # Skip anything that isn't a regular file or a symlink.  Sockets,
+            # Skip anything that isn't a regular file or a symlink. Sockets,
             # FIFOs, block/char devices would either block on read or persist
             # garbage into the object store.
             if not (stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
@@ -126,21 +289,37 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
             rel = path.relative_to(repo_root).as_posix()
             if _is_sensitive(rel):
                 continue
-            pending.append((rel, path, st))
+            pending_files.append((rel, path, st))
             candidate_rels.append(rel)
 
     ignored = _batch_check_ignored(repo_root, candidate_rels)
 
-    for rel, path, st in pending:
+    for rel, path, st in pending_files:
         if rel in ignored:
             continue
         sig = (int(st.st_size), int(st.st_mtime_ns))
         prev = cache.get(rel)
         if prev is not None and prev[:2] == sig:
+            # Same (size, mtime_ns) as last tick — reuse the cached OID
+            # without re-running `git hash-object -w`.
             oid = prev[2]
         else:
+            # New file or changed signature. Polling-fidelity capture cannot
+            # prove a file is past its final flush — a streaming write may
+            # produce intermediate hashed states. The README documents this
+            # as a known limitation; the rescan classifier will produce a
+            # follow-up `modify` event when the file stabilizes, so the
+            # final committed state is correct even if intermediate ones
+            # are recorded.
             try:
-                data = _read_path_bytes(path)
+                if stat.S_ISLNK(st.st_mode):
+                    if not _symlink_target_is_safe(path, repo_root):
+                        continue
+                    data = _read_symlink_target_bytes(path)
+                else:
+                    data = _open_regular_file_safely(path, st, repo_root)
+                    if data is None:
+                        continue
             except FileNotFoundError:
                 continue
             try:
@@ -154,7 +333,7 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
             "oid": oid,
         }
 
-    _STAT_CACHE[cache_key] = next_cache
+    _STAT_CACHE[_cache_key(repo_root, branch_ref, branch_generation)] = next_cache
     return entries
 
 
@@ -162,12 +341,23 @@ def _bootstrap_meta_key(branch_ref: str, branch_generation: int) -> str:
     return f"shadow_bootstrapped:{branch_ref}:{branch_generation}"
 
 
-def _head_tree_entries(repo_root: Path, head: str) -> Dict[str, Dict[str, Any]]:
+def _head_tree_entries(
+    repo_root: Path, head: str, conn: Optional[Any] = None
+) -> Dict[str, Dict[str, Any]]:
     """Return {rel: {path, mode, oid}} from `git ls-tree -r` at ``head``.
 
     Using the HEAD tree as baseline means the first modify recorded by the
     daemon describes a diff against what git already committed — not against
     whatever dirty state the worktree happened to have at bootstrap.
+
+    Submodule entries (mode 160000) are kept in the result so the scanner
+    can prune them from worktree traversal — but they carry no oid we can
+    feed into the index against the parent repo, so callers should not feed
+    them through `_classify_changes` as ordinary files.
+
+    Failures are surfaced via ``daemon_meta.last_bootstrap_error`` (when a
+    ``conn`` is provided) so a silent empty bootstrap doesn't reclassify
+    every file as ``create`` on the first poll.
     """
     if not head:
         return {}
@@ -179,6 +369,16 @@ def _head_tree_entries(repo_root: Path, head: str) -> Dict[str, Dict[str, Any]]:
         env=snapshot_state._clean_git_env(),
     )
     if proc.returncode != 0:
+        if conn is not None:
+            err = proc.stderr.decode("utf-8", errors="replace").strip()
+            try:
+                snapshot_state.set_daemon_meta(
+                    conn,
+                    "last_bootstrap_error",
+                    err or f"git ls-tree exited {proc.returncode}",
+                )
+            except Exception:
+                pass
         return {}
     entries: Dict[str, Dict[str, Any]] = {}
     for chunk in proc.stdout.split(b"\x00"):
@@ -196,6 +396,11 @@ def _head_tree_entries(repo_root: Path, head: str) -> Dict[str, Dict[str, Any]]:
         if _is_sensitive(rel):
             continue
         entries[rel] = {"path": rel, "mode": mode, "oid": oid}
+    if conn is not None:
+        try:
+            snapshot_state.set_daemon_meta(conn, "last_bootstrap_error", "")
+        except Exception:
+            pass
     return entries
 
 
@@ -212,13 +417,19 @@ def bootstrap_shadow(
     Shadow state is keyed by (branch_ref, branch_generation). When the daemon
     is bounced across a branch switch, the prior branch's row stays put and
     this branch's row is either reused (already bootstrapped) or rebuilt.
+    Submodule (gitlink) entries are recorded so the scanner can skip them but
+    are filtered out of the working-tree shadow map fed to ``_classify_changes``
+    — replaying a gitlink's contents as ordinary file blobs corrupts history.
     """
     marker = _bootstrap_meta_key(branch_ref, branch_generation)
     stored_head = snapshot_state.get_daemon_meta(conn, marker)
     if stored_head == base_head:
         return 0
 
-    entries = _head_tree_entries(repo_root, base_head)
+    entries = _head_tree_entries(repo_root, base_head, conn=conn)
+    file_entries = {
+        rel: meta for rel, meta in entries.items() if str(meta.get("mode")) != "160000"
+    }
     snapshot_state.replace_shadow_paths(
         conn,
         branch_ref=branch_ref,
@@ -232,11 +443,15 @@ def bootstrap_shadow(
                 "oid": row["oid"],
                 "fidelity": "rescan",
             }
-            for row in entries.values()
+            for row in file_entries.values()
         ),
     )
     snapshot_state.set_daemon_meta(conn, marker, base_head)
-    return len(entries)
+    return len(file_entries)
+
+
+def _head_tree_with_submodules(repo_root: Path, head: str, conn) -> Dict[str, Dict[str, Any]]:
+    return _head_tree_entries(repo_root, head, conn=conn)
 
 
 def _shadow_map(
@@ -373,7 +588,20 @@ def poll_once(conn, repo_root: Path, git_dir: Path) -> List[int]:
         branch_ref=ctx["branch_ref"],
         branch_generation=ctx["branch_generation"],
     )
-    live = _scan_tree(repo_root)
+    head_baseline = _head_tree_with_submodules(repo_root, ctx["base_head"], conn)
+    try:
+        live = _scan_tree(
+            repo_root,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            head_baseline=head_baseline,
+        )
+    except _IgnoreCheckFailed as exc:
+        # Fail closed: a broken `git check-ignore` invocation must NOT cause
+        # us to silently treat ignored files as un-ignored. Record the
+        # error, leave shadow untouched, and emit no events for this tick.
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", f"check-ignore: {exc}")
+        return []
     events = _classify_changes(shadow, live)
     seqs: List[int] = []
     for event in events:
@@ -400,7 +628,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     conn = snapshot_state.ensure_state(git_dir)
     try:
         if args.once:
-            print(json.dumps({"published": poll_once(conn, repo_root, git_dir)}, sort_keys=True))
+            try:
+                published = poll_once(conn, repo_root, git_dir)
+            except _IgnoreCheckFailed as exc:
+                print(f"check-ignore failed: {exc}", file=sys.stderr)
+                return 1
+            print(json.dumps({"published": published}, sort_keys=True))
             return 0
         ctx = snapshot_state.repo_context(repo_root, git_dir)
         print(
