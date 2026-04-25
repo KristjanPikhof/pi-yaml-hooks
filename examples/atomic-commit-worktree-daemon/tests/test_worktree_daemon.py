@@ -712,5 +712,240 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         self.assertFalse((evil_dir / "objects").exists() and any((evil_dir / "objects").iterdir()))
 
 
+    def test_replay_rolls_back_when_ref_unchanged(self) -> None:
+        """recover_publishing must rewind a 'publishing' event whose ref never moved.
+
+        Setup mirrors test_replay_recovers_publishing_event but skips the
+        update-ref call, so live_head still equals source_head when recovery
+        runs. The event should go back to 'pending' and publish_state should
+        be cleared (status='idle').
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+        base_head = ctx["base_head"]
+        branch = ctx["branch_ref"]
+        generation = ctx["branch_generation"]
+        blob = snapshot_state.capture_blob_for_text(repo, "rollback\n")
+        seq = snapshot_state.record_event(
+            conn,
+            branch_ref=branch,
+            branch_generation=generation,
+            base_head=base_head,
+            operation="create",
+            path="rollback.txt",
+            old_path=None,
+            fidelity="watcher",
+            ops=[
+                {
+                    "op": "create",
+                    "path": "rollback.txt",
+                    "before_oid": None,
+                    "before_mode": None,
+                    "after_oid": blob,
+                    "after_mode": "100644",
+                }
+            ],
+        )
+        # Manufacture a publishing record without any actual ref move.
+        snapshot_state.update_publish_state(
+            conn,
+            event_seq=seq,
+            branch_ref=branch,
+            branch_generation=generation,
+            source_head=base_head,
+            target_commit_oid="0" * 40,
+            status="publishing",
+        )
+        conn.execute("UPDATE capture_events SET state='publishing' WHERE seq=?", (seq,))
+        conn.commit()
+        conn.close()
+
+        replay = load_example_module("snapshot_replay_rollback", "snapshot-replay.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        replay.recover_publishing(conn, repo, ctx)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT state, error FROM capture_events WHERE seq=?",
+            (seq,),
+        ).fetchone()
+        self.assertEqual(row["state"], "pending")
+        publish = conn.execute("SELECT status, event_seq FROM publish_state WHERE id=1").fetchone()
+        self.assertEqual(publish["status"], "idle")
+        self.assertIsNone(publish["event_seq"])
+
+    def test_signal_driven_wake(self) -> None:
+        """SIGUSR1 to a running daemon must trigger an immediate poll cycle."""
+        import signal as _signal
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Slow the poll loop down so the post-signal poll is observable but
+        # the natural ticks won't satisfy the assertion on their own.
+        env = os.environ.copy()
+        env["SNAPSHOTD_POLL_INTERVAL"] = "5.0"
+        env["SNAPSHOTD_SLEEP_INTERVAL"] = "5.0"
+
+        proc = subprocess.Popen(
+            [sys.executable, str(EXAMPLE_DIR / "snapshot-daemon.py"), "--repo", str(repo)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+        try:
+            # Wait for daemon to advertise running mode.
+            deadline = time.time() + 10.0
+            conn = snapshot_state.ensure_state(git_dir)
+            self.addCleanup(conn.close)
+            while time.time() < deadline:
+                row = conn.execute(
+                    "SELECT pid, mode FROM daemon_state WHERE id=1"
+                ).fetchone()
+                if row and row["mode"] in {"running", "bootstrapping"} and int(row["pid"] or 0) == proc.pid:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("daemon never reported running")
+
+            # Drop a file the daemon would only see after a poll, then signal.
+            (repo / "wake-target.txt").write_text("wake\n", encoding="utf-8")
+            initial_count = int(
+                conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
+            )
+            os.kill(proc.pid, _signal.SIGUSR1)
+
+            deadline = time.time() + 5.0
+            saw_event = False
+            while time.time() < deadline:
+                count = int(
+                    conn.execute("SELECT COUNT(*) FROM capture_events").fetchone()[0]
+                )
+                if count > initial_count:
+                    saw_event = True
+                    break
+                time.sleep(0.05)
+            self.assertTrue(saw_event, "SIGUSR1 did not produce a poll within 5s")
+        finally:
+            try:
+                os.kill(proc.pid, _signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+
+    def test_pid_reuse_rejected_via_identity_token(self) -> None:
+        """A daemon row whose token doesn't match must not receive signals.
+
+        Models PID reuse: the recorded daemon exited and an unrelated process
+        (here a sleep child we spawn) was assigned the same pid. The token
+        recorded in daemon_state belongs to the dead daemon, so _signal_daemon
+        must refuse to deliver SIGUSR1 to the sleep process.
+        """
+        import signal as _signal
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        sleep_proc = subprocess.Popen(
+            ["/bin/sleep", "30"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(lambda: (sleep_proc.terminate(), sleep_proc.wait(timeout=5)))
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        # Stamp a stale daemon row pointing at the sleep pid with a fake token.
+        snapshot_state.set_daemon_state(
+            conn,
+            pid=sleep_proc.pid,
+            mode="running",
+            note="synthesized stale row",
+            daemon_token="not-a-real-token",
+        )
+        conn.commit()
+
+        daemonctl = load_example_module("snapshot_daemonctl_pidreuse", "snapshot-daemonctl.py")
+        # Controller-cached token differs from the row's token.
+        sent = daemonctl._signal_daemon(conn, _signal.SIGUSR1, expected_token="real-token")
+        self.assertFalse(sent, "controller signaled a process with mismatched token")
+
+        # Even without an expected token, an unverified row should not signal.
+        snapshot_state.set_daemon_state(
+            conn,
+            pid=sleep_proc.pid,
+            mode="running",
+            note="cleared token",
+            daemon_token=None,
+        )
+        conn.commit()
+        sent2 = daemonctl._signal_daemon(conn, _signal.SIGUSR1)
+        self.assertFalse(sent2, "controller signaled a process with no token recorded")
+
+    def test_branch_swap_during_session(self) -> None:
+        """A branch swap must not leak the prior branch's edits into the new branch.
+
+        Bootstrap on main with file.txt committed, modify it, then check out a
+        new branch, modify a different file, and run poll_once. Capture events
+        recorded under branch B must reference branch B and must not include
+        a phantom delete/create pair carrying file.txt's edit from branch A.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Commit a baseline file on main.
+        (repo / "file.txt").write_text("base\n", encoding="utf-8")
+        git(repo, "add", "file.txt")
+        git(repo, "commit", "-m", "add file")
+
+        capture = load_example_module("snapshot_capture_branchswap", "snapshot-capture.py")
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        # Bootstrap shadow on main.
+        ctx_a = snapshot_state.repo_context(repo, git_dir)
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx_a["branch_ref"],
+            branch_generation=ctx_a["branch_generation"],
+            base_head=ctx_a["base_head"],
+        )
+
+        # Modify file.txt — would become a 'modify' event under main.
+        (repo / "file.txt").write_text("dirty on main\n", encoding="utf-8")
+
+        # Check out a new branch B without committing the dirty edit.
+        co = git(repo, "checkout", "-b", "feature")
+        self.assertEqual(co.returncode, 0, co.stderr)
+        # Reset the dirty file to HEAD so the branch swap leaves a clean tree.
+        git(repo, "checkout", "--", "file.txt")
+
+        # Touch a different file under branch B.
+        (repo / "other.txt").write_text("only on feature\n", encoding="utf-8")
+
+        seqs = capture.poll_once(conn, repo, git_dir)
+        rows = conn.execute(
+            "SELECT branch_ref, operation, path FROM capture_events WHERE seq IN (%s)"
+            % ",".join(["?"] * len(seqs)) if seqs else "SELECT branch_ref, operation, path FROM capture_events WHERE 0",
+            seqs if seqs else [],
+        ).fetchall()
+        # Every event recorded by this poll must belong to branch B.
+        self.assertTrue(rows, "expected at least one event under feature branch")
+        for row in rows:
+            self.assertEqual(row["branch_ref"], "refs/heads/feature")
+            # No phantom delete/create on file.txt (the baseline file).
+            if row["path"] == "file.txt":
+                self.fail(
+                    f"phantom event for file.txt leaked from main: {dict(row)}"
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
