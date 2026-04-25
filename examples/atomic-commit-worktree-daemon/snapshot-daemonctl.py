@@ -100,14 +100,30 @@ def _maybe_start(repo_root: Path, git_dir: Path, conn, note: str = "") -> Dict[s
     if proc is None:
         set_daemon_state(conn, pid=0, mode="degraded-no-daemon", note="snapshot-daemon.py missing")
         return {"started": False, "reason": "snapshot-daemon.py missing", "daemon": _daemon_row(conn)}
-    set_daemon_state(conn, pid=proc.pid, mode="starting", note=note or "daemon starting")
+    # Don't clobber yet — the child will write its own row once it's running.
     deadline = time.time() + START_READY_TIMEOUT
     while time.time() < deadline:
         if proc.poll() is not None:
+            # Child exited quickly. That may mean it lost a flock race with an
+            # existing peer (which stamped itself into daemon_state already),
+            # or it genuinely crashed. Re-read before assuming the worst.
+            current = _daemon_row(conn)
+            current_pid = int(current.get("pid") or 0)
+            if (
+                current_pid
+                and current_pid != proc.pid
+                and _fresh_heartbeat(current)
+            ):
+                return {
+                    "started": False,
+                    "reason": "peer daemon already running",
+                    "daemon": current,
+                }
             set_daemon_state(conn, pid=0, mode="stopped", note="daemon exited during startup")
             return {"started": False, "reason": "daemon exited during startup", "daemon": _daemon_row(conn)}
         current = _daemon_row(conn)
-        if int(current.get("pid") or 0) == proc.pid and current.get("mode") == "running":
+        current_pid = int(current.get("pid") or 0)
+        if current_pid == proc.pid and current.get("mode") == "running":
             return {"started": True, "pid": proc.pid, "daemon": current}
         time.sleep(0.05)
     return {"started": True, "pid": proc.pid, "ready": False, "reason": "daemon readiness timeout", "daemon": _daemon_row(conn)}
