@@ -419,14 +419,19 @@ def replay_pending_events(
 
 def _replay_pending_events_locked(
     conn, repo_root: Path, git_dir: Path, *, batch_limit: Optional[int] = None
-) -> Tuple[int, int, int]:
+) -> Tuple[int, int, int, bool]:
     """Process up to ``batch_limit`` pending events under publish_lock.
 
-    Returns ``(published, processed, remaining)``:
+    Returns ``(published, processed, remaining, terminated)``:
       - ``published``: events that resulted in a new commit
       - ``processed``: rows touched (published + skipped/failed) — 0 means
         the caller should not loop, since nothing changed.
       - ``remaining``: pending events still queued after this batch.
+      - ``terminated``: True when the batch broke early because of a
+        downstream-poisoning failure (commit-tree / update-ref). The
+        caller must not re-enter, since later pending events depend on
+        this event's after-state and the next replay cycle has to
+        rebuild the index from the live HEAD first.
     """
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
@@ -434,7 +439,7 @@ def _replay_pending_events_locked(
     recover_publishing(conn, repo_root, ctx)
     pending = load_pending_events(conn, branch)
     if not pending:
-        return 0, 0, 0
+        return 0, 0, 0, False
     total_pending = len(pending)
     if batch_limit is not None and batch_limit > 0:
         pending = pending[:batch_limit]
