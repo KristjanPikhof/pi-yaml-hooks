@@ -259,6 +259,32 @@ def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
         conn.close()
 
 
+def _wait_for_exit(pid: int, lock_path: Path, timeout: float) -> bool:
+    """Poll until the daemon pid is gone AND its flock is released."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not heartbeat_alive(pid) and not _lock_is_held(lock_path):
+            return True
+        time.sleep(0.05)
+    return not heartbeat_alive(pid) and not _lock_is_held(lock_path)
+
+
+def _lock_is_held(lock_path: Path) -> bool:
+    if not lock_path.exists():
+        return False
+    import fcntl as _fcntl
+    try:
+        with lock_path.open("a+") as fh:
+            try:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                return True
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return False
+
+
 def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
     conn = ensure_state(git_dir)
     try:
@@ -272,16 +298,49 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
             request_id = request_flush(conn, "stop", False, note="stop requested")
             row = _daemon_row(conn)
             pid = int(row.get("pid") or 0)
+            cached_token = row.get("daemon_token")
+            lock_fp = snapshot_state.lock_path(git_dir)
+
             if pid > 0 and heartbeat_alive(pid):
-                _signal_daemon(conn, signal.SIGUSR1)
+                _signal_daemon(conn, signal.SIGUSR1, expected_token=cached_token)
                 if not _wait_for_ack(conn, request_id):
-                    try:
+                    # Daemon did not consume the stop row in time; fall through
+                    # to SIGTERM then (if necessary) SIGKILL.
+                    pass
+
+                # Ask politely, then verify exit.
+                try:
+                    if heartbeat_alive(pid):
                         os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+                if not _wait_for_exit(pid, lock_fp, ACK_TIMEOUT):
+                    # Escalate to SIGKILL with a bounded grace window.
+                    try:
+                        if heartbeat_alive(pid):
+                            os.kill(pid, signal.SIGKILL)
                     except OSError:
                         pass
-                    _settle_pending_requests(conn, "daemon stopped before ack")
+                    if not _wait_for_exit(pid, lock_fp, 1.0):
+                        _settle_pending_requests(conn, "stop requested; escalation failed", request_id=request_id)
+                        print(
+                            json.dumps(
+                                {
+                                    "ok": False,
+                                    "action": "stop",
+                                    "request_id": request_id,
+                                    "branch": ctx["branch_ref"],
+                                    "error": "daemon refused to stop",
+                                    "pid": pid,
+                                },
+                                indent=2,
+                            ),
+                            file=sys.stderr,
+                        )
+                        return 1
+                _settle_pending_requests(conn, "daemon stopped", request_id=request_id)
             else:
-                _settle_pending_requests(conn, "stop acknowledged; daemon absent")
+                _settle_pending_requests(conn, "stop acknowledged; daemon absent", request_id=request_id)
             _refresh_mode(conn, "stopped", note="stop requested")
             print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
             return 0
