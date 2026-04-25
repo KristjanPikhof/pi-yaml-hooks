@@ -966,25 +966,103 @@ def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
 @contextmanager
 def control_lock(git_dir: Path) -> Iterator[None]:
     path = local_state_dir(git_dir) / CONTROL_LOCK_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as fh:
+    ensure_state_dir(path.parent)
+    with restricted_umask():
+        fh = path.open("a+")
+    restrict_file_perms(path)
+    try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+class PublishLockBusy(RuntimeError):
+    """Raised when ``publish_lock`` cannot be acquired in the requested window."""
 
 
 @contextmanager
-def publish_lock(git_dir: Path) -> Iterator[None]:
+def publish_lock(git_dir: Path, timeout: Optional[float] = None) -> Iterator[None]:
+    """Acquire the publish flock, optionally bounded by ``timeout`` seconds.
+
+    With ``timeout=None`` (the historical behavior) we block indefinitely.
+    With a positive timeout we poll-acquire so a stalled sibling tool cannot
+    permanently freeze the daemon's ack loop. Raises ``PublishLockBusy`` if
+    the deadline expires.
+    """
     path = local_state_dir(git_dir) / PUBLISH_LOCK_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    ensure_state_dir(path.parent)
+    with restricted_umask():
+        fh = path.open("a+")
+    restrict_file_perms(path)
+    try:
+        if timeout is None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        else:
+            deadline = time.time() + max(0.0, timeout)
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                        raise
+                    if time.time() >= deadline:
+                        raise PublishLockBusy(
+                            f"publish_lock at {path} not acquired within {timeout}s"
+                        ) from exc
+                    time.sleep(0.05)
         try:
             yield
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def process_fingerprint(pid: Optional[int] = None) -> Optional[str]:
+    """Cross-platform identity stamp for ``pid`` (defaults to the caller).
+
+    Combines the OS-reported process start time with argv. PID reuse cannot
+    reproduce the start time, so a recycled PID owned by an unrelated
+    process will not match a stored fingerprint. Returns ``None`` if the
+    process is not visible (already exited or permissions deny `ps`).
+    """
+    target_pid = os.getpid() if pid is None else int(pid)
+    if target_pid <= 0:
+        return None
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(target_pid), "-o", "lstart=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.decode("utf-8", errors="replace").strip()
+    return out or None
+
+
+def verify_process_identity(pid: int, expected_fingerprint: Optional[str]) -> bool:
+    """Return True if ``pid``'s current fingerprint matches ``expected_fingerprint``.
+
+    A ``None`` ``expected_fingerprint`` means the daemon never recorded one
+    (legacy state from before the fingerprint column existed) — we refuse
+    rather than fall back to the unsafe pid-only check, so the user is
+    forced to restart the daemon to upgrade safely.
+    """
+    if not expected_fingerprint:
+        return False
+    current = process_fingerprint(pid)
+    if current is None:
+        return False
+    return current == expected_fingerprint
 
 
 def capture_example_ops(
