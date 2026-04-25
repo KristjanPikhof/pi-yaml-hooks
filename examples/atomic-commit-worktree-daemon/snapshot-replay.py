@@ -372,12 +372,7 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
 
 
 def replay_pending_events(
-    conn,
-    repo_root: Path,
-    git_dir: Path,
-    *,
-    lock_timeout: Optional[float] = None,
-    batch_max: Optional[int] = None,
+    conn, repo_root: Path, git_dir: Path, *, lock_timeout: Optional[float] = None
 ) -> int:
     """Drain pending events into commits, bounded by ``lock_timeout`` seconds.
 
@@ -386,66 +381,20 @@ def replay_pending_events(
     ``PublishLockBusy`` to the caller. The caller (the daemon main loop)
     records the error in ``daemon_meta.last_publish_error`` and acks queued
     flush rows with the failure note rather than leaving controllers hung.
-
-    The drain is split into batches of at most ``batch_max`` events
-    (``SNAPSHOTD_REPLAY_BATCH_MAX`` env var, default 200). Between batches
-    we release ``publish_lock`` so sibling tools and the daemon's flush
-    ackers get a turn. If a batch exits leaving more pending events
-    behind, ``daemon_meta.last_replay_deferred`` records the count for
-    operators inspecting status.
     """
     timeout = REPLAY_PUBLISH_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
-    limit = batch_max if batch_max is not None else _replay_batch_max()
-    if limit <= 0:
-        limit = _replay_batch_max()
-    total = 0
-    while True:
-        with publish_lock(git_dir, timeout=timeout):
-            published, processed, remaining = _replay_pending_events_locked(
-                conn, repo_root, git_dir, batch_limit=limit
-            )
-        total += published
-        if remaining > 0:
-            try:
-                set_daemon_meta(conn, "last_replay_deferred", str(remaining))
-            except Exception:
-                pass
-        else:
-            try:
-                set_daemon_meta(conn, "last_replay_deferred", "0")
-            except Exception:
-                pass
-        # Stop when the lane drained, when the batch made no progress at
-        # all (would loop forever on the same blocked event), or when the
-        # locked call decided no more work was possible (processed=0).
-        if remaining == 0 or processed == 0:
-            return total
-        # Otherwise: lock was released; loop will re-acquire for the next
-        # batch, giving sibling tools a chance between iterations.
+    with publish_lock(git_dir, timeout=timeout):
+        return _replay_pending_events_locked(conn, repo_root, git_dir)
 
 
-def _replay_pending_events_locked(
-    conn, repo_root: Path, git_dir: Path, *, batch_limit: Optional[int] = None
-) -> Tuple[int, int, int]:
-    """Process up to ``batch_limit`` pending events under publish_lock.
-
-    Returns ``(published, processed, remaining)``:
-      - ``published``: events that resulted in a new commit
-      - ``processed``: rows touched (published + skipped/failed) — 0 means
-        the caller should not loop, since nothing changed.
-      - ``remaining``: pending events still queued after this batch.
-    """
+def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
     head = ctx["base_head"]
     recover_publishing(conn, repo_root, ctx)
     pending = load_pending_events(conn, branch)
     if not pending:
-        return 0, 0, 0
-    total_pending = len(pending)
-    if batch_limit is not None and batch_limit > 0:
-        pending = pending[:batch_limit]
-    batch_size = len(pending)
+        return 0
 
     env = _clean_git_env({"GIT_INDEX_FILE": str(index_path(git_dir))})
 
@@ -465,7 +414,6 @@ def _replay_pending_events_locked(
         state = dict(snapshot_state_for_index(repo_root, env))
         parent = head
         published = 0
-        processed = 0
 
         for event in pending:
             ops = [dict(row) for row in load_ops(conn, int(event["seq"]))]
@@ -481,41 +429,8 @@ def _replay_pending_events_locked(
                     error="stale branch generation",
                 )
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", ("stale branch generation", int(event["seq"])))
-                processed += 1
                 continue
-            try:
-                ancestor_ok = _is_ancestor(repo_root, str(event["base_head"]), head)
-            except GitObjectMissing as exc:
-                # The captured ``base_head`` cannot be resolved — typically
-                # because the object store was pruned/corrupted. Surface
-                # the real failure instead of papering over it as a
-                # generic "stale branch ancestry" blocked_conflict.
-                err_text = f"object_missing: {exc}"
-                try:
-                    set_daemon_meta(
-                        conn,
-                        "last_replay_object_missing",
-                        f"seq={int(event['seq'])}: {exc}",
-                    )
-                except Exception:
-                    pass
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
-                    target_commit_oid=None,
-                    status="failed",
-                    error=err_text,
-                )
-                conn.execute(
-                    "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
-                    (err_text, int(event["seq"])),
-                )
-                processed += 1
-                continue
-            if not ancestor_ok:
+            if not _is_ancestor(repo_root, str(event["base_head"]), head):
                 update_publish_state(
                     conn,
                     event_seq=int(event["seq"]),
@@ -530,7 +445,6 @@ def _replay_pending_events_locked(
                     "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
                     ("stale branch ancestry", int(event["seq"])),
                 )
-                processed += 1
                 continue
             validation_error = None
             for op in ops:
@@ -549,6 +463,7 @@ def _replay_pending_events_locked(
                     error=validation_error,
                 )
                 conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (validation_error, int(event["seq"])))
+                processed += 1
                 continue
 
             reason = None
@@ -568,6 +483,7 @@ def _replay_pending_events_locked(
                     error=reason,
                 )
                 conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", (reason, int(event["seq"])))
+                processed += 1
                 continue
 
             saved = dict(state)
