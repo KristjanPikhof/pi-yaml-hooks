@@ -282,7 +282,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                    published_ts REAL,
                    state TEXT NOT NULL DEFAULT 'pending',
                    commit_oid TEXT,
-                   error TEXT
+                   error TEXT,
+                   message TEXT
                )"""
         )
         conn.execute(
