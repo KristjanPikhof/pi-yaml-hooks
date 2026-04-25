@@ -498,7 +498,14 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
             parent = commit_oid
             published += 1
             conn.execute("UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?", (commit_oid, int(event["seq"])))
-            _reconcile_live_index(repo_root, _touched_paths(ops), saved, state)
+            _reconcile_live_index(
+                repo_root,
+                touched,
+                saved,
+                state,
+                captured_index=captured_index,
+                conn=conn,
+            )
             update_publish_state(
                 conn,
                 event_seq=int(event["seq"]),
