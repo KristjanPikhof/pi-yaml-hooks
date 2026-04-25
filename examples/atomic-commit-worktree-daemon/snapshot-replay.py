@@ -10,12 +10,18 @@ compare-and-swap ``git update-ref``.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from snapshot_state import (
     _clean_git_env,
