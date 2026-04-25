@@ -861,29 +861,77 @@ def prune_expired(
     retention_seconds: float,
     flush_retention_seconds: float = 86400.0,
 ) -> Dict[str, int]:
-    """Trim acked flush rows and terminal capture_events older than the window.
+    """Trim acked flushes, terminal events, and stale shadow generations.
 
-    capture_ops cascades on capture_events delete via the FK. Live state
-    (pending events, unacked flushes) is left alone so an outage that left
-    the daemon stopped does not eat user-visible queued work.
+    Live state (pending events, unacked flushes) is left alone so an outage
+    that left the daemon stopped does not eat user-visible queued work. All
+    three deletes run inside a single ``BEGIN IMMEDIATE`` so a crash
+    mid-prune leaves the table consistent (no orphan shadow rows pointing at
+    a generation whose events were just deleted).
+
+    Retention semantics: events are pruned by ``COALESCE(published_ts,
+    captured_ts)``. A long-pending event published at the cutoff thus gets
+    the full window from publish, not from capture.
+
+    Stale ``shadow_paths`` rows for ``(branch_ref, branch_generation)``
+    pairs with no remaining live or recent events are also dropped — without
+    this, ``daemon.db`` grows by ~one full HEAD tree per rebase / hard
+    checkout indefinitely.
     """
     now = time.time()
     flush_cutoff = now - max(0.0, flush_retention_seconds)
     event_cutoff = now - max(0.0, retention_seconds)
-    flush_cur = conn.execute(
-        "DELETE FROM flush_requests WHERE acknowledged_ts IS NOT NULL AND acknowledged_ts < ?",
-        (flush_cutoff,),
-    )
-    event_cur = conn.execute(
-        """DELETE FROM capture_events
-           WHERE state IN ('published','failed','blocked_conflict')
-             AND captured_ts < ?""",
-        (event_cutoff,),
-    )
+    with transaction(conn):
+        flush_cur = conn.execute(
+            "DELETE FROM flush_requests WHERE acknowledged_ts IS NOT NULL AND acknowledged_ts < ?",
+            (flush_cutoff,),
+        )
+        event_cur = conn.execute(
+            """DELETE FROM capture_events
+               WHERE state IN ('published','failed','blocked_conflict')
+                 AND COALESCE(published_ts, captured_ts) < ?""",
+            (event_cutoff,),
+        )
+        # Drop shadow rows for branch generations that no longer have any live
+        # events or shadow-anchor reasons to keep them. Keep the most recent
+        # generation per branch so a freshly-stopped daemon can resume without
+        # re-bootstrapping.
+        shadow_cur = conn.execute(
+            """DELETE FROM shadow_paths
+               WHERE (branch_ref, branch_generation) NOT IN (
+                   SELECT branch_ref, branch_generation FROM capture_events
+                   WHERE state IN ('pending','publishing')
+                   UNION
+                   SELECT branch_ref, MAX(branch_generation) FROM shadow_paths
+                   GROUP BY branch_ref
+               )
+                 AND updated_ts < ?""",
+            (event_cutoff,),
+        )
     return {
         "flush_requests": int(flush_cur.rowcount or 0),
         "capture_events": int(event_cur.rowcount or 0),
+        "shadow_paths": int(shadow_cur.rowcount or 0),
     }
+
+
+def mark_event_published(
+    conn: sqlite3.Connection,
+    *,
+    seq: int,
+    commit_oid: str,
+    published_ts: Optional[float] = None,
+) -> None:
+    """Update a capture_event row when its publish completes.
+
+    Centralizes the publish-time stamp so retention can use it.
+    """
+    conn.execute(
+        """UPDATE capture_events
+           SET state='published', commit_oid=?, error=NULL, published_ts=?
+           WHERE seq=?""",
+        (commit_oid, published_ts if published_ts is not None else time.time(), seq),
+    )
 
 
 def heartbeat_alive(pid: int) -> bool:
