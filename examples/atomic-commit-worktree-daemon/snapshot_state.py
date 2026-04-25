@@ -199,110 +199,166 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                    updated_ts REAL NOT NULL
                )"""
         )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS shadow_paths(
-               branch_ref TEXT NOT NULL,
-               branch_generation INTEGER NOT NULL,
-               path TEXT NOT NULL,
-               operation TEXT NOT NULL,
-               mode TEXT,
-               oid TEXT,
-               old_path TEXT,
-               base_head TEXT NOT NULL,
-               fidelity TEXT NOT NULL,
-               updated_ts REAL NOT NULL,
-               PRIMARY KEY (branch_ref, branch_generation, path)
-           )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS capture_events(
-               seq INTEGER PRIMARY KEY AUTOINCREMENT,
-               branch_ref TEXT NOT NULL,
-               branch_generation INTEGER NOT NULL,
-               base_head TEXT NOT NULL,
-               operation TEXT NOT NULL,
-               path TEXT NOT NULL,
-               old_path TEXT,
-               fidelity TEXT NOT NULL,
-               captured_ts REAL NOT NULL,
-               state TEXT NOT NULL DEFAULT 'pending',
-               commit_oid TEXT,
-               error TEXT
-           )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS capture_ops(
-               event_seq INTEGER NOT NULL,
-               ord INTEGER NOT NULL,
-               op TEXT NOT NULL,
-               path TEXT NOT NULL,
-               old_path TEXT,
-               before_oid TEXT,
-               before_mode TEXT,
-               after_oid TEXT,
-               after_mode TEXT,
-               fidelity TEXT NOT NULL,
-               PRIMARY KEY (event_seq, ord),
-               FOREIGN KEY(event_seq) REFERENCES capture_events(seq) ON DELETE CASCADE
-           )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS flush_requests(
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               command TEXT NOT NULL,
-               non_blocking INTEGER NOT NULL DEFAULT 0,
-               requested_ts REAL NOT NULL,
-               acknowledged_ts REAL,
-               completed_ts REAL,
-               status TEXT NOT NULL DEFAULT 'pending',
-               note TEXT
-           )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS publish_state(
-               id INTEGER PRIMARY KEY CHECK (id = 1),
-               event_seq INTEGER,
-               branch_ref TEXT,
-               branch_generation INTEGER,
-               source_head TEXT,
-               target_commit_oid TEXT,
-               status TEXT NOT NULL DEFAULT 'idle',
-               error TEXT,
-               updated_ts REAL NOT NULL
-           )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS daemon_meta(
-               key TEXT PRIMARY KEY,
-               value TEXT NOT NULL,
-               updated_ts REAL NOT NULL
-           )"""
-    )
-    conn.execute(
-        """INSERT OR IGNORE INTO daemon_state(id, pid, mode, heartbeat_ts, updated_ts)
-           VALUES (1, 0, 'stopped', 0, ?)""",
-        (time.time(),),
-    )
-    conn.execute(
-        """INSERT OR IGNORE INTO publish_state(id, updated_ts)
-           VALUES (1, ?)""",
-        (time.time(),),
-    )
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS shadow_paths(
+                   branch_ref TEXT NOT NULL,
+                   branch_generation INTEGER NOT NULL,
+                   path TEXT NOT NULL,
+                   operation TEXT NOT NULL,
+                   mode TEXT,
+                   oid TEXT,
+                   old_path TEXT,
+                   base_head TEXT NOT NULL,
+                   fidelity TEXT NOT NULL,
+                   updated_ts REAL NOT NULL,
+                   PRIMARY KEY (branch_ref, branch_generation, path)
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS capture_events(
+                   seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                   branch_ref TEXT NOT NULL,
+                   branch_generation INTEGER NOT NULL,
+                   base_head TEXT NOT NULL,
+                   operation TEXT NOT NULL,
+                   path TEXT NOT NULL,
+                   old_path TEXT,
+                   fidelity TEXT NOT NULL,
+                   captured_ts REAL NOT NULL,
+                   published_ts REAL,
+                   state TEXT NOT NULL DEFAULT 'pending',
+                   commit_oid TEXT,
+                   error TEXT
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS capture_ops(
+                   event_seq INTEGER NOT NULL,
+                   ord INTEGER NOT NULL,
+                   op TEXT NOT NULL,
+                   path TEXT NOT NULL,
+                   old_path TEXT,
+                   before_oid TEXT,
+                   before_mode TEXT,
+                   after_oid TEXT,
+                   after_mode TEXT,
+                   fidelity TEXT NOT NULL,
+                   PRIMARY KEY (event_seq, ord),
+                   FOREIGN KEY(event_seq) REFERENCES capture_events(seq) ON DELETE CASCADE
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS flush_requests(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   command TEXT NOT NULL,
+                   non_blocking INTEGER NOT NULL DEFAULT 0,
+                   requested_ts REAL NOT NULL,
+                   acknowledged_ts REAL,
+                   completed_ts REAL,
+                   status TEXT NOT NULL DEFAULT 'pending',
+                   note TEXT
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS publish_state(
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   event_seq INTEGER,
+                   branch_ref TEXT,
+                   branch_generation INTEGER,
+                   source_head TEXT,
+                   target_commit_oid TEXT,
+                   status TEXT NOT NULL DEFAULT 'idle',
+                   error TEXT,
+                   updated_ts REAL NOT NULL
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS daemon_meta(
+                   key TEXT PRIMARY KEY,
+                   value TEXT NOT NULL,
+                   updated_ts REAL NOT NULL
+               )"""
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO daemon_state(id, pid, mode, heartbeat_ts, updated_ts)
+               VALUES (1, 0, 'stopped', 0, ?)""",
+            (time.time(),),
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO publish_state(id, updated_ts)
+               VALUES (1, ?)""",
+            (time.time(),),
+        )
+        # PRAGMA user_version cannot be parameterized; SCHEMA_VERSION is an int
+        # constant defined in this module so f-string interpolation is safe.
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> Tuple[str, ...]:
+    return tuple(row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall())
+
+
+def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
+    """Apply additive ALTERs for known prior schemas.
+
+    Each step only runs when the column is actually missing — the operation
+    is idempotent across re-entries. Reaching a version newer than this
+    process knows about still raises so we never silently truncate columns.
+    """
+    if current_version > SCHEMA_VERSION:
+        raise IncompatibleLocalStateError(
+            f"daemon DB user_version={current_version} is newer than supported {SCHEMA_VERSION}"
+        )
+    if current_version == 0:
+        return
+    daemon_cols = set(_column_names(conn, "daemon_state"))
+    if "daemon_token" not in daemon_cols:
+        # v2 → v3 added the identity token used to gate signal delivery.
+        conn.execute("ALTER TABLE daemon_state ADD COLUMN daemon_token TEXT")
+    if "daemon_fingerprint" not in daemon_cols:
+        # v3 → v4 added the OS-bound process-start-time fingerprint that
+        # closes the PID-reuse window the bare token check left open.
+        conn.execute("ALTER TABLE daemon_state ADD COLUMN daemon_fingerprint TEXT")
+    capture_cols = set(_column_names(conn, "capture_events")) if (
+        "capture_events" in {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    ) else set()
+    if capture_cols and "published_ts" not in capture_cols:
+        # v4 added a publish-time stamp so retention can be measured from
+        # publish, not capture, for events that sat pending across a window.
+        conn.execute("ALTER TABLE capture_events ADD COLUMN published_ts REAL")
 
 
 def open_state(git_dir: Path, allow_reset: bool = True) -> sqlite3.Connection:
+    """Open or create the daemon state DB.
+
+    Distinguishes three failure modes that ``ensure_state`` handles
+    differently: an incompatible-but-readable schema (quarantine), a corrupt
+    DB file (also quarantine — surface as ``IncompatibleLocalStateError``),
+    and any other unexpected error (propagate raw so the caller can log it).
+    """
     try:
         conn = _connect(git_dir)
+    except sqlite3.DatabaseError as exc:
+        # "file is not a database" / "database disk image is malformed" /
+        # "file is encrypted or is not a database". README promises that
+        # corrupt local DBs are quarantined, not crash the daemon forever.
+        raise IncompatibleLocalStateError(f"daemon DB unreadable: {exc}") from exc
+    try:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version > SCHEMA_VERSION:
+            raise IncompatibleLocalStateError(
+                f"daemon DB user_version={version} is newer than supported {SCHEMA_VERSION}"
+            )
         if version not in (0, SCHEMA_VERSION):
-            raise IncompatibleLocalStateError(f"daemon DB user_version={version}")
+            _migrate_schema(conn, version)
         _ensure_schema(conn)
         return conn
-    except IncompatibleLocalStateError:
-        raise
-    except Exception:
-        raise
+    except sqlite3.DatabaseError as exc:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        raise IncompatibleLocalStateError(f"daemon DB read error: {exc}") from exc
 
 
 def ensure_state(git_dir: Path) -> sqlite3.Connection:
