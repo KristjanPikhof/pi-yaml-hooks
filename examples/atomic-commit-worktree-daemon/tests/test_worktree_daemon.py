@@ -84,7 +84,10 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         quarantine_dirs = list(git_dir.glob("ai-snapshotd.incompatible-*"))
         self.assertTrue(quarantine_dirs)
         with sqlite3.connect(db) as db_conn:
-            self.assertEqual(db_conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(
+                db_conn.execute("PRAGMA user_version").fetchone()[0],
+                snapshot_state.SCHEMA_VERSION,
+            )
 
     def test_apply_ops_supports_rename_mode_and_symlink(self) -> None:
         tmp, repo, git_dir = init_repo()
