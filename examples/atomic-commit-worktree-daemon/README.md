@@ -67,6 +67,16 @@ Update test.md
 Add test.md
 ```
 
+> **Polling-fidelity note:** The polling backend only observes states that are
+> present at scan time. If a file is created and deleted in the time between
+> two scans (shorter than `SNAPSHOTD_POLL_INTERVAL`, default `0.75s`), the
+> daemon may see fewer than three commits — or none at all for very short-lived
+> files. The `sleep 3` values in the example command above are chosen to exceed
+> the poll interval so that each state is visible to at least one scan. If you
+> see fewer commits than expected, try increasing the sleep durations or
+> lowering `SNAPSHOTD_POLL_INTERVAL`. Strict per-syscall capture requires a
+> future native or strict-mount backend.
+
 ## Goal
 
 The existing snapshot worker commits paths that PI can report through
@@ -288,26 +298,39 @@ The daemon stores worktree-local state under the worktree git dir:
 | Path | Purpose |
 | --- | --- |
 | `<git-dir>/ai-snapshotd/daemon.db` | SQLite state, capture queue, shadow tree, control requests |
-| `<git-dir>/ai-snapshotd/daemon.lock` | Singleton daemon lock |
-| `<git-dir>/ai-snapshotd/control.lock` | Short controller lock |
-| `<git-dir>/ai-snapshotd/publish.lock` | Replay/publish serialization lock |
+| `<git-dir>/ai-snapshotd/daemon.lock` | Singleton daemon lock held for the daemon's whole lifetime |
+| `<git-dir>/ai-snapshotd/control.lock` | Short-held controller lock around request-row insert + signal |
+| `<git-dir>/ai-snapshotd/publish.lock` | Replay/publish serialization lock (bounded by `SNAPSHOTD_PUBLISH_LOCK_TIMEOUT`) |
+| `<git-dir>/ai-snapshotd/worker.lock` | Quarantine probe lock used by `quarantine_incompatible_local_state` to confirm no live worker holds the state dir before moving it aside |
 | `<git-dir>/ai-snapshotd/worker.index` | Temporary replay index |
 | `<git-common-dir>/ai-snapshotd/branch-registry/` | Shared branch generation and worktree ownership registry |
 
+The daemon creates the state dir with `0700` and individual state files with
+`0600`. On a multi-user workstation this keeps daemon state, capture queue,
+and locks owner-only.
+
 `daemon.db` retains every published capture event, op row, and acknowledged
-flush request so the history is auditable after the fact. Default retention is
-7 days; tune with `SNAPSHOTD_RETENTION_DAYS`.
+flush request so the history is auditable after the fact. Retention is
+measured from `COALESCE(published_ts, captured_ts)`, so a long-pending event
+that publishes near the cutoff still gets the full window from publish (not
+from capture). Default retention is 7 days; tune with
+`SNAPSHOTD_RETENTION_DAYS`. Stale `shadow_paths` rows for branch generations
+that no longer have live or recent events are pruned alongside terminal
+events, so `daemon.db` size is bounded across rebases and hard checkouts.
 
 Useful settings:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SNAPSHOTD_POLL_INTERVAL` | `0.75` | Seconds between active polling scans |
-| `SNAPSHOTD_SLEEP_INTERVAL` | `2.0` | Sleep-loop interval after `sleep` requests |
-| `SNAPSHOTD_ACK_TIMEOUT` | `30` | Seconds the controller waits for a daemon ack on blocking flush/stop before escalating. |
+| `SNAPSHOTD_POLL_INTERVAL` | `0.75` | Seconds between active polling scans (clamped to ≥ 0.05 to avoid pathological CPU usage) |
+| `SNAPSHOTD_SLEEP_INTERVAL` | `2.0` | Sleep-loop interval after `sleep` requests (clamped to ≥ 0.05) |
+| `SNAPSHOTD_IDLE_BACKOFF_CEILING` | `30.0` | Ceiling for adaptive idle backoff. After many idle ticks the poll interval ramps to this value, so an idle daemon does not dominate I/O on large worktrees. |
+| `SNAPSHOTD_CAPTURE_ERROR_BACKOFF_MAX` | `60.0` | Ceiling for exponential backoff after consecutive capture errors so a persistent disk-full / corrupt-object error does not peg CPU. |
+| `SNAPSHOTD_PUBLISH_LOCK_TIMEOUT` | `30.0` | Seconds replay waits to acquire `publish.lock` before raising `PublishLockBusy`. Prevents a stalled sibling tool from freezing the daemon's ack loop indefinitely. |
+| `SNAPSHOTD_ACK_TIMEOUT` | `30` | Seconds the controller waits for a daemon ack on blocking flush/stop before escalating. The ack wait happens *outside* `control.lock`, so a slow daemon does not starve other controller commands. |
 | `SNAPSHOTD_HEARTBEAT_FRESH_SECONDS` | `15.0` | Age at which controller treats a heartbeat as stale |
 | `SNAPSHOTD_SENSITIVE_GLOBS` | see below | Comma-separated globs excluded from polling capture. Defaults cover env files (`.env`, `.env.*`), credential files (`.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`), kubeconfig variants (`kubeconfig`, `**/.kube/config`), `**/.aws/credentials`, `**/.docker/config.json`, SSH keys (`**/id_rsa*`, `**/id_ed25519*`, `**/id_ecdsa*`), TLS material (`**/*.pem`, `**/*.key`, `**/*.p12`, `**/*.pfx`, `**/*.crt`, `**/*.pkcs8`, `**/*.kdbx`), service-account JSON (`**/service-account*.json`), GPG/ASC files (`**/*.gpg`, `**/*.asc`), and the catch-alls `**/secrets/*` and `**/credentials*`. The full list lives in `snapshot_state.DEFAULT_SENSITIVE_GLOBS`. |
-| `SNAPSHOTD_RETENTION_DAYS` | `7` | Days of acked flush rows and terminal `capture_events` kept in `daemon.db` before the daemon prunes them. |
+| `SNAPSHOTD_RETENTION_DAYS` | `7` | Days of acked flush rows and terminal `capture_events` kept in `daemon.db` before the daemon prunes them. Clamped to ≥ 0.5 so a literal `=0` does not wipe the queue every minute. Stale `shadow_paths` rows for inactive branch generations are pruned alongside terminal events. |
 | `SNAPSHOTD_START_READY_TIMEOUT` | `1.0` | Seconds `start` waits for daemon heartbeat readiness |
 
 ## Crash recovery and durability
@@ -333,14 +356,38 @@ Other safeguards on restart:
 - **Stale heartbeat**: `status` overlays `mode=stale-heartbeat` with
   `heartbeat_age_seconds` when the row claims to be active but the pid is
   dead.
-- **PID reuse**: every signal verifies a `daemon_token` written at startup.
-  A recycled pid that belongs to an unrelated process never receives our
-  `SIGUSR1` or `SIGTERM`.
-- **Schema mismatch** (after upgrading pi-hooks): `ensure_state` calls
-  `quarantine_incompatible_local_state`, which moves the entire
-  `<git-dir>/ai-snapshotd/` aside under `ai-snapshotd.incompatible-<stamp>-<pid>/`
-  and starts fresh. Old state is preserved for forensics, never silently
-  overwritten.
+- **PID reuse**: every signal verifies *both* the `daemon_token` written
+  at startup *and* an OS-bound `daemon_fingerprint` (process start time +
+  argv) read fresh from `ps` before each `SIGUSR1`/`SIGTERM`/`SIGKILL`.
+  Token equality alone was not enough — it compared a row's stored token
+  against itself — so a recycled pid owned by an unrelated process used to
+  be vulnerable. The fingerprint cannot be reproduced by a recycled pid
+  because its parent process has a different start time, so escalation is
+  refused there. SIGTERM and SIGKILL are also gated on lock-still-held +
+  identity-still-matches, not raw pid presence.
+- **Submodule and nested-repo trees**: the rescan walker treats any
+  directory containing a `.git` file or directory as a traversal
+  boundary. Without this, a parent's gitlink (mode `160000`) used to be
+  silently replaced by submodule internals on the first poll, corrupting
+  parent commit history.
+- **Symlink swap**: regular files are read with `O_NOFOLLOW` and an
+  `fstat`-then-compare check against the prior `lstat`. A file replaced
+  by a symlink between classification and read is rejected, so an
+  attacker cannot redirect an innocuous-looking path to read
+  `/etc/shadow` or `~/.aws/credentials` into the object store. Symlinks
+  whose resolved target matches a sensitive glob, or escapes the
+  worktree, are also rejected.
+- **Ignore evaluator failure**: `git check-ignore` errors fail *closed* —
+  the poll tick aborts and records `last_capture_error: check-ignore: …`
+  rather than treating every candidate as un-ignored.
+- **Schema mismatch** (after upgrading pi-hooks): additive ALTERs cover
+  known prior schemas in `_migrate_schema`, so a v2/v3 daemon DB upgrades
+  in place and pending events are preserved. Truly incompatible state
+  (newer-than-supported `user_version`, corrupt or non-database file)
+  routes through `quarantine_incompatible_local_state`, which moves the
+  entire `<git-dir>/ai-snapshotd/` aside under
+  `ai-snapshotd.incompatible-<stamp>-<pid>/` and starts fresh. Old state
+  is preserved for forensics, never silently overwritten.
 - **Hostile environment**: every `git` invocation routes through
   `_clean_git_env`, which strips `GIT_DIR`, `GIT_WORK_TREE`,
   `GIT_OBJECT_DIRECTORY`, and the rest of the `GIT_*` namespace before
