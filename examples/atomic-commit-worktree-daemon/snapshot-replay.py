@@ -814,7 +814,6 @@ def batch_ai_messages(
     if endpoint is None:
         return {}
 
-    opener = _build_openai_opener()
     api_timeout = _openai_api_timeout()
     model = _openai_model()
     out: Dict[int, str] = {}
