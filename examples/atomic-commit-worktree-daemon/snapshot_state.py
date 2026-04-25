@@ -1090,17 +1090,69 @@ def publish_lock(git_dir: Path, timeout: Optional[float] = None) -> Iterator[Non
         fh.close()
 
 
+def _proc_fingerprint_linux(pid: int) -> Optional[str]:
+    """Read ``/proc/<pid>/stat`` field 22 (start_time) without forking.
+
+    ``/proc/PID/stat`` is a single line whose comm field (item 2) is wrapped
+    in parentheses and may contain spaces. We anchor the parse on the *last*
+    closing paren so a process named ``foo) bar (baz`` cannot confuse the
+    field index. Combines start_time with the cmdline so a recycled PID owned
+    by an unrelated process will not collide.
+
+    Returns ``None`` if /proc is not mounted, the PID is gone, or the stat
+    file is unreadable. Callers fall back to the ps-based path on those
+    platforms / failures.
+    """
+    stat_path = f"/proc/{pid}/stat"
+    try:
+        with open(stat_path, "rb") as fh:
+            raw = fh.read()
+    except (OSError, FileNotFoundError):
+        return None
+    rparen = raw.rfind(b")")
+    if rparen < 0:
+        return None
+    rest = raw[rparen + 1 :].split()
+    # rest[0] is field 3 (state). Field 22 is starttime → index 19 in `rest`.
+    if len(rest) < 20:
+        return None
+    starttime = rest[19].decode("ascii", errors="replace")
+    cmdline_path = f"/proc/{pid}/cmdline"
+    cmdline = ""
+    try:
+        with open(cmdline_path, "rb") as fh:
+            cmdline = fh.read().replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+    except OSError:
+        cmdline = ""
+    return f"linux:{starttime}:{cmdline}"
+
+
 def process_fingerprint(pid: Optional[int] = None) -> Optional[str]:
     """Cross-platform identity stamp for ``pid`` (defaults to the caller).
 
-    Combines the OS-reported process start time with argv. PID reuse cannot
-    reproduce the start time, so a recycled PID owned by an unrelated
-    process will not match a stored fingerprint. Returns ``None`` if the
-    process is not visible (already exited or permissions deny `ps`).
+    Resolution order:
+      * Linux: read ``/proc/<pid>/stat`` field 22 (start_time) plus cmdline.
+        This avoids forking ``ps``, which is missing in minimal containers
+        (distroless, scratch+ca-certs) and would otherwise leave the daemon
+        unable to verify its own identity — making it un-signalable.
+      * macOS / non-Linux: shell out to ``ps -p PID -o lstart=,command=``.
+        ``ps`` is part of the base system on darwin/BSD/etc.
+
+    PID reuse cannot reproduce start_time, so a recycled PID owned by an
+    unrelated process will not match a stored fingerprint. Returns ``None``
+    when the process is gone or the source is unreadable. Operators running
+    on Linux without ``/proc`` mounted (e.g. some chroots) get a degraded
+    fallback to ``ps`` if available; if both fail we return ``None`` and
+    ``verify_process_identity`` correctly refuses to confirm identity.
     """
     target_pid = os.getpid() if pid is None else int(pid)
     if target_pid <= 0:
         return None
+    if sys.platform.startswith("linux"):
+        fingerprint = _proc_fingerprint_linux(target_pid)
+        if fingerprint is not None:
+            return fingerprint
+        # /proc unreadable; degrade to ps below if it exists on this host.
     try:
         proc = subprocess.run(
             ["ps", "-p", str(target_pid), "-o", "lstart=,command="],
