@@ -465,9 +465,12 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                 interval = _next_error_interval(consecutive_capture_errors)
             else:
                 interval = _next_idle_interval(consecutive_idle_ticks)
-            deadline = time.time() + interval
-            while time.time() < deadline and not stop_event.is_set() and not wake_event.is_set():
-                time.sleep(min(0.1, interval))
+            # Single cancellable sleep: returns early when SIGUSR1 / SIGTERM /
+            # SIGINT fire (both stop and wake handlers set wake_event), and
+            # otherwise blocks for the full interval without spinning the
+            # CPU on a 0.1s poll loop. The previous form woke 600 times for
+            # a 60-second sleep just to re-check two flags.
+            wake_event.wait(timeout=interval)
 
         _heartbeat(conn, os.getpid(), "stopped", ctx, note="daemon stopping")
         conn.commit()
