@@ -83,12 +83,43 @@ class _IgnoreCheckFailed(RuntimeError):
     """Raised when ``git check-ignore`` errors so callers can fail closed."""
 
 
-def _read_symlink_target_bytes(path: Path) -> bytes:
-    # Per git's symlink convention, a symlink's blob content IS the literal
-    # link target. The sensitive-path filter only sees the *path*, not the
-    # target, so we additionally reject targets that match sensitive globs
-    # or escape the worktree root.
-    return os.readlink(path).encode("utf-8")
+def _validated_symlink_target_bytes(path: Path, repo_root: Path) -> Optional[bytes]:
+    """Read the symlink target *once* and validate the same bytes we will store.
+
+    Per git's symlink convention, a symlink's blob content IS the literal
+    link target. The sensitive-path filter only sees the *path*, not the
+    target, so we additionally reject targets that match sensitive globs
+    or escape the worktree root.
+
+    Closes the readlink TOCTOU: a previous version of this code called
+    ``os.readlink`` once for validation and a second time for storage, which
+    let an attacker flip the symlink between the two reads (validate a
+    benign target, hash a malicious one). We call ``os.readlink`` exactly
+    once and thread the resulting bytes through both validation and storage
+    so the validated value is the stored value.
+
+    Returns ``None`` if the target is unsafe or unreadable.
+    """
+    try:
+        raw_target = os.readlink(path)
+    except OSError:
+        return None
+    if os.path.isabs(raw_target):
+        absolute = Path(raw_target)
+    else:
+        absolute = (path.parent / raw_target)
+    try:
+        resolved = absolute.resolve()
+    except OSError:
+        return None
+    try:
+        rel_to_repo = resolved.relative_to(repo_root.resolve())
+    except ValueError:
+        # Target escapes the worktree — never write it as a blob.
+        return None
+    if snapshot_state.is_sensitive_path(rel_to_repo.as_posix()):
+        return None
+    return raw_target.encode("utf-8")
 
 
 def _open_regular_file_safely(
@@ -101,6 +132,12 @@ def _open_regular_file_safely(
     symlink in between, ``O_NOFOLLOW`` rejects it; if the inode/device
     changed, we discard the read so a freshly-replaced file isn't hashed
     under the prior path classification. Returns ``None`` to skip the file.
+
+    Enforces the configured per-file size ceiling against the post-open
+    ``fstat()`` size so a file that grew between ``lstat()`` and ``open()``
+    still cannot blow up the daemon's memory. ``_LargeFileSkipped`` is
+    raised on cap-exceeded so the caller can record an explicit skip
+    (rather than silently treating the file as unreadable).
     """
     flags = os.O_RDONLY
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -120,6 +157,9 @@ def _open_regular_file_safely(
             or stat.S_IFMT(actual.st_mode) != stat.S_IFREG
         ):
             return None
+        cap = _max_file_bytes()
+        if int(actual.st_size) > cap:
+            raise _LargeFileSkipped(int(actual.st_size), cap)
         chunks: List[bytes] = []
         while True:
             try:
@@ -135,30 +175,6 @@ def _open_regular_file_safely(
             os.close(fd)
         except OSError:
             pass
-
-
-def _symlink_target_is_safe(path: Path, repo_root: Path) -> bool:
-    """Reject symlinks whose resolved target is sensitive or escapes the repo."""
-    try:
-        raw_target = os.readlink(path)
-    except OSError:
-        return False
-    if os.path.isabs(raw_target):
-        absolute = Path(raw_target)
-    else:
-        absolute = (path.parent / raw_target)
-    try:
-        resolved = absolute.resolve()
-    except OSError:
-        return False
-    try:
-        rel_to_repo = resolved.relative_to(repo_root.resolve())
-    except ValueError:
-        # Target escapes the worktree — never write it as a blob.
-        return False
-    if snapshot_state.is_sensitive_path(rel_to_repo.as_posix()):
-        return False
-    return True
 
 
 def _is_git_ignored(repo_root: Path, rel: str) -> bool:
