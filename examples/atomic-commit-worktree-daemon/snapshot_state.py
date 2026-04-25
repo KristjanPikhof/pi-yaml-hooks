@@ -380,30 +380,39 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
 def load_shadow_paths(
     conn: sqlite3.Connection,
     *,
-    branch_ref: Optional[str] = None,
-    branch_generation: Optional[int] = None,
+    branch_ref: str,
+    branch_generation: int,
 ) -> Dict[str, Dict[str, Any]]:
-    """Return the shadow map, optionally filtered to one branch incarnation.
+    """Return the shadow map for one ``(branch_ref, branch_generation)`` pair.
 
-    Call sites that are acting under a specific branch context should always
-    pass both ``branch_ref`` and ``branch_generation``. Rows from other
-    branches (e.g. a stale row left behind after a ``git checkout``) must
-    never feed into that branch's change classification.
+    Both arguments are required keyword-only. The previous opt-in form was a
+    foot-gun: a forgetful caller could pass ``branch_ref=None`` and silently
+    pull rows from every branch, which mixes stale shadow entries from one
+    branch into another's change classification and produces phantom events.
     """
-    if branch_ref is not None and branch_generation is not None:
-        rows = conn.execute(
-            """SELECT path, operation, mode, oid, old_path, branch_ref,
-                      branch_generation, base_head, fidelity, updated_ts
-               FROM shadow_paths WHERE branch_ref=? AND branch_generation=?""",
-            (branch_ref, branch_generation),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT path, operation, mode, oid, old_path, branch_ref,
-                      branch_generation, base_head, fidelity, updated_ts
-               FROM shadow_paths"""
-        ).fetchall()
+    if branch_ref is None or branch_generation is None:
+        raise TypeError("load_shadow_paths requires branch_ref and branch_generation")
+    rows = conn.execute(
+        """SELECT path, operation, mode, oid, old_path, branch_ref,
+                  branch_generation, base_head, fidelity, updated_ts
+           FROM shadow_paths WHERE branch_ref=? AND branch_generation=?""",
+        (branch_ref, branch_generation),
+    ).fetchall()
     return {row["path"]: dict(row) for row in rows}
+
+
+def load_all_shadow_paths_unscoped(conn: sqlite3.Connection) -> Dict[str, List[Dict[str, Any]]]:
+    """Diagnostic-only reader returning shadow rows grouped by ``(branch_ref, generation)``."""
+    rows = conn.execute(
+        """SELECT path, operation, mode, oid, old_path, branch_ref,
+                  branch_generation, base_head, fidelity, updated_ts
+           FROM shadow_paths"""
+    ).fetchall()
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        key = f"{row['branch_ref']}@{row['branch_generation']}"
+        grouped.setdefault(key, []).append(dict(row))
+    return grouped
 
 
 def replace_shadow_paths(
