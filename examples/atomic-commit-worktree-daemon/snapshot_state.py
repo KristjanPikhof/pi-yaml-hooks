@@ -809,7 +809,7 @@ def build_message(event: sqlite3.Row, ops: List[Dict[str, Any]]) -> str:
 def load_pending_events(conn: sqlite3.Connection, branch_ref: str) -> List[sqlite3.Row]:
     return conn.execute(
         """SELECT seq, branch_ref, branch_generation, base_head, operation, path,
-                  old_path, fidelity, captured_ts, state, commit_oid, error
+                  old_path, fidelity, captured_ts, state, commit_oid, error, message
            FROM capture_events
            WHERE branch_ref=? AND state='pending'
            ORDER BY seq""",
