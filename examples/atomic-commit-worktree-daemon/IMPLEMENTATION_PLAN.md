@@ -152,8 +152,8 @@ Reuse the current snapshot worker's safest pieces:
 Change replay semantics:
 
 - one commit per captured event by default
-- optional `SNAPSHOTD_BATCH_WINDOW=0` as the default for atomic history
-- event coalescing only behind an explicit opt-in setting
+- daemon-side flush-request coalescing is shipped without a tunable knob; see
+  `snapshot-daemon.py` `process_requests` for the implementation
 
 ## 6. State layout
 
