@@ -281,9 +281,16 @@ def _scan_tree(
     branch_ref: str,
     branch_generation: int,
     head_baseline: Optional[Dict[str, Dict[str, Any]]] = None,
+    conn: Optional[Any] = None,
 ) -> Dict[str, Dict[str, Any]]:
     entries: Dict[str, Dict[str, Any]] = {}
-    cache = _STAT_CACHE.setdefault(_cache_key(repo_root, branch_ref, branch_generation), {})
+    active_key = _cache_key(repo_root, branch_ref, branch_generation)
+    # Drop any other (branch, generation) cache entries for this repo before
+    # we install / reuse the active one, so the cache cannot accumulate one
+    # entry per branch swap or generation bump for the lifetime of the
+    # process.
+    _evict_stale_cache_keys(active_key)
+    cache = _STAT_CACHE.setdefault(active_key, {})
     next_cache: Dict[str, Tuple[int, int, str]] = {}
     pending_files: List[Tuple[str, Path, os.stat_result]] = []
     candidate_rels: List[str] = []
