@@ -496,9 +496,14 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
             target = _verified_target(conn)
             if flush_first:
                 if target is not None:
-                    flush_request_id, _signaled, _branch, _present, flush_warning = (
-                        _record_flush(repo_root, conn, non_blocking=False)
-                    )
+                    (
+                        flush_request_id,
+                        _signaled,
+                        _branch,
+                        _live,
+                        _script_present,
+                        flush_warning,
+                    ) = _record_flush(repo_root, conn, non_blocking=False)
                 else:
                     flush_warning = "no daemon present; skipping pre-stop flush"
             request_id = request_flush(conn, "stop", False, note="stop requested")
