@@ -584,7 +584,7 @@ def test_sensitive_path_redacted_in_ai_payload(
         body_json = json.loads(body_text)
         # The events JSON blob is embedded as plain text inside the user
         # message content string: "Generate commit messages …\n\n<JSON>".
-        # Extract it by finding the last '{' that starts a valid JSON object.
+        # Locate the {"events": [...]} wrapper by searching for the key.
         seqs_in_payload: list[int] = []
         for msg in body_json.get("messages", []):
             if msg.get("role") != "user":
@@ -592,8 +592,8 @@ def test_sensitive_path_redacted_in_ai_payload(
             content = msg.get("content", "")
             if not isinstance(content, str):
                 continue
-            # The JSON blob starts after the last double-newline separator.
-            json_start = content.rfind("{")
+            # The events wrapper object always starts with {"events":
+            json_start = content.find('{"events"')
             if json_start == -1:
                 continue
             try:
