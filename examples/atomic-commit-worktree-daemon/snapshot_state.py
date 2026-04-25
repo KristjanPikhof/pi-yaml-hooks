@@ -14,6 +14,7 @@ import errno
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +29,7 @@ from snapshot_shared import (
     current_head,
     ensure_branch_registry,
     ensure_state_dir,
+    git_bin,
     local_state_dir,
     quarantine_incompatible_local_state,
     resolve_repo_paths as _resolve_repo_paths,
