@@ -1719,17 +1719,21 @@ def _replay_pending_events_locked(
                 if reason:
                     break
             if reason:
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
-                    target_commit_oid=None,
-                    status="blocked_conflict",
-                    error=reason,
-                )
-                conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", (reason, int(event["seq"])))
+                with transaction(conn):
+                    update_publish_state(
+                        conn,
+                        event_seq=int(event["seq"]),
+                        branch_ref=branch,
+                        branch_generation=int(ctx["branch_generation"]),
+                        source_head=head,
+                        target_commit_oid=None,
+                        status="blocked_conflict",
+                        error=reason,
+                    )
+                    conn.execute(
+                        "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                        (reason, int(event["seq"])),
+                    )
                 processed += 1
                 continue
 
