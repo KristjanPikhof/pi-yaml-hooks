@@ -430,7 +430,7 @@ def snapshot_state_for_index(repo_root: Path, env: Dict[str, str]) -> Dict[str, 
         parts = meta.split()
         if len(parts) < 2:
             continue
-        state[path_bytes.decode("utf-8", errors="replace")] = (
+        state[os.fsdecode(path_bytes)] = (
             parts[0].decode(),
             parts[1].decode(),
         )
