@@ -62,6 +62,12 @@ _GIT_ENV_ALLOWLIST = (
 )
 
 
+# Pinned safe PATH used to resolve ``git`` and to harden the env passed to
+# subprocess git. Mirrors ``snapshot_shared._SAFE_PATH``; both copies must
+# stay aligned so the resolved git binary is identical across modules.
+_SAFE_PATH = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/sbin:/sbin"
+
+
 def _clean_git_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     for name in _GIT_ENV_ALLOWLIST:
@@ -69,6 +75,10 @@ def _clean_git_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         if value is not None:
             base[name] = value
     base.setdefault("GIT_TERMINAL_PROMPT", "0")
+    # Override PATH with the trusted PATH used to resolve ``git`` so child
+    # git processes that exec sub-helpers (e.g. ``git-remote-https``) cannot
+    # be redirected by an attacker-controlled inherited PATH.
+    base["PATH"] = _SAFE_PATH
     if extra:
         base.update(extra)
     return base
