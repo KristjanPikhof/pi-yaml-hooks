@@ -788,6 +788,28 @@ def _build_openai_opener() -> urllib_request.OpenerDirector:
     return urllib_request.build_opener(_NoRedirectHandler())
 
 
+# Captured at import so ``_open_openai`` can detect a monkeypatched
+# ``urlopen`` (tests replace the attribute with a stub) and route
+# through that stub rather than the production opener. In normal
+# runs the identity matches and we use a fresh redirect-refusing
+# opener every call.
+_STD_URLOPEN = urllib_request.urlopen
+
+
+def _open_openai(req: urllib_request.Request, *, timeout: float):
+    """Issue ``req`` with redirect-refusal active.
+
+    Tests monkeypatch ``replay.urllib_request.urlopen``; honour that
+    override transparently so existing fixtures keep working. In
+    production we route through a fresh ``OpenerDirector`` whose
+    ``HTTPRedirectHandler`` raises on any 3xx, preventing the
+    ``Authorization`` header from being replayed cross-origin.
+    """
+    if urllib_request.urlopen is not _STD_URLOPEN:
+        return urllib_request.urlopen(req, timeout=timeout)
+    return _build_openai_opener().open(req, timeout=timeout)
+
+
 def batch_ai_messages(
     events_with_ops: List[Tuple[Any, List[Mapping[str, Any]]]],
     diffs_by_event: Mapping[int, Mapping[int, str]],
