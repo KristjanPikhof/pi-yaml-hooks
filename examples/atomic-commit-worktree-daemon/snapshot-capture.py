@@ -89,6 +89,47 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     return entries
 
 
+def _bootstrap_meta_key(branch_ref: str, branch_generation: int) -> str:
+    return f"shadow_bootstrapped:{branch_ref}:{branch_generation}"
+
+
+def _head_tree_entries(repo_root: Path, head: str) -> Dict[str, Dict[str, Any]]:
+    """Return {rel: {path, mode, oid}} from `git ls-tree -r` at ``head``.
+
+    Using the HEAD tree as baseline means the first modify recorded by the
+    daemon describes a diff against what git already committed — not against
+    whatever dirty state the worktree happened to have at bootstrap.
+    """
+    if not head:
+        return {}
+    proc = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", head],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=snapshot_state._clean_git_env(),
+    )
+    if proc.returncode != 0:
+        return {}
+    entries: Dict[str, Dict[str, Any]] = {}
+    for chunk in proc.stdout.split(b"\x00"):
+        if not chunk:
+            continue
+        meta, _tab, path_bytes = chunk.partition(b"\t")
+        parts = meta.split()
+        if len(parts) < 3:
+            continue
+        mode = parts[0].decode()
+        oid = parts[2].decode()
+        rel = os.fsdecode(path_bytes)
+        if rel in IGNORE_NAMES or rel.startswith(".git/"):
+            continue
+        if _is_sensitive(rel):
+            continue
+        entries[rel] = {"path": rel, "mode": mode, "oid": oid}
+    return entries
+
+
 def bootstrap_shadow(
     conn,
     repo_root: Path,
@@ -97,9 +138,18 @@ def bootstrap_shadow(
     branch_generation: int,
     base_head: str,
 ) -> int:
-    if snapshot_state.get_daemon_meta(conn, "shadow_bootstrapped") == "1":
+    """Seed the shadow map against HEAD for this (branch, generation).
+
+    Shadow state is keyed by (branch_ref, branch_generation). When the daemon
+    is bounced across a branch switch, the prior branch's row stays put and
+    this branch's row is either reused (already bootstrapped) or rebuilt.
+    """
+    marker = _bootstrap_meta_key(branch_ref, branch_generation)
+    stored_head = snapshot_state.get_daemon_meta(conn, marker)
+    if stored_head == base_head:
         return 0
-    live = _scan_tree(repo_root)
+
+    entries = _head_tree_entries(repo_root, base_head)
     snapshot_state.replace_shadow_paths(
         conn,
         branch_ref=branch_ref,
@@ -113,15 +163,24 @@ def bootstrap_shadow(
                 "oid": row["oid"],
                 "fidelity": "rescan",
             }
-            for row in live.values()
+            for row in entries.values()
         ),
     )
-    snapshot_state.set_daemon_meta(conn, "shadow_bootstrapped", "1")
-    return len(live)
+    snapshot_state.set_daemon_meta(conn, marker, base_head)
+    return len(entries)
 
 
-def _shadow_map(conn) -> Dict[str, Dict[str, Any]]:
-    return snapshot_state.load_shadow_paths(conn)
+def _shadow_map(
+    conn,
+    *,
+    branch_ref: str,
+    branch_generation: int,
+) -> Dict[str, Dict[str, Any]]:
+    return snapshot_state.load_shadow_paths(
+        conn,
+        branch_ref=branch_ref,
+        branch_generation=branch_generation,
+    )
 
 
 def _classify_changes(
