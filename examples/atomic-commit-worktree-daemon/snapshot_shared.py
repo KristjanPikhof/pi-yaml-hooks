@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import errno
+import shutil
 import stat
 import subprocess
 import time
