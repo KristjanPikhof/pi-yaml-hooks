@@ -214,8 +214,13 @@ class LargeFileCapTests(unittest.TestCase):
 
         # Cap to 1KiB so the test stays quick; the file just needs to exceed
         # the configured ceiling, which the env-var override controls.
-        os.environ["SNAPSHOTD_MAX_FILE_BYTES"] = "1024"
-        self.addCleanup(os.environ.pop, "SNAPSHOTD_MAX_FILE_BYTES", None)
+        # Use patch.dict so any pre-existing developer export is also restored.
+        import unittest.mock as _mock
+        patcher = _mock.patch.dict(
+            os.environ, {"SNAPSHOTD_MAX_FILE_BYTES": "1024"}, clear=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         big = repo / "big.bin"
         big.write_bytes(b"x" * (4 * 1024))  # 4 KiB > 1 KiB cap
