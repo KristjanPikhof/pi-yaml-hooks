@@ -354,6 +354,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         # PRAGMA user_version cannot be parameterized; SCHEMA_VERSION is an int
         # constant defined in this module so f-string interpolation is safe.
+        assert isinstance(SCHEMA_VERSION, int), "SCHEMA_VERSION must be int"
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
 
