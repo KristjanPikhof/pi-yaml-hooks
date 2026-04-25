@@ -1014,11 +1014,16 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         sent2 = daemonctl._signal_daemon(conn, _signal.SIGUSR1)
         self.assertFalse(sent2, "controller signaled a process with no token recorded")
 
-        # Effect check: the child's handler must not have fired. Give the
-        # signal a brief moment to land if the controller's identity check
-        # was a no-op — without this delay we'd assert before the signal
-        # could be delivered, masking a real regression.
-        time.sleep(0.2)
+        # Effect check: the child's handler must not have fired. Poll for up to
+        # 1s (20 × 50ms) to give the signal time to land if the identity check
+        # was a no-op — a bare sleep of 0.2s would mask slow-delivery regressions
+        # on loaded CI runners.  The strong assertion is "sentinel never appears".
+        for _ in range(20):
+            time.sleep(0.05)
+            if sentinel.exists():
+                self.fail(
+                    "controller delivered SIGUSR1 to a process whose identity did not verify"
+                )
         self.assertFalse(
             sentinel.exists(),
             "controller delivered SIGUSR1 to a process whose identity did not verify",
