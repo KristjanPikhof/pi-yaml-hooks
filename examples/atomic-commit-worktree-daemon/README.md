@@ -33,7 +33,9 @@ Copy [`hooks.yaml`](./hooks.yaml) into your project hook file, then replace
 `<example-dir>` with the absolute path to this
 `examples/atomic-commit-worktree-daemon/` directory. The starter YAML assigns it
 inside double quotes (`SNAPSHOT_DAEMON_DIR="<example-dir>"`) so paths with spaces
-continue to work after replacement.
+continue to work after replacement. Avoid double-quote, backslash, and shell
+substitution characters (`"`, `\`, `` ` ``, `$`) inside `<example-dir>`; they
+will break the surrounding `bash -c` action string.
 
 The hook pack uses only `bash` actions. It does not rely on unsupported PI
 `command:` actions, and it does not use `tool:` actions as imperative execution.
