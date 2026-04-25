@@ -9,14 +9,18 @@ from ``snapshot-capture.py``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
 import signal
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+EX_TEMPFAIL = 75
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
