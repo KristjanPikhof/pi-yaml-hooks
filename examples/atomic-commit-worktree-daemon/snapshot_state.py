@@ -709,7 +709,7 @@ def current_branch(repo_root: Path) -> Optional[str]:
 
 def snapshot_state_for_index(repo_root: Path, env: Dict[str, str]) -> Dict[str, Tuple[str, str]]:
     proc = subprocess.run(
-        ["git", "ls-files", "-s", "-z"],
+        [git_bin(), "ls-files", "-s", "-z"],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
