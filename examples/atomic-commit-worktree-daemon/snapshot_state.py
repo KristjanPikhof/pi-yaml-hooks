@@ -68,6 +68,62 @@ def _clean_git_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     return base
 
 
+# Default-deny glob list for paths whose bytes must never enter the git object
+# store: credential files, SSH/TLS private keys, kubeconfigs, password stores,
+# cloud/service-account tokens, and signed-key bundles. Operators can override
+# or extend via the SNAPSHOTD_SENSITIVE_GLOBS env var.
+DEFAULT_SENSITIVE_GLOBS = (
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    ".npmrc",
+    "**/.npmrc",
+    ".netrc",
+    "**/.netrc",
+    ".pgpass",
+    "**/.pgpass",
+    ".git-credentials",
+    "**/.git-credentials",
+    "kubeconfig",
+    "**/kubeconfig",
+    "**/.aws/credentials",
+    "**/.docker/config.json",
+    "**/.kube/config",
+    "**/id_rsa*",
+    "**/id_ed25519*",
+    "**/id_ecdsa*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.crt",
+    "**/*.pkcs8",
+    "**/*.kdbx",
+    "**/service-account*.json",
+    "**/*.gpg",
+    "**/*.asc",
+    "**/secrets/*",
+    "**/credentials*",
+)
+
+
+class SensitivePathRefused(RuntimeError):
+    """Raised when a caller tries to persist a path matching the sensitive glob list."""
+
+
+def _sensitive_patterns() -> Tuple[str, ...]:
+    override = os.environ.get("SNAPSHOTD_SENSITIVE_GLOBS")
+    if override is None:
+        return DEFAULT_SENSITIVE_GLOBS
+    return tuple(p.strip() for p in override.split(",") if p.strip())
+
+
+def is_sensitive_path(rel: str) -> bool:
+    import fnmatch
+    return any(fnmatch.fnmatch(rel, pattern) for pattern in _sensitive_patterns())
+
+
 def db_path(git_dir: Path) -> Path:
     return local_state_dir(git_dir) / DB_NAME
 
