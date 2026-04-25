@@ -983,11 +983,17 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
         (repo / "other.txt").write_text("only on feature\n", encoding="utf-8")
 
         seqs = capture.poll_once(conn, repo, git_dir)
-        rows = conn.execute(
-            "SELECT branch_ref, operation, path FROM capture_events WHERE seq IN (%s)"
-            % ",".join(["?"] * len(seqs)) if seqs else "SELECT branch_ref, operation, path FROM capture_events WHERE 0",
-            seqs if seqs else [],
-        ).fetchall()
+        # Build the IN-clause separately from the query string. The previous
+        # one-liner mixed `%` formatting with a conditional expression and
+        # was easy to misread; readers had to mentally evaluate operator
+        # precedence to confirm the parameter list lined up with the
+        # placeholders.
+        if seqs:
+            placeholders = ",".join(["?"] * len(seqs))
+            sql = f"SELECT branch_ref, operation, path FROM capture_events WHERE seq IN ({placeholders})"
+            rows = conn.execute(sql, seqs).fetchall()
+        else:
+            rows = []
         # Every event recorded by this poll must belong to branch B.
         self.assertTrue(rows, "expected at least one event under feature branch")
         for row in rows:
