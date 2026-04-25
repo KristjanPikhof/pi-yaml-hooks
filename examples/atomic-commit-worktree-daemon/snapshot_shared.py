@@ -17,9 +17,15 @@ from typing import Any, Dict, Optional, Tuple
 STATE_SUBDIR = "ai-snapshotd"
 REGISTRY_SUBDIR = f"{STATE_SUBDIR}/branch-registry"
 REGISTRY_SCHEMA = 1
-LOCAL_STATE_SCHEMA_VERSION = 2
+LOCAL_STATE_SCHEMA_VERSION = 4
 RESET_LOCK_NAME = f"{STATE_SUBDIR}.reset.lock"
 WORKER_LOCK_SUBPATH = f"{STATE_SUBDIR}/worker.lock"
+
+# Default-deny umask for state-directory writes. 0o077 strips group + other
+# bits so daemon.db, lock files, and worktree-local indexes are owner-only on
+# shared multi-user systems. Callers wrap fs writes in `_restricted_umask()`.
+STATE_FILE_MODE = 0o600
+STATE_DIR_MODE = 0o700
 
 
 class IncompatibleLocalStateError(RuntimeError):
