@@ -320,6 +320,56 @@ Useful settings:
 | `SNAPSHOTD_RETENTION_DAYS` | `7` | Days of acked flush rows and terminal `capture_events` kept in `daemon.db` before the daemon prunes them. |
 | `SNAPSHOTD_START_READY_TIMEOUT` | `1.0` | Seconds `start` waits for daemon heartbeat readiness |
 
+## AI commit messages (optional)
+
+Commit-message generation is a separate concern from capture fidelity. Whether AI is on or off, the daemon captures the same file events and commits the same tree contents. The only thing that changes is the text of each commit message.
+
+### Fallback order
+
+For each event the replay publisher resolves the commit message in this order:
+
+1. **Stored AI batch message** — value from `capture_events.message`, written during the AI pre-pass before the commit loop.
+2. **`SNAPSHOTD_COMMIT_MESSAGE_CMD` output** — stdout of the configured shell command, run once per event. Used when AI is off or skipped.
+3. **Deterministic message** — derived from event type and path alone; always available, requires no network or external process.
+
+Failures at tier 1 or tier 2 never block a commit or change the event state to `failed`. They silently fall through to the next tier. Only `git commit-tree` or `git update-ref` errors mark an event `failed` or `blocked_conflict`, the same as before AI was added.
+
+### Env vars
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SNAPSHOTD_AI_ENABLE` | off | Set to `1`, `true`, or `yes` to enable AI commit messages. Also requires `OPENAI_API_KEY`. |
+| `SNAPSHOTD_AI_MAX_QUEUE_DEPTH` | `2` | If the pending-event backlog exceeds this count, the AI pre-pass is skipped for that drain cycle. Increase to `50` or `100` when using chunked batching. |
+| `SNAPSHOTD_AI_CHUNK_SIZE` | `20` | Events per OpenAI chat-completions request (clamped to `1..100`). One request covers many events; raise this before adding more API calls. |
+| `SNAPSHOTD_COMMIT_MESSAGE_CMD` | unset | Shell command run once per event (parsed with `shlex.split`, not a shell). The event JSON is written to stdin; stdout becomes the commit message. Used as the second-priority fallback when AI is off or produced no result. |
+| `OPENAI_API_KEY` | unset | Required to enable built-in AI mode. Leave unset to keep AI off. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for the chat-completions endpoint. Must start with `https://`; an `http://` value is rejected and AI is skipped for the entire drain cycle. |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Model name sent in the chat-completions request. |
+| `OPENAI_API_TIMEOUT` | `15.0` | Network timeout in seconds for each OpenAI request (also applied to `SNAPSHOTD_COMMIT_MESSAGE_CMD` subprocess). |
+
+### How batch AI works
+
+When AI is enabled and the backlog is at or below `SNAPSHOTD_AI_MAX_QUEUE_DEPTH`, the replay publisher does a pre-pass before building commits:
+
+1. Find events whose `capture_events.message` is still `NULL`.
+2. Split them into chunks of `SNAPSHOTD_AI_CHUNK_SIZE`.
+3. Send one chat-completions request per chunk using JSON-mode structured output.
+4. Persist returned messages into `capture_events.message`.
+5. Build commits using stored messages. Any event whose chunk failed falls back to `SNAPSHOTD_COMMIT_MESSAGE_CMD` if configured, otherwise to the deterministic message.
+
+The request uses the chat-completions API with a `json_schema` response format; the model must return a `messages` array keyed by event `seq`.
+
+### Redaction
+
+Before any data leaves the machine, paths matching the sensitive glob list are replaced with `<redacted: sensitive path>` in the diff payload. The same glob list that governs capture exclusions (see `SNAPSHOTD_SENSITIVE_GLOBS` above) is applied here. The full default pattern set lives in `_DEFAULT_SENSITIVE_PATTERNS` inside `snapshot-replay.py`. Setting `SNAPSHOTD_SENSITIVE_GLOBS` replaces the built-in list entirely for both capture and message generation.
+
+### Security notes
+
+- Built-in AI is off by default. Setting `SNAPSHOTD_AI_ENABLE=1` without `OPENAI_API_KEY` has no effect.
+- `OPENAI_BASE_URL` must use `https://`. An `http://` base URL is rejected at the start of each drain cycle; no diffs are sent.
+- `SNAPSHOTD_COMMIT_MESSAGE_CMD` is executed as a plain argv list, not through a shell.
+- Redaction happens before any network call or subprocess invocation.
+
 ## Crash recovery and durability
 
 The daemon has no network dependency: it reads/writes only the local SQLite
