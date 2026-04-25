@@ -57,7 +57,7 @@ def _is_git_ignored(repo_root: Path, rel: str) -> bool:
 
 
 def _is_sensitive(rel: str) -> bool:
-    return any(fnmatch.fnmatch(rel, pattern) for pattern in SENSITIVE_PATTERNS)
+    return snapshot_state.is_sensitive_path(rel)
 
 
 def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
