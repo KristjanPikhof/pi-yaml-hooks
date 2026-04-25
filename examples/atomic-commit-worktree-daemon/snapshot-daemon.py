@@ -31,6 +31,8 @@ import snapshot_state  # noqa: E402
 
 POLL_INTERVAL = float(os.environ.get("SNAPSHOTD_POLL_INTERVAL", "0.75"))
 SLEEP_INTERVAL = float(os.environ.get("SNAPSHOTD_SLEEP_INTERVAL", "2.0"))
+RETENTION_DAYS = float(os.environ.get("SNAPSHOTD_RETENTION_DAYS", "7"))
+PRUNE_INTERVAL_SECONDS = 60.0
 
 
 def _load_path_module(name: str, filename: str):
