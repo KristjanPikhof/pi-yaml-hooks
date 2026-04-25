@@ -443,19 +443,25 @@ def apply_ops_to_index(repo_root: Path, env: Dict[str, str], ops: List[Dict[str,
     for op in ops:
         kind = op["op"]
         if kind in {"create", "modify", "mode", "symlink"}:
-            mode = op.get("after_mode") or op.get("before_mode") or "100644"
-            oid = op.get("after_oid") or op.get("before_oid") or zero_oid
+            mode = op.get("after_mode")
+            oid = op.get("after_oid")
+            if not mode or not oid:
+                raise RuntimeError(
+                    f"missing after_mode/after_oid for {kind} {op['path']}"
+                )
             lines.append(f"{mode} {oid}\t{op['path']}".encode("utf-8"))
         elif kind == "delete":
             lines.append(f"0 {zero_oid}\t{op['path']}".encode("utf-8"))
         elif kind == "rename":
             if op.get("old_path"):
                 lines.append(f"0 {zero_oid}\t{op['old_path']}".encode("utf-8"))
-            lines.append(
-                f"{op.get('after_mode') or '100644'} {op.get('after_oid') or zero_oid}\t{op['path']}".encode(
-                    "utf-8"
+            mode = op.get("after_mode")
+            oid = op.get("after_oid")
+            if not mode or not oid:
+                raise RuntimeError(
+                    f"missing after_mode/after_oid for rename {op['path']}"
                 )
-            )
+            lines.append(f"{mode} {oid}\t{op['path']}".encode("utf-8"))
     if not lines:
         return
     payload = b"\x00".join(lines) + b"\x00"
