@@ -128,11 +128,53 @@ class SensitivePathRefused(RuntimeError):
     """Raised when a caller tries to persist a path matching the sensitive glob list."""
 
 
+def _expand_globs(patterns: Iterable[str]) -> Tuple[str, ...]:
+    """Expand ``**/foo`` to also match top-level ``foo``.
+
+    fnmatch does not understand the ``**`` recursive prefix the way gitignore
+    does — ``**/secrets/*`` matches ``a/secrets/x`` but not the bare top-level
+    ``secrets/x``. The daemon needs gitignore-equivalent semantics so a secret
+    in the repo root is not silently allowed through. We pair every ``**/X``
+    pattern with its bare ``X`` form, which together cover both root-level
+    and nested matches under fnmatch.
+    """
+    expanded: List[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        if pattern not in seen:
+            expanded.append(pattern)
+            seen.add(pattern)
+        if pattern.startswith("**/"):
+            tail = pattern[3:]
+            if tail and tail not in seen:
+                expanded.append(tail)
+                seen.add(tail)
+    return tuple(expanded)
+
+
 def _sensitive_patterns() -> Tuple[str, ...]:
+    """Return the active sensitive-path glob list.
+
+    ``SNAPSHOTD_SENSITIVE_GLOBS`` semantics:
+        * unset, empty, or whitespace-only -> use ``DEFAULT_SENSITIVE_GLOBS``.
+          Treating an empty override as "disable all filtering" was a
+          foot-gun: shell exports like ``SNAPSHOTD_SENSITIVE_GLOBS=""`` are
+          easy to write by accident and would silently let secrets enter the
+          object store. The safe baseline always applies unless the operator
+          provides an explicit non-empty override.
+        * non-empty -> parse comma-separated patterns; whitespace is trimmed
+          and empty entries are dropped.
+
+    Patterns are then expanded so fnmatch matches gitignore-style ``**/`` at
+    the repo root.
+    """
     override = os.environ.get("SNAPSHOTD_SENSITIVE_GLOBS")
-    if override is None:
-        return DEFAULT_SENSITIVE_GLOBS
-    return tuple(p.strip() for p in override.split(",") if p.strip())
+    if override is None or not override.strip():
+        return _expand_globs(DEFAULT_SENSITIVE_GLOBS)
+    parsed = tuple(p.strip() for p in override.split(",") if p.strip())
+    if not parsed:
+        return _expand_globs(DEFAULT_SENSITIVE_GLOBS)
+    return _expand_globs(parsed)
 
 
 def is_sensitive_path(rel: str) -> bool:
