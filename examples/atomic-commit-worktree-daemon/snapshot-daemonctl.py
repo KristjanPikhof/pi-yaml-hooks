@@ -471,6 +471,13 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
                 _await_flush_ack(conn, flush_request_id)
             except TimeoutError as exc:
                 print(str(exc), file=sys.stderr)
+            except FlushFailedError as exc:
+                # Best-effort drain on stop: log the failure and proceed with
+                # the actual stop request rather than aborting.
+                print(
+                    f"flush prior to stop reported failure: {exc.note or exc}",
+                    file=sys.stderr,
+                )
 
         if target is None:
             _settle_pending_requests(conn, "stop acknowledged; daemon absent or unverified", request_id=request_id)
