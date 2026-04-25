@@ -183,6 +183,8 @@ def _reconcile_live_index(
     paths: List[str],
     pre_state: Dict[str, Tuple[str, str]],
     post_state: Dict[str, Tuple[str, str]],
+    captured_index: Optional[Dict[str, Tuple[str, str]]] = None,
+    conn: Any = None,
 ) -> None:
     live = _live_index_entries(repo_root, paths)
     safe: List[str] = []
@@ -192,20 +194,34 @@ def _reconcile_live_index(
         post_entry = _entry(post_state, path)
         if live_entry == post_entry:
             continue
-        if live_entry == pre_entry:
+        if captured_index is not None:
+            # Tighter predicate: only reset when live still matches the index
+            # snapshot captured before the publish critical section AND that
+            # snapshot matched our pre-state expectation. Guards against races
+            # where a concurrent writer mutated the index mid-publish.
+            captured_entry = captured_index.get(path) or ABSENT
+            if live_entry == captured_entry and captured_entry == pre_entry:
+                safe.append(path)
+        elif live_entry == pre_entry:
             safe.append(path)
     if not safe:
         return
     env = os.environ.copy()
     env.pop("GIT_INDEX_FILE", None)
-    subprocess.run(
+    proc = subprocess.run(
         ["git", "reset", "-q", "--", *safe],
         cwd=str(repo_root),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=env,
         check=False,
     )
+    if proc.returncode != 0 and conn is not None:
+        stderr_text = proc.stderr.decode("utf-8", errors="replace").strip()
+        try:
+            set_daemon_meta(conn, "last_reconcile_error", stderr_text or f"git reset exited {proc.returncode}")
+        except Exception:
+            pass
 def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     """Reconcile a crash between commit creation, update-ref, and DB settlement.
 
