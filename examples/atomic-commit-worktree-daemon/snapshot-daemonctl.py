@@ -541,30 +541,34 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
 
         # Re-verify fingerprint *and* the row's current pid before SIGTERM.
         # ``_verified_target`` only checks the row's *current* pid against
-        # its fingerprint; if the daemon exited and the kernel recycled
-        # ``pid`` for an unrelated process, the row may now hold a fresh
-        # daemon's pid (different from our captured ``pid``) — we must not
-        # SIGTERM the captured pid in that case. Equivalently, if no
-        # cached_fingerprint exists or the live process at ``pid`` no
-        # longer matches it, we refuse to signal and log a daemon_meta
-        # note instead of risking a kill of a recycled-pid stranger.
-        sigterm_ok = bool(
-            cached_fingerprint
-            and heartbeat_alive(pid)
-            and verify_process_identity(pid, str(cached_fingerprint))
-        )
-        current_row = _daemon_row(conn)
-        current_pid = int(current_row.get("pid") or 0)
-        if sigterm_ok and current_pid and current_pid != pid:
-            # Row points at a different live daemon now; the original is
-            # gone. Don't signal a recycled pid.
-            sigterm_ok = False
-        if sigterm_ok:
+        # its fingerprint; if the daemon exited cleanly (no heartbeat) the
+        # captured ``pid`` may now belong to an unrelated process via PID
+        # reuse. Three outcomes:
+        #
+        # * Daemon already gone (no heartbeat) → skip SIGTERM, fall
+        #   through to the exit-wait. This is the clean-shutdown path.
+        # * Pid is alive AND fingerprint matches AND row still names this
+        #   pid → safe to SIGTERM the captured pid.
+        # * Pid is alive but fingerprint or row-pid mismatches → refuse
+        #   to signal: SIGTERMing a recycled pid would hit a stranger.
+        if not heartbeat_alive(pid):
+            sigterm_decision = "skip"
+        else:
+            current_row = _daemon_row(conn)
+            current_pid = int(current_row.get("pid") or 0)
+            identity_ok = bool(
+                cached_fingerprint
+                and verify_process_identity(pid, str(cached_fingerprint))
+            )
+            row_ok = (current_pid == pid) or current_pid == 0
+            sigterm_decision = "send" if identity_ok and row_ok else "refuse"
+        if sigterm_decision == "send":
             try:
                 os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
-        else:
+        elif sigterm_decision == "refuse":
+            current_row = _daemon_row(conn)
             with control_lock(git_dir):
                 set_daemon_state(
                     conn,
@@ -594,6 +598,7 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
                 file=sys.stderr,
             )
             return 1
+        # sigterm_decision == "skip": daemon already exited cleanly
 
         if not _wait_for_exit(pid, lock_fp, ACK_TIMEOUT):
             # Re-verify fingerprint before SIGKILL: if the original daemon
