@@ -125,12 +125,9 @@ def process_requests(
 
     stop_note: Optional[str] = None
     if stop_ids:
-        # Stops always perform their own capture+replay; if we already ran one
-        # for flushes this tick, reuse the published count for clarity.
-        if flush_note is None:
-            published = _capture_then_replay(conn, repo_root, git_dir)
-        else:
-            published = 0
+        # Stop does its own final capture+replay so any work queued after the
+        # flush cycle still lands before shutdown.
+        published = _capture_then_replay(conn, repo_root, git_dir)
         stop_note = (
             f"stop acknowledged; published={published}; coalesced={len(stop_ids)}"
         )
