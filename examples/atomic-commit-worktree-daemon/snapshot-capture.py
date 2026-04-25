@@ -181,7 +181,7 @@ def _open_regular_file_safely(
 def _is_git_ignored(repo_root: Path, rel: str) -> bool:
     """Single-path fallback. Prefer ``_batch_check_ignored`` inside _scan_tree."""
     proc = subprocess.run(
-        ["git", "check-ignore", "-q", "--", rel],
+        [git_bin(), "check-ignore", "-q", "--", rel],
         cwd=str(repo_root),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
