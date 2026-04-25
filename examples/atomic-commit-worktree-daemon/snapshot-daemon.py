@@ -145,16 +145,29 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         try:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            # Another daemon holds the flock. Surface this distinctly so the
-            # controller can distinguish "peer running" from "started cleanly".
-            snapshot_state.set_daemon_state(
-                conn,
-                pid=os.getpid(),
-                mode="lock-contended",
-                note="peer daemon holds flock",
-                daemon_token=_new_daemon_token(),
+            # Another daemon holds the flock. Don't clobber its state row if
+            # it still has a fresh heartbeat — just record a short note on the
+            # existing row and exit with EX_TEMPFAIL so the caller can tell
+            # "peer running" from "started cleanly".
+            row = conn.execute(
+                "SELECT pid, mode, heartbeat_ts FROM daemon_state WHERE id=1"
+            ).fetchone()
+            peer_pid = int(row["pid"]) if row and row["pid"] is not None else 0
+            peer_fresh = (
+                row is not None
+                and peer_pid > 0
+                and snapshot_state.heartbeat_alive(peer_pid)
+                and (time.time() - float(row["heartbeat_ts"] or 0)) < 15.0
             )
-            conn.commit()
+            if not peer_fresh:
+                snapshot_state.set_daemon_state(
+                    conn,
+                    pid=os.getpid(),
+                    mode="lock-contended",
+                    note="peer daemon holds flock",
+                    daemon_token=_new_daemon_token(),
+                )
+                conn.commit()
             return EX_TEMPFAIL
 
         daemon_token = _new_daemon_token()
