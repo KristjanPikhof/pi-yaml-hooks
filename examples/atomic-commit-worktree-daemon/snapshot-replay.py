@@ -1672,20 +1672,21 @@ def _replay_pending_events_locked(
                 processed += 1
                 continue
             if not ancestor_ok:
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
-                    target_commit_oid=None,
-                    status="blocked_conflict",
-                    error="stale branch ancestry",
-                )
-                conn.execute(
-                    "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
-                    ("stale branch ancestry", int(event["seq"])),
-                )
+                with transaction(conn):
+                    update_publish_state(
+                        conn,
+                        event_seq=int(event["seq"]),
+                        branch_ref=branch,
+                        branch_generation=int(ctx["branch_generation"]),
+                        source_head=head,
+                        target_commit_oid=None,
+                        status="blocked_conflict",
+                        error="stale branch ancestry",
+                    )
+                    conn.execute(
+                        "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                        ("stale branch ancestry", int(event["seq"])),
+                    )
                 processed += 1
                 continue
             validation_error = None
