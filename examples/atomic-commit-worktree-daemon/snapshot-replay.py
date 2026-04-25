@@ -933,6 +933,7 @@ def generate_message(
     diffs: Mapping[int, str],
     *,
     ai_message: Optional[str] = None,
+    repo_root: Optional[Path] = None,
 ) -> str:
     """Top-level fallback chain: AI -> command -> deterministic.
 
@@ -941,15 +942,16 @@ def generate_message(
     try the per-event command, falling back to deterministic output. This
     helper itself is pure; callers that want to memoize results into
     ``capture_events.commit_message`` (added by the schema lane) must do so
-    explicitly.
+    explicitly. ``repo_root`` is plumbed to ``ai_message_via_command`` so
+    the operator command runs with cwd pinned to the worktree.
     """
     if ai_message:
         stripped = ai_message.strip()
         if stripped:
             return stripped
-    if SNAPSHOTD_COMMIT_MESSAGE_CMD:
+    if _commit_message_cmd():
         try:
-            msg = ai_message_via_command(event, ops, diffs)
+            msg = ai_message_via_command(event, ops, diffs, repo_root=repo_root)
         except Exception:
             msg = None
         if msg:
