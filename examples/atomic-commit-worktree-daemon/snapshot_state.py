@@ -41,6 +41,33 @@ INDEX_NAME = "worker.index"
 SCHEMA_VERSION = 1
 
 
+# Only identity/commit metadata and a narrow, explicitly-passed GIT_INDEX_FILE
+# survive into git subprocesses. Everything else (GIT_DIR, GIT_WORK_TREE,
+# GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_CONFIG, …) is
+# stripped so a hostile parent environment cannot redirect the daemon's git
+# operations to an attacker-controlled repo.
+_GIT_ENV_ALLOWLIST = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_DATE",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_DATE",
+)
+
+
+def _clean_git_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    for name in _GIT_ENV_ALLOWLIST:
+        value = os.environ.get(name)
+        if value is not None:
+            base[name] = value
+    base.setdefault("GIT_TERMINAL_PROMPT", "0")
+    if extra:
+        base.update(extra)
+    return base
+
+
 def db_path(git_dir: Path) -> Path:
     return local_state_dir(git_dir) / DB_NAME
 
