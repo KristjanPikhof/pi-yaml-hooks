@@ -289,13 +289,33 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
-def load_shadow_paths(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
-    return {
-        row["path"]: dict(row)
-        for row in conn.execute(
-            "SELECT path, operation, mode, oid, old_path, branch_ref, branch_generation, base_head, fidelity, updated_ts FROM shadow_paths"
+def load_shadow_paths(
+    conn: sqlite3.Connection,
+    *,
+    branch_ref: Optional[str] = None,
+    branch_generation: Optional[int] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return the shadow map, optionally filtered to one branch incarnation.
+
+    Call sites that are acting under a specific branch context should always
+    pass both ``branch_ref`` and ``branch_generation``. Rows from other
+    branches (e.g. a stale row left behind after a ``git checkout``) must
+    never feed into that branch's change classification.
+    """
+    if branch_ref is not None and branch_generation is not None:
+        rows = conn.execute(
+            """SELECT path, operation, mode, oid, old_path, branch_ref,
+                      branch_generation, base_head, fidelity, updated_ts
+               FROM shadow_paths WHERE branch_ref=? AND branch_generation=?""",
+            (branch_ref, branch_generation),
         ).fetchall()
-    }
+    else:
+        rows = conn.execute(
+            """SELECT path, operation, mode, oid, old_path, branch_ref,
+                      branch_generation, base_head, fidelity, updated_ts
+               FROM shadow_paths"""
+        ).fetchall()
+    return {row["path"]: dict(row) for row in rows}
 
 
 def replace_shadow_paths(
@@ -308,7 +328,11 @@ def replace_shadow_paths(
     fidelity: str = "rescan",
 ) -> None:
     now = time.time()
-    conn.execute("DELETE FROM shadow_paths")
+    # Scoped DELETE: rebuilding branch A's shadow must not wipe branch B's.
+    conn.execute(
+        "DELETE FROM shadow_paths WHERE branch_ref=? AND branch_generation=?",
+        (branch_ref, branch_generation),
+    )
     for entry in entries:
         conn.execute(
             """INSERT INTO shadow_paths(path, operation, mode, oid, old_path,
