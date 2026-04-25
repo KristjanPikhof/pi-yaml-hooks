@@ -1281,7 +1281,7 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             if (
                 isinstance(args, (list, tuple))
                 and len(args) >= 2
-                and args[0] == "git"
+                and (args[0] == "git" or str(args[0]).endswith("/git"))
                 and args[1] == "check-ignore"
             ):
                 captured["args"] = list(args)
