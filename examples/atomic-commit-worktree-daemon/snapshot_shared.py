@@ -310,14 +310,22 @@ def branch_worktree_git_dirs(repo_root: Path, branch_ref: str) -> Tuple[Path, ..
 
 
 def branch_incarnation_token(repo_root: Path, branch_ref: str) -> str:
+    """Cheap fingerprint of a branch ref for generation-bump detection.
+
+    Inode reuse on tmpfs/NFS could in principle defeat this if a ref file is
+    deleted and recreated and the filesystem hands out the same inode; we
+    accept that risk because branches under refs/heads/ live on the same fs as
+    .git/objects/, where ext4/APFS/NTFS reserve inodes long enough to make
+    reuse vanishingly rare in practice. mtime_ns is included as a tiebreaker.
+    """
     reflog_path = _git_path(repo_root, f"logs/{branch_ref}")
     if reflog_path.exists():
         st = reflog_path.stat()
-        return f"reflog:{st.st_ino}"
+        return f"reflog:{st.st_ino}:{st.st_mtime_ns}"
     ref_path = _git_path(repo_root, branch_ref)
     if ref_path.exists():
         st = ref_path.stat()
-        return f"ref:{st.st_ino}"
+        return f"ref:{st.st_ino}:{st.st_mtime_ns}"
     return "missing"
 
 
