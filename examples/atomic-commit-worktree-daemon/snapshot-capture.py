@@ -26,14 +26,9 @@ import snapshot_state  # noqa: E402
 
 
 IGNORE_NAMES = {".git", snapshot_state.STATE_SUBDIR}
-SENSITIVE_PATTERNS = tuple(
-    p.strip()
-    for p in os.environ.get(
-        "SNAPSHOTD_SENSITIVE_GLOBS",
-        ".env,.env.*,**/.env,**/.env.*,**/id_rsa*,**/*.pem,**/*.key,**/*.p12,**/*.pfx,**/secrets/*,**/credentials*",
-    ).split(",")
-    if p.strip()
-)
+# Canonical default list lives in snapshot_state.DEFAULT_SENSITIVE_GLOBS so the
+# fast-path filter here and the defence-in-depth guard inside capture_blob_*
+# can never drift. SNAPSHOTD_SENSITIVE_GLOBS overrides at runtime.
 
 
 def _mode_for_stat(st: os.stat_result) -> str:
