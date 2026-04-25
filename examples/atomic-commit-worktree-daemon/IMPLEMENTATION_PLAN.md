@@ -162,10 +162,10 @@ Reuse the current state subdir, but use separate tables or a new schema:
 ```text
 <git-dir>/ai-snapshotd/daemon.db
 <git-dir>/ai-snapshotd/daemon.lock
-<git-dir>/ai-snapshotd/daemon.sock or signal rows
+<git-dir>/ai-snapshotd/control.lock
+<git-dir>/ai-snapshotd/publish.lock
 <git-dir>/ai-snapshotd/worker.index
-<git-dir>/ai-snapshotd/logs/daemon.log
-<git-dir>/ai-snapshotd/logs/replay.log
+<git-common-dir>/ai-snapshotd/branch-registry/
 ```
 
 Core tables:
