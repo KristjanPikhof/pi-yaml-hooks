@@ -244,10 +244,13 @@ Manual PI smoke:
 
 ## 10. Rollout
 
-1. Land the scaffold and design docs.
+1. Land the scaffold and design docs. **DONE** on this branch (commits
+   87b0445, 43b5f7f, 38f6288, 1fa1fcb, 16f1391).
 2. Implement portable polling fallback first for shape and replay correctness.
-3. Add native watcher backend.
+   **DONE** on this branch (same commit range).
+3. Add native watcher backend. *Future.*
 4. Add strict FUSE/overlay mode only after the daemon contract is stable.
+   *Future.*
 5. Keep the copyable example marked as polling/rescan fidelity until native
    watcher smoke tests pass on macOS and Linux.
 
