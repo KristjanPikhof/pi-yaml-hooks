@@ -269,6 +269,10 @@ The daemon stores worktree-local state under the worktree git dir:
 | `<git-dir>/ai-snapshotd/worker.index` | Temporary replay index |
 | `<git-common-dir>/ai-snapshotd/branch-registry/` | Shared branch generation and worktree ownership registry |
 
+`daemon.db` retains every published capture event, op row, and acknowledged
+flush request so the history is auditable after the fact. Default retention is
+7 days; tune with `SNAPSHOTD_RETENTION_DAYS`.
+
 Useful settings:
 
 | Variable | Default | Purpose |
