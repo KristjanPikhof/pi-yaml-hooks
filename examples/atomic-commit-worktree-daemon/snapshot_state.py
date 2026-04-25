@@ -169,16 +169,17 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS shadow_paths(
-               path TEXT PRIMARY KEY,
+               branch_ref TEXT NOT NULL,
+               branch_generation INTEGER NOT NULL,
+               path TEXT NOT NULL,
                operation TEXT NOT NULL,
                mode TEXT,
                oid TEXT,
                old_path TEXT,
-               branch_ref TEXT NOT NULL,
-               branch_generation INTEGER NOT NULL,
                base_head TEXT NOT NULL,
                fidelity TEXT NOT NULL,
-               updated_ts REAL NOT NULL
+               updated_ts REAL NOT NULL,
+               PRIMARY KEY (branch_ref, branch_generation, path)
            )"""
     )
     conn.execute(
