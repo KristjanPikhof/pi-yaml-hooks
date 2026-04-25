@@ -367,6 +367,12 @@ def op_diff_text(op: Mapping[str, Any], blobs: Mapping[str, bytes]) -> str:
         before_bytes = blobs.get(op.get("before_oid") or "", b"")
         after_bytes = blobs.get(op.get("after_oid") or "", b"")
 
+    if before_bytes is _OVERSIZED_BLOB or after_bytes is _OVERSIZED_BLOB:
+        # Oversized-blob sentinel from ``batch_cat_file``: surface as a
+        # binary-changed marker so neither side is decoded or shipped to
+        # the AI / command pipeline. Identity comparison is intentional —
+        # only the sentinel value should trip this branch.
+        return "<binary content changed>"
     before_text = _decode_blob_text(before_bytes)
     after_text = _decode_blob_text(after_bytes)
     if before_text is None or after_text is None:
