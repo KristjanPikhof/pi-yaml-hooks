@@ -174,15 +174,30 @@ def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
     return False
 
 
-def _settle_pending_requests(conn, note: str) -> None:
+def _settle_pending_requests(conn, note: str, request_id: Optional[int] = None) -> None:
+    """Settle one request row (or all pending if no id given).
+
+    ``request_id`` is the row created by the current controller command.
+    Scoping by id avoids falsely acking concurrent flushes from other
+    controllers when we only intended to close our own stop request.
+    """
     now = time.time()
-    conn.execute(
-        """UPDATE flush_requests
-           SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
-               note=COALESCE(note, '') || ?
-           WHERE acknowledged_ts IS NULL""",
-        (now, now, f"; {note}"),
-    )
+    if request_id is None:
+        conn.execute(
+            """UPDATE flush_requests
+               SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
+                   note=COALESCE(note, '') || ?
+               WHERE acknowledged_ts IS NULL""",
+            (now, now, f"; {note}"),
+        )
+    else:
+        conn.execute(
+            """UPDATE flush_requests
+               SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
+                   note=COALESCE(note, '') || ?
+               WHERE id=? AND acknowledged_ts IS NULL""",
+            (now, now, f"; {note}", request_id),
+        )
 
 
 def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> tuple[int, bool, str]:
