@@ -69,7 +69,7 @@ def _light_context(repo_root: Path) -> Dict[str, Any]:
     return {"branch_ref": branch, "base_head": head}
 
 
-def _spawn_daemon(repo_root: Path, git_dir: Path) -> Optional[subprocess.Popen[str]]:
+def _spawn_daemon(repo_root: Path, git_dir: Path) -> Optional[subprocess.Popen[bytes]]:
     script = daemon_script_path()
     if not script.exists():
         return None
