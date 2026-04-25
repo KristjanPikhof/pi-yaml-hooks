@@ -203,7 +203,7 @@ def _batch_check_ignored(repo_root: Path, paths: List[str]) -> set[str]:
         return set()
     payload = ("\x00".join(paths) + "\x00").encode("utf-8")
     proc = subprocess.run(
-        ["git", "check-ignore", "--stdin", "-z"],
+        [git_bin(), "check-ignore", "--stdin", "-z"],
         cwd=str(repo_root),
         input=payload,
         stdout=subprocess.PIPE,
