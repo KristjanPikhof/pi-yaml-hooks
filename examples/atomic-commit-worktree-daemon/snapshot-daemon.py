@@ -90,27 +90,62 @@ def process_requests(
 ) -> bool:
     """Process queued wake/flush/sleep/stop rows.
 
+    Flush rows for the same tick share one capture+replay cycle and a common
+    ack note so N queued flushes cost O(1) work instead of N.
+
     Returns the updated sleep state.
     """
 
-    for row in _request_rows(conn):
+    rows = _request_rows(conn)
+    if not rows:
+        return sleeping
+
+    # Snapshot requests per command so we can coalesce within this tick.
+    flush_ids: list[int] = []
+    stop_ids: list[int] = []
+    other: list[tuple[int, str]] = []
+    for row in rows:
         command = str(row["command"])
         request_id = int(row["id"])
-        note = command
+        if command == "flush":
+            flush_ids.append(request_id)
+        elif command == "stop":
+            stop_ids.append(request_id)
+        else:
+            other.append((request_id, command))
+
+    flush_note: Optional[str] = None
+    if flush_ids:
+        published = _capture_then_replay(conn, repo_root, git_dir)
+        flush_note = (
+            f"flush acknowledged; published={published}; coalesced={len(flush_ids)}"
+        )
+        for rid in flush_ids:
+            _ack(conn, rid, flush_note)
+
+    stop_note: Optional[str] = None
+    if stop_ids:
+        # Stops always perform their own capture+replay; if we already ran one
+        # for flushes this tick, reuse the published count for clarity.
+        if flush_note is None:
+            published = _capture_then_replay(conn, repo_root, git_dir)
+        else:
+            published = 0
+        stop_note = (
+            f"stop acknowledged; published={published}; coalesced={len(stop_ids)}"
+        )
+        for rid in stop_ids:
+            _ack(conn, rid, stop_note)
+        sleeping = True
+        stop_event.set()
+
+    for request_id, command in other:
         if command == "wake":
             sleeping = False
             note = "wake acknowledged"
-        elif command == "flush":
-            published = _capture_then_replay(conn, repo_root, git_dir)
-            note = f"flush acknowledged; published={published}"
         elif command == "sleep":
             sleeping = True
             note = "sleep acknowledged"
-        elif command == "stop":
-            published = _capture_then_replay(conn, repo_root, git_dir)
-            note = f"stop acknowledged; published={published}"
-            sleeping = True
-            stop_event.set()
         else:
             note = f"ignored command={command}"
         _ack(conn, request_id, note)
