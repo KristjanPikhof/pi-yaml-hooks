@@ -123,6 +123,74 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
                 snapshot_state.SCHEMA_VERSION,
             )
 
+    def test_capture_events_has_message_column_and_migrates(self) -> None:
+        """``capture_events.message`` exists on fresh DBs and is added to legacy DBs.
+
+        The column stores AI-generated commit text for replay reuse. Inserts
+        that don't supply ``message`` must default to NULL, and a DB created
+        without the column (legacy state from before this change landed) must
+        be migrated idempotently when reopened.
+        """
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Fresh DB exposes the column.
+        conn = snapshot_state.ensure_state(git_dir)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(capture_events)")}
+            self.assertIn("message", cols)
+            self.assertIn(
+                "message",
+                {row[1] for row in conn.execute(
+                    "PRAGMA table_info(capture_events)"
+                ) if row[2] == "TEXT"},
+            )
+        finally:
+            conn.close()
+
+        # Simulate a legacy DB by dropping the column. SQLite < 3.35 has no
+        # DROP COLUMN, so rebuild the table without ``message`` and verify
+        # the daemon's open path adds it back idempotently.
+        db = snapshot_state.db_path(git_dir)
+        with sqlite3.connect(db) as legacy:
+            legacy.execute("ALTER TABLE capture_events RENAME TO capture_events_old")
+            legacy.execute(
+                """CREATE TABLE capture_events(
+                       seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                       branch_ref TEXT NOT NULL,
+                       branch_generation INTEGER NOT NULL,
+                       base_head TEXT NOT NULL,
+                       operation TEXT NOT NULL,
+                       path TEXT NOT NULL,
+                       old_path TEXT,
+                       fidelity TEXT NOT NULL,
+                       captured_ts REAL NOT NULL,
+                       published_ts REAL,
+                       state TEXT NOT NULL DEFAULT 'pending',
+                       commit_oid TEXT,
+                       error TEXT
+                   )"""
+            )
+            legacy.execute("DROP TABLE capture_events_old")
+            legacy.commit()
+            cols = {row[1] for row in legacy.execute("PRAGMA table_info(capture_events)")}
+            self.assertNotIn("message", cols)
+
+        conn = snapshot_state.ensure_state(git_dir)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(capture_events)")}
+            self.assertIn("message", cols)
+            # Re-opening is idempotent: a second ensure_state call must not
+            # error or duplicate the column.
+        finally:
+            conn.close()
+        conn = snapshot_state.ensure_state(git_dir)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(capture_events)")}
+            self.assertIn("message", cols)
+        finally:
+            conn.close()
+
     def test_apply_ops_supports_rename_mode_and_symlink(self) -> None:
         tmp, repo, git_dir = init_repo()
         self.addCleanup(tmp.cleanup)
