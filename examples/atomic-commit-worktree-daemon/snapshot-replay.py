@@ -10,6 +10,7 @@ compare-and-swap ``git update-ref``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -24,7 +25,9 @@ from snapshot_state import (
     index_path,
     load_ops,
     load_pending_events,
+    mark_event_published,
     publish_lock,
+    PublishLockBusy,
     repo_context,
     resolve_repo_paths,
     set_daemon_meta,
@@ -34,10 +37,51 @@ from snapshot_state import (
 )
 
 
+REPLAY_PUBLISH_LOCK_TIMEOUT = float(os.environ.get("SNAPSHOTD_PUBLISH_LOCK_TIMEOUT", "30.0"))
+
+
+def _replay_batch_max() -> int:
+    """How many events the replay loop will process per ``publish_lock`` acquisition.
+
+    Bounded so a deep backlog does not monopolize the lock for the entire
+    drain — sibling tools and the daemon's flush ackers need a chance to
+    take the lock between batches. ``SNAPSHOTD_REPLAY_BATCH_MAX`` overrides
+    the default of 200; non-positive or unparseable values fall back to it.
+    """
+    raw = os.environ.get("SNAPSHOTD_REPLAY_BATCH_MAX")
+    if raw is None:
+        return 200
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 200
+    if value <= 0:
+        return 200
+    return value
+
+
 ABSENT: Tuple[str, str] = ("__absent__", "__absent__")
 
 
+class GitObjectMissing(RuntimeError):
+    """Raised when ``git merge-base --is-ancestor`` cannot resolve an OID.
+
+    Distinct from "the OID is not an ancestor": the latter is a routine
+    blocked_conflict, while this represents a corrupt or pruned object
+    store and must be surfaced as a real failure mode in ``daemon_meta``.
+    """
+
+
 def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    """Return True if ``ancestor`` is reachable from ``descendant``.
+
+    git documents two well-defined exit statuses for this command: 0 means
+    ancestor, 1 means not-ancestor. Any other status is an actual error
+    (typically a missing object, which prints "Not a valid commit name"
+    and exits 128). Treating those as "not ancestor" silently masked
+    object-store corruption as a generic ``blocked_conflict``; raise
+    instead so callers can record the real failure.
+    """
     proc = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=str(repo_root),
@@ -45,7 +89,14 @@ def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
         stderr=subprocess.PIPE,
         env=_clean_git_env(),
     )
-    return proc.returncode == 0
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    stderr_text = proc.stderr.decode("utf-8", errors="replace").strip()
+    raise GitObjectMissing(
+        stderr_text or f"git merge-base --is-ancestor exited {proc.returncode}"
+    )
 
 
 def _validate_op(op: Dict[str, Any]) -> Optional[str]:
@@ -306,8 +357,19 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     )
 
 
-def replay_pending_events(conn, repo_root: Path, git_dir: Path) -> int:
-    with publish_lock(git_dir):
+def replay_pending_events(
+    conn, repo_root: Path, git_dir: Path, *, lock_timeout: Optional[float] = None
+) -> int:
+    """Drain pending events into commits, bounded by ``lock_timeout`` seconds.
+
+    A blocked ``publish_lock`` is the most likely cause of the daemon's ack
+    loop stalling forever, so we use a timeout by default and surface
+    ``PublishLockBusy`` to the caller. The caller (the daemon main loop)
+    records the error in ``daemon_meta.last_publish_error`` and acks queued
+    flush rows with the failure note rather than leaving controllers hung.
+    """
+    timeout = REPLAY_PUBLISH_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
+    with publish_lock(git_dir, timeout=timeout):
         return _replay_pending_events_locked(conn, repo_root, git_dir)
 
 
@@ -413,6 +475,13 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
             captured_index = _live_index_entries(repo_root, touched)
             for op in ops:
                 _apply_state(op, state)
+            # Capture the per-event expected parent BEFORE entering the
+            # publish critical section. ``recover_publishing`` will compare
+            # this to the live ref tip after a crash; the previous code
+            # always wrote ``head`` (the head at start-of-batch), which
+            # turned every post-first-event crash into a `blocked_conflict`
+            # for valid downstream events.
+            event_parent = parent
             try:
                 apply_ops_to_index(repo_root, env, ops)
                 tree_proc = subprocess.run(
@@ -429,7 +498,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                 tree = tree_proc.stdout.decode("utf-8", errors="replace").strip()
                 message = build_message(event, ops)
                 commit_proc = subprocess.run(
-                    ["git", "commit-tree", tree, "-p", parent],
+                    ["git", "commit-tree", tree, "-p", event_parent],
                     cwd=str(repo_root),
                     input=message.encode("utf-8"),
                     stdout=subprocess.PIPE,
@@ -442,15 +511,24 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                     )
                 commit_oid = commit_proc.stdout.decode("utf-8", errors="replace").strip()
             except Exception as exc:
+                # Terminal failure (validation/commit-tree). Mark this
+                # event ``failed`` and stop the batch: downstream events
+                # depend on the failed event's after-state, so continuing
+                # would chain `before-state mismatch` errors. The next
+                # replay cycle will rebuild the index from the live HEAD
+                # and re-attempt any still-pending events.
                 state = saved
-                subprocess.run(["git", "read-tree", parent], cwd=str(repo_root), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                conn.execute("UPDATE capture_events SET state='failed', error=? WHERE seq=?", (str(exc), int(event["seq"])))
+                _read_tree_safely(repo_root, env, event_parent, conn)
+                conn.execute(
+                    "UPDATE capture_events SET state='failed', error=? WHERE seq=?",
+                    (str(exc), int(event["seq"])),
+                )
                 update_publish_state(
                     conn,
                     event_seq=int(event["seq"]),
                     branch_ref=branch,
                     branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
+                    source_head=event_parent,
                     target_commit_oid=None,
                     status="failed",
                     error=str(exc),
@@ -462,7 +540,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                 event_seq=int(event["seq"]),
                 branch_ref=branch,
                 branch_generation=int(ctx["branch_generation"]),
-                source_head=head,
+                source_head=event_parent,
                 target_commit_oid=commit_oid,
                 status="publishing",
             )
@@ -470,7 +548,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
 
             try:
                 proc = subprocess.run(
-                    ["git", "update-ref", branch, commit_oid, parent],
+                    ["git", "update-ref", branch, commit_oid, event_parent],
                     cwd=str(repo_root),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -481,15 +559,22 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                         proc.stderr.decode("utf-8", errors="replace").strip()
                     )
             except Exception as exc:
+                # update-ref failed (typically because a concurrent push
+                # moved the ref). Mark this event ``blocked_conflict`` and
+                # stop the batch — the conflict has to be resolved against
+                # the new branch tip before any later event can land.
                 state = saved
-                subprocess.run(["git", "read-tree", parent], cwd=str(repo_root), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                conn.execute("UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?", (str(exc), int(event["seq"])))
+                _read_tree_safely(repo_root, env, event_parent, conn)
+                conn.execute(
+                    "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                    (str(exc), int(event["seq"])),
+                )
                 update_publish_state(
                     conn,
                     event_seq=int(event["seq"]),
                     branch_ref=branch,
                     branch_generation=int(ctx["branch_generation"]),
-                    source_head=head,
+                    source_head=event_parent,
                     target_commit_oid=commit_oid,
                     status="blocked_conflict",
                     error=str(exc),
@@ -498,7 +583,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
 
             parent = commit_oid
             published += 1
-            conn.execute("UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?", (commit_oid, int(event["seq"])))
+            mark_event_published(conn, seq=int(event["seq"]), commit_oid=commit_oid)
             _reconcile_live_index(
                 repo_root,
                 touched,
@@ -512,7 +597,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
                 event_seq=int(event["seq"]),
                 branch_ref=branch,
                 branch_generation=int(ctx["branch_generation"]),
-                source_head=head,
+                source_head=event_parent,
                 target_commit_oid=commit_oid,
                 status="published",
             )
@@ -525,13 +610,35 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
             pass
 
 
+def _read_tree_safely(repo_root: Path, env: Dict[str, str], rev: str, conn: Any) -> None:
+    """Roll the in-memory index back to ``rev``; record failures via daemon_meta."""
+    proc = subprocess.run(
+        ["git", "read-tree", rev],
+        cwd=str(repo_root),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0 and conn is not None:
+        try:
+            set_daemon_meta(
+                conn,
+                "last_replay_rollback_error",
+                proc.stderr.decode("utf-8", errors="replace").strip()
+                or f"git read-tree exited {proc.returncode}",
+            )
+        except Exception:
+            pass
+
+
 def cmd_status(repo_root: Path, git_dir: Path) -> int:
     conn = ensure_state(git_dir)
     try:
         payload = status_snapshot(conn, git_dir)
         payload["repo_root"] = str(repo_root)
         payload["git_dir"] = str(git_dir)
-        print(__import__("json").dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     finally:
         conn.close()
