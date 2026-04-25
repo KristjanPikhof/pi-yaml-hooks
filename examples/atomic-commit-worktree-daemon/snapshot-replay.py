@@ -255,6 +255,7 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
             paths,
             _tree_entries(repo_root, source_head, paths),
             _tree_entries(repo_root, target, paths),
+            conn=conn,
         )
         conn.execute(
             "UPDATE capture_events SET state='published', commit_oid=?, error=NULL WHERE seq=?",
