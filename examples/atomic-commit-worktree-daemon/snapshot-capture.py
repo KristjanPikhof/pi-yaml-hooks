@@ -239,7 +239,7 @@ def _is_sensitive(rel: str) -> bool:
 # never falls out), wedging a long-running daemon's RSS open. The active
 # (branch, generation) entry is the only one a same-tick scan would hit, so
 # discarding the rest is safe.
-_STAT_CACHE: Dict[Tuple[str, str, int], Dict[str, Tuple[int, int, str]]] = {}
+_STAT_CACHE: Dict[Tuple[str, str, int], Dict[str, Tuple[int, int, int, int, str]]] = {}
 
 
 def _cache_key(repo_root: Path, branch_ref: str, branch_generation: int) -> Tuple[str, str, int]:
