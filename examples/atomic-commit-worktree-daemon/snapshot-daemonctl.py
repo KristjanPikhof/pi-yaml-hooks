@@ -112,18 +112,27 @@ def _maybe_start(repo_root: Path, git_dir: Path, conn, note: str = "") -> Dict[s
         if proc.poll() is not None:
             # Child exited quickly. That may mean it lost a flock race with an
             # existing peer (which stamped itself into daemon_state already),
-            # or it genuinely crashed. Re-read before assuming the worst.
-            current = _daemon_row(conn)
-            current_pid = int(current.get("pid") or 0)
-            if (
-                current_pid
-                and current_pid != proc.pid
-                and _fresh_heartbeat(current)
-            ):
+            # or it genuinely crashed. The peer's heartbeat write may not yet
+            # be visible — give it a brief, bounded settle window before
+            # declaring the daemon dead, so a normal peer-handoff doesn't get
+            # mis-reported as a startup crash.
+            peer_row: Dict[str, Any] = {}
+            for _attempt in range(3):
+                current = _daemon_row(conn)
+                current_pid = int(current.get("pid") or 0)
+                if (
+                    current_pid
+                    and current_pid != proc.pid
+                    and _fresh_heartbeat(current)
+                ):
+                    peer_row = current
+                    break
+                time.sleep(0.05)
+            if peer_row:
                 return {
                     "started": False,
                     "reason": "peer daemon already running",
-                    "daemon": current,
+                    "daemon": peer_row,
                 }
             set_daemon_state(conn, pid=0, mode="stopped", note="daemon exited during startup")
             return {"started": False, "reason": "daemon exited during startup", "daemon": _daemon_row(conn)}
