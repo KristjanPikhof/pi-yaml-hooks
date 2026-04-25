@@ -295,10 +295,26 @@ def _record_flush(
     return request_id, signaled, ctx["branch_ref"], daemon_present, warning
 
 
+class FlushFailedError(RuntimeError):
+    """Raised when the daemon ack reports a capture/replay failure."""
+
+    def __init__(self, note: Optional[str]) -> None:
+        super().__init__(note or "daemon reported flush failure")
+        self.note = note
+
+
 def _await_flush_ack(conn, request_id: int) -> None:
-    """Wait for ack outside ``control_lock``; raise on timeout/absent daemon."""
+    """Wait for ack outside ``control_lock``; raise on timeout/failure.
+
+    A ``FlushFailedError`` is raised when the row arrives with a failure
+    status (or a note that encodes a failure from older daemons) so the
+    blocking flush can return non-zero rather than mis-report success.
+    """
     if not _wait_for_ack(conn, request_id):
         raise TimeoutError("flush timed out waiting for daemon ack")
+    status, note = _ack_outcome(conn, request_id)
+    if status == "failed":
+        raise FlushFailedError(note)
 
 
 def cmd_wake(repo_root: Path, git_dir: Path) -> int:
