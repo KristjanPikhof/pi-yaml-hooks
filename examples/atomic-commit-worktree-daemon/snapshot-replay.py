@@ -401,7 +401,7 @@ def replay_pending_events(
     total = 0
     while True:
         with publish_lock(git_dir, timeout=timeout):
-            published, processed, remaining = _replay_pending_events_locked(
+            published, processed, remaining, terminated = _replay_pending_events_locked(
                 conn, repo_root, git_dir, batch_limit=limit
             )
         total += published
@@ -409,11 +409,11 @@ def replay_pending_events(
             set_daemon_meta(conn, "last_replay_deferred", str(remaining))
         except Exception:
             pass
-        # Stop when the lane drained, when the batch made no progress
-        # (would loop forever on the same blocked event), or when nothing
-        # was processable. Otherwise the lock has been released and the
-        # next iteration re-acquires it, giving sibling tools a turn.
-        if remaining == 0 or processed == 0:
+        # Stop when the lane drained, when the batch terminated early
+        # because of a downstream-poisoning failure, or when nothing was
+        # processable. Otherwise the lock has been released and the next
+        # iteration re-acquires it, giving sibling tools a turn.
+        if remaining == 0 or processed == 0 or terminated:
             return total
 
 
