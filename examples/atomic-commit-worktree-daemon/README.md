@@ -108,6 +108,10 @@ Canonical event vocabulary:
 | `rename` | Remove `old_path` and add `path` in one commit | Used only when the backend can pair source and destination. Otherwise this may degrade to delete + create. |
 | `mode` | Change executable bit without changing content | Symlink retargets are represented as `modify` because the link target is the blob content. |
 
+Symlink blobs are the literal target string per git's convention, so an absolute
+symlink target leaks the host path into git history; `SNAPSHOTD_SENSITIVE_GLOBS`
+is the only filter the daemon applies against that leakage.
+
 Each captured event owns one or more operations with:
 
 - operation and path data (`path`, optional `old_path`)
