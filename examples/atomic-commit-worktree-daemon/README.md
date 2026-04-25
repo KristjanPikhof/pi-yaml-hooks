@@ -310,6 +310,93 @@ Useful settings:
 | `SNAPSHOTD_RETENTION_DAYS` | `7` | Days of acked flush rows and terminal `capture_events` kept in `daemon.db` before the daemon prunes them. |
 | `SNAPSHOTD_START_READY_TIMEOUT` | `1.0` | Seconds `start` waits for daemon heartbeat readiness |
 
+## Crash recovery and durability
+
+The daemon has no network dependency: it reads/writes only the local SQLite
+database and shells out to `git`. Connectivity loss is irrelevant.
+
+For process crashes, `kill -9`, and PC reboots the design favours **safely
+resumable** over lossless. Every persistence boundary uses an atomic primitive
+and has an explicit recovery path that runs on next start:
+
+| Crash point | Recovery |
+| --- | --- |
+| Mid-capture (`record_event`) | `BEGIN IMMEDIATE`/`COMMIT` rolls back partial writes atomically; `capture_events`, `capture_ops`, and `shadow_paths` stay consistent. |
+| Mid-`apply_ops_to_index` | `worker.index` is the daemon's private index, not your `.git/index`. Next replay unlinks and re-reads from HEAD. |
+| Between `commit-tree` and `update-ref` | `recover_publishing` runs at the top of every replay. If the ref never moved, the event is rewound to `pending`; if the commit is reachable, it is marked `published` (idempotent). |
+| During `update-ref` | `git update-ref` is itself atomic — either the ref moved or it did not. `recover_publishing` picks the right outcome. |
+| During reconcile `git reset` | Best-effort by design. stderr is captured into `daemon_meta.last_reconcile_error`. The tightened `live==captured AND captured==pre` predicate refuses to reset paths whose live state has drifted. |
+| `kill -9` with `daemon.lock` held | The kernel releases `flock` on process exit; next `start` acquires it cleanly. |
+
+Other safeguards on restart:
+
+- **Stale heartbeat**: `status` overlays `mode=stale-heartbeat` with
+  `heartbeat_age_seconds` when the row claims to be active but the pid is
+  dead.
+- **PID reuse**: every signal verifies a `daemon_token` written at startup.
+  A recycled pid that belongs to an unrelated process never receives our
+  `SIGUSR1` or `SIGTERM`.
+- **Schema mismatch** (after upgrading pi-hooks): `ensure_state` calls
+  `quarantine_incompatible_local_state`, which moves the entire
+  `<git-dir>/ai-snapshotd/` aside under `ai-snapshotd.incompatible-<stamp>-<pid>/`
+  and starts fresh. Old state is preserved for forensics, never silently
+  overwritten.
+- **Hostile environment**: every `git` invocation routes through
+  `_clean_git_env`, which strips `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_OBJECT_DIRECTORY`, and the rest of the `GIT_*` namespace before
+  spawning. A poisoned parent env cannot redirect commits.
+
+Failures that cannot corrupt the daemon's state:
+
+- Internet/network loss (no network calls at all).
+- Concurrent daemon `start` attempts (loser exits with `EX_TEMPFAIL=75` and
+  does not clobber the peer's row).
+- Branch swaps mid-session (see "Switching branches with the daemon
+  running").
+
+What CAN accumulate but stays harmless: orphan blobs and commits in
+`.git/objects` for events that ended `blocked_conflict` or crashed mid-publish.
+These are reachable for `git gc` on its normal schedule.
+
+## Cleanup and retention
+
+The daemon prunes its own state on a 60-second wall-clock cycle while running:
+
+- `flush_requests` rows are dropped 24h after they were acknowledged.
+- `capture_events` rows in `published`, `failed`, or `blocked_conflict` state
+  are dropped after `SNAPSHOTD_RETENTION_DAYS` (default `7`); their
+  `capture_ops` rows cascade automatically via `ON DELETE CASCADE`.
+- Live state — `pending` events, unacked flush rows, in-flight `publish_state`
+  — is never auto-pruned, so an outage that left the daemon stopped does not
+  eat queued user-visible work.
+
+Prune failures are caught and logged into `daemon_meta.last_prune_error`; a
+failed prune cycle does not crash the daemon.
+
+What is **not** automatically cleaned (and may grow over time on long-lived
+daemons):
+
+| Thing | Notes |
+| --- | --- |
+| `shadow_paths` rows for old `(branch_ref, branch_generation)` pairs | Stay until that exact pair is re-bootstrapped. Rebuild cost is small but rows persist. |
+| `<git-common-dir>/ai-snapshotd/branch-registry/<digest>.json` files | One file per branch ever observed; tiny but never auto-removed. |
+| `ai-snapshotd.incompatible-<stamp>-<pid>/` quarantine dirs | Schema-mismatch fallouts. Inspect, then `rm -rf` manually when you no longer need forensics. |
+| Lock files (`daemon.lock`, `control.lock`, `publish.lock`) | Reused on next start; never deleted. |
+| Orphan `.git/objects/` blobs and commits | Cleaned by `git gc` on its normal schedule, not by the daemon. |
+
+If `daemon.db` grows beyond what you are comfortable with, the supported reset
+is to stop the daemon and delete the directory:
+
+```bash
+python3 snapshot-daemonctl.py stop --repo /path/to/repo --flush
+rm -rf /path/to/repo/.git/ai-snapshotd     # or the worktree-local equivalent
+python3 snapshot-daemonctl.py start --repo /path/to/repo
+```
+
+This drops the audit trail of past events and rebuilds the shadow tree from
+HEAD on next start. Your published git history is in `.git/objects` and refs
+and is never touched by this reset.
+
 ## Troubleshooting
 
 - `status` shows `degraded-no-daemon`: the controller could not find or start
