@@ -712,7 +712,7 @@ def _replay_pending_events_locked(
         # hit a fail/conflict), we still report the still-queued tail so
         # the outer loop can surface ``deferred=N`` accurately.
         remaining = max(0, total_pending - processed)
-        return published, processed, remaining
+        return published, processed, remaining, terminated
     finally:
         try:
             index_path(git_dir).unlink(missing_ok=True)
