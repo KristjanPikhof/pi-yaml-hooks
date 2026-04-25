@@ -225,6 +225,9 @@ commit replay happen in long-lived processes.
 
 ## Operating commands
 
+Inside a PI hook, use `PI_PROJECT_DIR` for `--repo`; outside PI, substitute the
+absolute repo path.
+
 Run these from the example directory, or use absolute script paths.
 
 ```bash
