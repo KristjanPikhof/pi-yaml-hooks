@@ -1162,6 +1162,16 @@ def _proc_fingerprint_linux(pid: int) -> Optional[str]:
     return f"linux:{starttime}:{cmdline}"
 
 
+# Cache for the *current* process's fingerprint only. A process's identity
+# stamp (start_time + cmdline) does not change for its lifetime, so caching
+# is safe and avoids a per-call ``ps`` exec on darwin under load — repeated
+# 2-second timeouts there were observed to make the daemon transiently
+# un-controllable. Other pids must NOT be cached: a recycled pid can
+# legitimately belong to a different process between calls, and the whole
+# point of ``verify_process_identity`` is to detect that.
+_OWN_FINGERPRINT_CACHE: Dict[int, str] = {}
+
+
 def process_fingerprint(pid: Optional[int] = None) -> Optional[str]:
     """Cross-platform identity stamp for ``pid`` (defaults to the caller).
 
@@ -1179,13 +1189,25 @@ def process_fingerprint(pid: Optional[int] = None) -> Optional[str]:
     on Linux without ``/proc`` mounted (e.g. some chroots) get a degraded
     fallback to ``ps`` if available; if both fail we return ``None`` and
     ``verify_process_identity`` correctly refuses to confirm identity.
+
+    Calls for the current process (``pid is None`` or ``pid == os.getpid()``)
+    are memoised; calls for any other pid always re-resolve so we can
+    detect pid recycling.
     """
-    target_pid = os.getpid() if pid is None else int(pid)
+    own_pid = os.getpid()
+    target_pid = own_pid if pid is None else int(pid)
     if target_pid <= 0:
         return None
+    is_self = target_pid == own_pid
+    if is_self:
+        cached = _OWN_FINGERPRINT_CACHE.get(target_pid)
+        if cached is not None:
+            return cached
     if sys.platform.startswith("linux"):
         fingerprint = _proc_fingerprint_linux(target_pid)
         if fingerprint is not None:
+            if is_self:
+                _OWN_FINGERPRINT_CACHE[target_pid] = fingerprint
             return fingerprint
         # /proc unreadable; degrade to ps below if it exists on this host.
     try:
@@ -1200,7 +1222,10 @@ def process_fingerprint(pid: Optional[int] = None) -> Optional[str]:
     if proc.returncode != 0:
         return None
     out = proc.stdout.decode("utf-8", errors="replace").strip()
-    return out or None
+    result = out or None
+    if is_self and result is not None:
+        _OWN_FINGERPRINT_CACHE[target_pid] = result
+    return result
 
 
 def verify_process_identity(pid: int, expected_fingerprint: Optional[str]) -> bool:
