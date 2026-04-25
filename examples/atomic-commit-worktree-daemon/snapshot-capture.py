@@ -346,12 +346,21 @@ def _scan_tree(
     for rel, path, st in pending_files:
         if rel in ignored:
             continue
-        sig = (int(st.st_size), int(st.st_mtime_ns))
+        # Cache key includes inode and ctime_ns so that timestamp-preserving
+        # tools (cp -p, rsync -a, untar) can't fool us into reusing a stale
+        # OID — ctime changes on any metadata mutation, ino changes on
+        # rename/replace.
+        sig = (
+            int(st.st_size),
+            int(st.st_mtime_ns),
+            int(st.st_ctime_ns),
+            int(st.st_ino),
+        )
         prev = cache.get(rel)
-        if prev is not None and prev[:2] == sig:
-            # Same (size, mtime_ns) as last tick — reuse the cached OID
-            # without re-running `git hash-object -w`.
-            oid = prev[2]
+        if prev is not None and prev[:4] == sig:
+            # Same (size, mtime_ns, ctime_ns, ino) as last tick — reuse the
+            # cached OID without re-running `git hash-object -w`.
+            oid = prev[4]
         else:
             # New file or changed signature. Polling-fidelity capture cannot
             # prove a file is past its final flush — a streaming write may
