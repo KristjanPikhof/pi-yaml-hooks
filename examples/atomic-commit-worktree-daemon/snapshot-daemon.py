@@ -29,26 +29,76 @@ if str(HERE) not in sys.path:
 import snapshot_state  # noqa: E402
 
 
-POLL_INTERVAL = float(os.environ.get("SNAPSHOTD_POLL_INTERVAL", "0.75"))
-SLEEP_INTERVAL = float(os.environ.get("SNAPSHOTD_SLEEP_INTERVAL", "2.0"))
-RETENTION_DAYS = float(os.environ.get("SNAPSHOTD_RETENTION_DAYS", "7"))
+def _clamp(value: float, *, minimum: float, name: str) -> float:
+    """Clamp env-var floats so a typo cannot turn into a denial-of-service.
+
+    A bare ``=0`` would otherwise either peg CPU (poll intervals) or
+    immediately wipe the queue (retention). Clamping with a clear message in
+    daemon_meta is friendlier than silent disaster.
+    """
+    if value < minimum:
+        return minimum
+    return value
+
+
+POLL_INTERVAL = _clamp(
+    float(os.environ.get("SNAPSHOTD_POLL_INTERVAL", "0.75")),
+    minimum=0.05,
+    name="SNAPSHOTD_POLL_INTERVAL",
+)
+SLEEP_INTERVAL = _clamp(
+    float(os.environ.get("SNAPSHOTD_SLEEP_INTERVAL", "2.0")),
+    minimum=0.05,
+    name="SNAPSHOTD_SLEEP_INTERVAL",
+)
+RETENTION_DAYS = _clamp(
+    float(os.environ.get("SNAPSHOTD_RETENTION_DAYS", "7")),
+    minimum=0.5,
+    name="SNAPSHOTD_RETENTION_DAYS",
+)
 PRUNE_INTERVAL_SECONDS = 60.0
+# Adaptive idle backoff: when nothing has changed for many ticks we ramp the
+# poll interval up to this ceiling so an idle daemon doesn't dominate I/O on
+# a 50k-file worktree. Active ticks (any classification, any flush) reset.
+IDLE_BACKOFF_CEILING = _clamp(
+    float(os.environ.get("SNAPSHOTD_IDLE_BACKOFF_CEILING", "30.0")),
+    minimum=POLL_INTERVAL,
+    name="SNAPSHOTD_IDLE_BACKOFF_CEILING",
+)
+# Exponential backoff after capture failures so a persistent disk-full /
+# corrupt-object error doesn't peg the CPU retrying every 0.75s.
+CAPTURE_ERROR_BACKOFF_MAX = _clamp(
+    float(os.environ.get("SNAPSHOTD_CAPTURE_ERROR_BACKOFF_MAX", "60.0")),
+    minimum=POLL_INTERVAL,
+    name="SNAPSHOTD_CAPTURE_ERROR_BACKOFF_MAX",
+)
 
 
 def _load_path_module(name: str, filename: str):
+    """Load a Python module from disk, registering it in ``sys.modules``.
+
+    Registration matters when the loaded module re-imports another that's
+    also disk-loaded — without it, each import creates a fresh module
+    instance, which silently breaks any module-level cache (`_STAT_CACHE`,
+    counters) by making it per-call instead of per-process.
+    """
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, str(HERE / filename))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"unable to load {filename}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
 capture = _load_path_module("snapshot_capture", "snapshot-capture.py")
-
-
-def _load_replay_module():
-    return _load_path_module("snapshot_replay", "snapshot-replay.py")
+# Hoisted to module scope so each flush/stop tick does NOT re-`exec_module`
+# a 575-line module. The previous form re-loaded it on every request — fine
+# correctness-wise today, but a latency tax that scaled with hook count and
+# a latent bug for any future module-level state in snapshot-replay.
+replay = _load_path_module("snapshot_replay", "snapshot-replay.py")
 
 
 def _request_rows(conn):
@@ -62,8 +112,7 @@ def _ack(conn, request_id: int, note: str = "") -> None:
 
 
 def _replay_pending(conn, repo_root: Path, git_dir: Path) -> int:
-    module = _load_replay_module()
-    return int(module.replay_pending_events(conn, repo_root, git_dir))
+    return int(replay.replay_pending_events(conn, repo_root, git_dir))
 
 
 def _pending_event_count(conn) -> int:
@@ -71,15 +120,61 @@ def _pending_event_count(conn) -> int:
     return int(row[0] if row else 0)
 
 
+# Errors recorded *inside* poll_once (e.g. ``_IgnoreCheckFailed``) are
+# tagged with this prefix so the daemon loop can distinguish "poll_once
+# returned cleanly, clear the previous tick's error" from "poll_once
+# returned cleanly but caught an internal failure and wrote a real error
+# we must NOT silently overwrite." Keep this string in sync with the
+# matching prefix in ``snapshot-capture.py::poll_once``.
+_POLL_ONCE_INTERNAL_ERROR_PREFIXES = ("check-ignore:",)
+
+
+def _poll_once_wrote_internal_error(conn) -> bool:
+    """Return True if poll_once just recorded an internal-error meta value.
+
+    The daemon loop calls this after a successful ``poll_once`` return — a
+    True result means "a real error was caught internally; do NOT clear
+    last_capture_error to empty, that would mask the failure."
+    """
+    current = snapshot_state.get_daemon_meta(conn, "last_capture_error") or ""
+    return any(current.startswith(prefix) for prefix in _POLL_ONCE_INTERNAL_ERROR_PREFIXES)
+
+
 def _capture_then_replay(conn, repo_root: Path, git_dir: Path) -> int:
     """Capture the current stable polling snapshot before draining commits."""
     try:
         capture.poll_once(conn, repo_root, git_dir)
-        snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
+        # poll_once may have caught _IgnoreCheckFailed internally and written
+        # a "check-ignore: …" error to last_capture_error. Only clear here
+        # when the meta value did NOT come from that internal-error path,
+        # otherwise this blanket-clear masks the real failure.
+        if not _poll_once_wrote_internal_error(conn):
+            snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
     except Exception as exc:
         snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
         raise
     return _replay_pending(conn, repo_root, git_dir) if _pending_event_count(conn) else 0
+
+
+def _safe_capture_then_replay(
+    conn, repo_root: Path, git_dir: Path
+) -> Tuple[int, Optional[str]]:
+    """Run capture+replay, never propagating exceptions to the daemon loop.
+
+    A propagated exception used to crash the daemon mid-loop and leave any
+    queued flush/stop rows un-acked, so controllers timed out for 30s with
+    "flush timed out waiting for daemon ack". Now we trap, record, and
+    return the error string so callers can ack with the failure note.
+    """
+    try:
+        return _capture_then_replay(conn, repo_root, git_dir), None
+    except Exception as exc:  # noqa: BLE001 — boundary catch is intentional
+        try:
+            snapshot_state.set_daemon_meta(conn, "last_replay_error", str(exc))
+            conn.commit()
+        except Exception:
+            pass
+        return 0, str(exc)
 
 
 def process_requests(
@@ -93,7 +188,9 @@ def process_requests(
     """Process queued wake/flush/sleep/stop rows.
 
     Flush rows for the same tick share one capture+replay cycle and a common
-    ack note so N queued flushes cost O(1) work instead of N.
+    ack note so N queued flushes cost O(1) work instead of N. Failures
+    inside capture/replay are surfaced via the ack note rather than killing
+    the daemon, so a transient git error cannot strand controllers.
 
     Returns the updated sleep state.
     """
@@ -116,23 +213,29 @@ def process_requests(
         else:
             other.append((request_id, command))
 
-    flush_note: Optional[str] = None
     if flush_ids:
-        published = _capture_then_replay(conn, repo_root, git_dir)
-        flush_note = (
-            f"flush acknowledged; published={published}; coalesced={len(flush_ids)}"
-        )
+        published, err = _safe_capture_then_replay(conn, repo_root, git_dir)
+        if err is None:
+            flush_note = (
+                f"flush acknowledged; published={published}; coalesced={len(flush_ids)}"
+            )
+        else:
+            flush_note = f"flush acknowledged with error; coalesced={len(flush_ids)}; error={err}"
         for rid in flush_ids:
             _ack(conn, rid, flush_note)
 
-    stop_note: Optional[str] = None
     if stop_ids:
         # Stop does its own final capture+replay so any work queued after the
-        # flush cycle still lands before shutdown.
-        published = _capture_then_replay(conn, repo_root, git_dir)
-        stop_note = (
-            f"stop acknowledged; published={published}; coalesced={len(stop_ids)}"
-        )
+        # flush cycle still lands before shutdown. We always honor the stop
+        # request even if the final capture errors — the alternative is the
+        # controller timing out and the daemon being SIGKILLed anyway.
+        published, err = _safe_capture_then_replay(conn, repo_root, git_dir)
+        if err is None:
+            stop_note = (
+                f"stop acknowledged; published={published}; coalesced={len(stop_ids)}"
+            )
+        else:
+            stop_note = f"stop acknowledged with error; coalesced={len(stop_ids)}; error={err}"
         for rid in stop_ids:
             _ack(conn, rid, stop_note)
         sleeping = True
@@ -166,6 +269,29 @@ def _new_daemon_token() -> str:
     return hashlib.sha256(
         f"{uuid.uuid4()}|{os.getpid()}|{time.time_ns()}".encode("utf-8")
     ).hexdigest()
+
+
+def _next_idle_interval(consecutive_idle_ticks: int) -> float:
+    """Exponential backoff for idle ticks, bounded by the configured ceiling.
+
+    Past ~6 idle ticks at base 0.75s we hit the ceiling and stay there until
+    the next active tick resets us. A SIGUSR1 wake jumps out of the sleep
+    immediately via wake_event.
+    """
+    if consecutive_idle_ticks <= 0:
+        return POLL_INTERVAL
+    interval = POLL_INTERVAL * (2 ** min(consecutive_idle_ticks, 8))
+    return min(interval, IDLE_BACKOFF_CEILING)
+
+
+def _next_error_interval(consecutive_errors: int) -> float:
+    """Exponential backoff after capture failures so a persistent disk-full
+    or corrupt-object error doesn't peg the CPU retrying every poll tick.
+    """
+    if consecutive_errors <= 0:
+        return POLL_INTERVAL
+    interval = POLL_INTERVAL * (2 ** min(consecutive_errors, 8))
+    return min(interval, CAPTURE_ERROR_BACKOFF_MAX)
 
 
 def run_daemon(repo_root: Path, git_dir: Path) -> int:
@@ -205,8 +331,17 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             return EX_TEMPFAIL
 
         daemon_token = _new_daemon_token()
+        # Bind the daemon's identity to an OS-level fingerprint (process
+        # start time + argv). Controllers compare this against the live
+        # process before signaling, which closes the PID-reuse window the
+        # bare token check left open.
+        daemon_fingerprint = snapshot_state.process_fingerprint(os.getpid())
 
-        ctx = snapshot_state.repo_context(repo_root, git_dir)
+        try:
+            ctx = snapshot_state.repo_context(repo_root, git_dir)
+        except snapshot_state.DetachedHeadError as exc:
+            print(f"snapshot-daemon refusing to start: {exc}", file=sys.stderr)
+            return 1
         # Bootstrap can be many seconds on real repos — advertise a
         # 'bootstrapping' heartbeat now so controllers waiting on readiness
         # don't time out before the initial shadow scan finishes.
@@ -218,6 +353,7 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             branch_generation=ctx["branch_generation"],
             note="bootstrapping shadow tree",
             daemon_token=daemon_token,
+            daemon_fingerprint=daemon_fingerprint,
         )
         conn.commit()
         capture.bootstrap_shadow(
@@ -250,15 +386,19 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             branch_generation=ctx["branch_generation"],
             note="daemon started",
             daemon_token=daemon_token,
+            daemon_fingerprint=daemon_fingerprint,
         )
         conn.commit()
         last_prune = 0.0
+        consecutive_idle_ticks = 0
+        consecutive_capture_errors = 0
 
         while not stop_event.is_set():
             if wake_event.is_set():
                 sleeping = False
                 wake_event.clear()
 
+            had_request_rows = bool(_request_rows(conn))
             sleeping = process_requests(
                 conn,
                 repo_root,
@@ -273,13 +413,31 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
             _heartbeat(conn, os.getpid(), mode, ctx)
             conn.commit()
 
+            produced_events = 0
             if not sleeping:
                 try:
-                    capture.poll_once(conn, repo_root, git_dir)
+                    seqs = capture.poll_once(conn, repo_root, git_dir)
+                    produced_events = len(seqs) if seqs else 0
                     snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
+                    snapshot_state.set_daemon_meta(
+                        conn, "consecutive_capture_errors", "0"
+                    )
+                    consecutive_capture_errors = 0
                 except Exception as exc:
+                    consecutive_capture_errors += 1
                     snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
-                    _heartbeat(conn, os.getpid(), "running", ctx, note=f"capture error: {exc}")
+                    snapshot_state.set_daemon_meta(
+                        conn,
+                        "consecutive_capture_errors",
+                        str(consecutive_capture_errors),
+                    )
+                    _heartbeat(
+                        conn,
+                        os.getpid(),
+                        "running",
+                        ctx,
+                        note=f"capture error #{consecutive_capture_errors}: {exc}",
+                    )
                 conn.commit()
 
             now_wall = time.time()
@@ -290,15 +448,26 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                         retention_seconds=RETENTION_DAYS * 86400.0,
                     )
                     conn.commit()
+                    snapshot_state.set_daemon_meta(conn, "last_prune_error", "")
                 except Exception as exc:
                     snapshot_state.set_daemon_meta(conn, "last_prune_error", str(exc))
                     conn.commit()
                 last_prune = now_wall
 
-            interval = SLEEP_INTERVAL if sleeping else POLL_INTERVAL
+            if had_request_rows or produced_events > 0:
+                consecutive_idle_ticks = 0
+            else:
+                consecutive_idle_ticks += 1
+
+            if sleeping:
+                interval = SLEEP_INTERVAL
+            elif consecutive_capture_errors > 0:
+                interval = _next_error_interval(consecutive_capture_errors)
+            else:
+                interval = _next_idle_interval(consecutive_idle_ticks)
             deadline = time.time() + interval
             while time.time() < deadline and not stop_event.is_set() and not wake_event.is_set():
-                time.sleep(0.1)
+                time.sleep(min(0.1, interval))
 
         _heartbeat(conn, os.getpid(), "stopped", ctx, note="daemon stopping")
         conn.commit()
