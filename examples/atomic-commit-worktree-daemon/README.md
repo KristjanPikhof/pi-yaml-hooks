@@ -43,7 +43,9 @@ The hook pack uses only `bash` actions. It does not rely on unsupported PI
 ### 3. Verify it works
 
 From a PI session inside the trusted repo, run a compound shell command that
-keeps each state around long enough for polling to see it:
+keeps each state around long enough for polling to see it. Each `sleep`
+duration must exceed `SNAPSHOTD_POLL_INTERVAL` (default `0.75s`) so polling
+can observe every state.
 
 ```bash
 printf '' > test.md && sleep 3 && printf 'hello' >> test.md && sleep 3 && rm test.md
