@@ -395,7 +395,7 @@ def _scan_tree(
             "oid": oid,
         }
 
-    _STAT_CACHE[_cache_key(repo_root, branch_ref, branch_generation)] = next_cache
+    _STAT_CACHE[active_key] = next_cache
     return entries
 
 
