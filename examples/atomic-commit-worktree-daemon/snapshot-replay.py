@@ -11,15 +11,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-HERE = Path(__file__).resolve().parent
-WORKER_DIR = HERE.parent / "atomic-commit-snapshot-worker"
-if str(WORKER_DIR) not in sys.path:
-    sys.path.insert(0, str(WORKER_DIR))
 
 from snapshot_state import (
     apply_ops_to_index,
