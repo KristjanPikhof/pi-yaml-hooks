@@ -1007,7 +1007,7 @@ def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     instead so callers can record the real failure.
     """
     proc = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        [git_bin(), "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1109,7 +1109,7 @@ def _live_index_entries(repo_root: Path, paths: List[str]) -> Dict[str, Tuple[st
     if not paths:
         return {}
     proc = subprocess.run(
-        ["git", "ls-files", "-s", "-z", "--", *paths],
+        [git_bin(), "ls-files", "-s", "-z", "--", *paths],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1132,7 +1132,7 @@ def _tree_entries(repo_root: Path, rev: str, paths: List[str]) -> Dict[str, Tupl
     if not paths:
         return {}
     proc = subprocess.run(
-        ["git", "ls-tree", "-z", rev, "--", *paths],
+        [git_bin(), "ls-tree", "-z", rev, "--", *paths],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1184,7 +1184,7 @@ def _reconcile_live_index(
     if not safe:
         return
     proc = subprocess.run(
-        ["git", "reset", "-q", "--", *safe],
+        [git_bin(), "reset", "-q", "--", *safe],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1306,6 +1306,50 @@ def recover_publishing(conn, repo_root: Path, ctx: Dict[str, Any]) -> None:
     )
 
 
+def _settle_branch_swap_pending(conn, ctx: Dict[str, Any]) -> int:
+    """Mark events captured on a different branch/generation as ``blocked_conflict``.
+
+    ``load_pending_events`` filters by ``branch_ref`` only, so events
+    captured on a previous branch (the operator switched branches mid-
+    stream) would otherwise sit forever in ``pending``. Clear them with
+    a stable reason so retention/quarantine can sweep them out.
+
+    Returns the number of rows settled. Wrapped in a ``transaction()``
+    so the daemon_meta breadcrumb and the row updates land or fail
+    together.
+    """
+    branch = str(ctx["branch_ref"])
+    generation = int(ctx["branch_generation"])
+    rows = conn.execute(
+        """SELECT seq, branch_ref, branch_generation
+           FROM capture_events
+           WHERE state='pending'
+             AND (branch_ref != ? OR branch_generation != ?)""",
+        (branch, generation),
+    ).fetchall()
+    if not rows:
+        return 0
+    settled = 0
+    with transaction(conn):
+        for row in rows:
+            captured_branch = str(row["branch_ref"] or "")
+            captured_gen = int(row["branch_generation"] or 0)
+            reason = (
+                f"branch swap: events captured on {captured_branch}@{captured_gen} "
+                f"no longer match live {branch}@{generation}"
+            )
+            conn.execute(
+                "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                (reason, int(row["seq"])),
+            )
+            settled += 1
+        try:
+            set_daemon_meta(conn, "last_branch_swap_settled", str(settled))
+        except Exception:
+            pass
+    return settled
+
+
 def replay_pending_events(
     conn,
     repo_root: Path,
@@ -1328,16 +1372,114 @@ def replay_pending_events(
     daemon's flush ackers get a turn. ``daemon_meta.last_replay_deferred``
     is updated with the still-queued count after each batch (0 when the
     lane drains).
+
+    AI HTTP work runs OUTSIDE ``publish_lock``: phase 1 acquires the
+    lock to settle branch-swap rows, run ``recover_publishing``, and
+    snapshot the working set; phase 2 releases the lock and runs
+    diff/HTTP/persist; phase 3 re-acquires the lock for the
+    commit-tree / update-ref critical section. The AI queue-depth gate
+    is evaluated against ``total_pending`` measured BEFORE batch
+    slicing so a 1000-event backlog cannot bypass the guard one batch
+    at a time when ``batch_max`` is small.
     """
-    timeout = REPLAY_PUBLISH_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
+    timeout = _publish_lock_timeout() if lock_timeout is None else lock_timeout
     limit = batch_max if batch_max is not None else _replay_batch_max()
     if limit <= 0:
         limit = _replay_batch_max()
     total = 0
     while True:
+        # ---- Phase 1: snapshot ------------------------------------ #
+        with publish_lock(git_dir, timeout=timeout):
+            ctx = repo_context(repo_root, git_dir)
+            recover_publishing(conn, repo_root, ctx)
+            _settle_branch_swap_pending(conn, ctx)
+            pending_rows = load_pending_events(conn, ctx["branch_ref"])
+            total_pending = len(pending_rows)
+            if not pending_rows:
+                try:
+                    set_daemon_meta(conn, "last_replay_deferred", "0")
+                except Exception:
+                    pass
+                return total
+            sliced_rows = (
+                pending_rows[:limit]
+                if limit is not None and limit > 0
+                else pending_rows
+            )
+            ops_by_seq: Dict[int, List[Dict[str, Any]]] = {
+                int(event["seq"]): [
+                    dict(row) for row in load_ops(conn, int(event["seq"]))
+                ]
+                for event in sliced_rows
+            }
+            sliced_dicts: List[Dict[str, Any]] = [
+                dict(event) for event in sliced_rows
+            ]
+
+        # ---- Phase 2: AI pre-pass without the lock --------------- #
+        # The queue-depth gate uses ``total_pending`` (the unsliced
+        # count) so a deep backlog cannot fan out one batch at a time.
+        api_key = _openai_api_key()
+        use_batch_ai = (
+            _ai_enable()
+            and bool(api_key)
+            and total_pending <= _ai_max_queue_depth()
+        )
+        use_command_msg = bool(_commit_message_cmd())
+        need_diffs = use_batch_ai or use_command_msg
+        diffs_by_event: Dict[int, Dict[int, str]] = {}
+        if need_diffs:
+            for event in sliced_dicts:
+                seq = int(event["seq"])
+                if event.get("message"):
+                    continue
+                diffs_by_event[seq] = compute_diffs_for_event(
+                    repo_root, ops_by_seq[seq]
+                )
+        prepared_messages: Dict[int, str] = {}
+        if use_batch_ai:
+            events_needing_msg: List[Tuple[Any, List[Mapping[str, Any]]]] = [
+                (event, ops_by_seq[int(event["seq"])])
+                for event in sliced_dicts
+                if not event.get("message")
+            ]
+            if events_needing_msg:
+                try:
+                    prepared_messages = batch_ai_messages(
+                        events_needing_msg, diffs_by_event
+                    )
+                except Exception:
+                    prepared_messages = {}
+            if prepared_messages:
+                # SQLite write outside the publish file lock; SQLite's
+                # own busy_timeout serializes the UPDATE against any
+                # concurrent writer. Persistence failure is non-fatal —
+                # the in-memory ``prepared_messages`` is still passed
+                # through to phase 3, but operators see repeated re-
+                # billing via the ``last_ai_persist_error`` daemon_meta
+                # key so the issue surfaces.
+                try:
+                    with transaction(conn):
+                        for seq, message in prepared_messages.items():
+                            set_event_message(conn, int(seq), message)
+                except Exception as exc:  # pragma: no cover - reported via meta
+                    try:
+                        set_daemon_meta(
+                            conn, "last_ai_persist_error", str(exc)
+                        )
+                    except Exception:
+                        pass
+
+        # ---- Phase 3: commit-tree / update-ref under the lock ---- #
         with publish_lock(git_dir, timeout=timeout):
             published, processed, remaining, terminated = _replay_pending_events_locked(
-                conn, repo_root, git_dir, batch_limit=limit
+                conn,
+                repo_root,
+                git_dir,
+                batch_limit=limit,
+                prepared_messages=prepared_messages,
+                prepared_diffs=diffs_by_event,
+                prepared_ops=ops_by_seq,
             )
         total += published
         try:
@@ -1456,7 +1598,7 @@ def _replay_pending_events_locked(
         index_file.parent.mkdir(parents=True, exist_ok=True)
         index_file.unlink(missing_ok=True)
         proc = subprocess.run(
-            ["git", "read-tree", head],
+            [git_bin(), "read-tree", head],
             cwd=str(repo_root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1592,7 +1734,7 @@ def _replay_pending_events_locked(
             try:
                 apply_ops_to_index(repo_root, env, ops)
                 tree_proc = subprocess.run(
-                    ["git", "write-tree"],
+                    [git_bin(), "write-tree"],
                     cwd=str(repo_root),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1622,7 +1764,7 @@ def _replay_pending_events_locked(
                 else:
                     message = build_message(event, ops)
                 commit_proc = subprocess.run(
-                    ["git", "commit-tree", tree, "-p", event_parent],
+                    [git_bin(), "commit-tree", tree, "-p", event_parent],
                     cwd=str(repo_root),
                     input=message.encode("utf-8"),
                     stdout=subprocess.PIPE,
@@ -1674,7 +1816,7 @@ def _replay_pending_events_locked(
 
             try:
                 proc = subprocess.run(
-                    ["git", "update-ref", branch, commit_oid, event_parent],
+                    [git_bin(), "update-ref", branch, commit_oid, event_parent],
                     cwd=str(repo_root),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1747,7 +1889,7 @@ def _replay_pending_events_locked(
 def _read_tree_safely(repo_root: Path, env: Dict[str, str], rev: str, conn: Any) -> None:
     """Roll the in-memory index back to ``rev``; record failures via daemon_meta."""
     proc = subprocess.run(
-        ["git", "read-tree", rev],
+        [git_bin(), "read-tree", rev],
         cwd=str(repo_root),
         env=env,
         stdout=subprocess.PIPE,
