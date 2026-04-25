@@ -17,19 +17,22 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import snapshot_state
 
 from snapshot_state import (
+    DetachedHeadError,
     control_lock,
     ensure_state,
     heartbeat_alive,
     current_branch,
+    process_fingerprint,
     request_flush,
     resolve_repo_paths,
     set_daemon_state,
     status_snapshot,
+    verify_process_identity,
 )
 
 
@@ -63,7 +66,11 @@ def _light_context(repo_root: Path) -> Dict[str, Any]:
     branch = current_branch(repo_root)
     head = snapshot_state.current_head(repo_root)
     if branch is None:
-        raise RuntimeError("detached or unborn HEAD is not replay-safe")
+        raise DetachedHeadError("detached or unborn HEAD is not replay-safe")
+    if not branch.startswith("refs/heads/"):
+        raise DetachedHeadError(
+            f"HEAD points at {branch}, not a refs/heads/ branch — refusing to operate"
+        )
     if head is None:
         raise RuntimeError("unable to resolve HEAD")
     return {"branch_ref": branch, "base_head": head}
@@ -144,31 +151,54 @@ def cmd_start(repo_root: Path, git_dir: Path) -> int:
             result["branch"] = ctx["branch_ref"]
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0
+    except DetachedHeadError as exc:
+        print(f"refusing to start daemon: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 
 
-def _signal_daemon(conn, sig: signal.Signals, expected_token: Optional[str] = None) -> bool:
-    """Send ``sig`` to the recorded daemon pid, guarding against PID reuse.
+def _verified_target(
+    conn, *, expected_token: Optional[str] = None
+) -> Optional[Tuple[int, str, str]]:
+    """Return (pid, token, fingerprint) for the daemon iff its identity verifies.
 
-    The daemon writes a random ``daemon_token`` into daemon_state on startup.
-    If ``expected_token`` is passed, the row must still advertise that token
-    before we signal — otherwise a recycled PID belonging to an unrelated
-    process could receive our signal. When no expected token is supplied we
-    fall back to the current row's token (caller-less flows like SIGUSR1
-    wake-ups that just re-read state).
+    Verification has two layers:
+
+    1. The DB row's ``daemon_token`` must match ``expected_token`` (if
+       supplied) — protects against a daemon restart we didn't initiate.
+    2. The pid's *current* OS-level fingerprint (process start time + argv)
+       must match the fingerprint recorded by the daemon at bootstrap. This
+       closes the PID-reuse window that token-equals-token alone left open:
+       a recycled pid owned by an unrelated user-process has a different
+       start time and so cannot pass this check.
+
+    Returns ``None`` when no daemon is running or identity cannot be
+    confirmed — callers must refuse to signal in that case.
     """
     row = _daemon_row(conn)
     pid = int(row.get("pid") or 0)
-    if pid <= 0 or not heartbeat_alive(pid):
-        return False
+    if pid <= 0:
+        return None
+    if not heartbeat_alive(pid):
+        return None
     row_token = row.get("daemon_token")
+    if not row_token:
+        return None
     if expected_token is not None and row_token != expected_token:
+        return None
+    fingerprint = row.get("daemon_fingerprint")
+    if not fingerprint or not verify_process_identity(pid, fingerprint):
+        return None
+    return pid, str(row_token), str(fingerprint)
+
+
+def _signal_daemon(conn, sig: signal.Signals, expected_token: Optional[str] = None) -> bool:
+    """Send ``sig`` to the verified daemon pid, refusing on identity mismatch."""
+    target = _verified_target(conn, expected_token=expected_token)
+    if target is None:
         return False
-    if row_token is None:
-        # No identity on record — refuse rather than risk signaling an
-        # unrelated process that happens to share the pid.
-        return False
+    pid, _token, _fp = target
     try:
         os.kill(pid, sig)
         return True
@@ -177,6 +207,15 @@ def _signal_daemon(conn, sig: signal.Signals, expected_token: Optional[str] = No
 
 
 def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
+    """Block until the daemon acks this flush row, or timeout.
+
+    Returns True iff ``acknowledged_ts`` was set within the window. Callers
+    that need the success/failure outcome should follow up with
+    :func:`_ack_outcome`, which inspects ``status`` and the daemon-supplied
+    note. Splitting "ack arrived" from "ack outcome" keeps existing callers
+    that only care about presence simple, while letting blocking flush
+    distinguish ``ok`` from ``failed``.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         row = conn.execute(
@@ -189,44 +228,77 @@ def _wait_for_ack(conn, request_id: int, timeout: float = ACK_TIMEOUT) -> bool:
     return False
 
 
-def _settle_pending_requests(conn, note: str, request_id: Optional[int] = None) -> None:
-    """Settle one request row (or all pending if no id given).
+def _ack_outcome(conn, request_id: int) -> Tuple[str, Optional[str]]:
+    """Return ``(status, note)`` for an acknowledged flush row.
 
-    ``request_id`` is the row created by the current controller command.
-    Scoping by id avoids falsely acking concurrent flushes from other
-    controllers when we only intended to close our own stop request.
+    Daemon-side ack paths surface failures two ways: explicitly via
+    ``status='failed'`` (newer daemons that pass the status kwarg), or
+    implicitly via a note that begins with ``"<command> acknowledged with
+    error"`` (older daemons predating the schema bump). We treat either
+    signal as failure so the blocking controller doesn't report ok=true on a
+    capture/replay error. Rows we cannot read (deleted/pruned) are reported
+    as ``status='unknown'`` rather than silently passing.
+    """
+    row = conn.execute(
+        "SELECT status, note FROM flush_requests WHERE id=?",
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        return "unknown", None
+    status = str(row[0] or "")
+    note = row[1]
+    if status == "failed":
+        return "failed", note
+    if note and "acknowledged with error" in str(note):
+        return "failed", str(note)
+    return status or "acknowledged", note
+
+
+def _settle_pending_requests(conn, note: str, request_id: int) -> None:
+    """Settle the one request row created by the current controller command.
+
+    Always scoped by ``request_id`` — the previous open-ended fallback that
+    settled every unacknowledged row ran the risk of falsely closing
+    concurrent flushes from other controllers, and had no remaining caller.
     """
     now = time.time()
-    if request_id is None:
-        conn.execute(
-            """UPDATE flush_requests
-               SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
-                   note=COALESCE(note, '') || ?
-               WHERE acknowledged_ts IS NULL""",
-            (now, now, f"; {note}"),
-        )
-    else:
-        conn.execute(
-            """UPDATE flush_requests
-               SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
-                   note=COALESCE(note, '') || ?
-               WHERE id=? AND acknowledged_ts IS NULL""",
-            (now, now, f"; {note}", request_id),
-        )
+    conn.execute(
+        """UPDATE flush_requests
+           SET acknowledged_ts=?, completed_ts=?, status='acknowledged',
+               note=COALESCE(note, '') || ?
+           WHERE id=? AND acknowledged_ts IS NULL""",
+        (now, now, f"; {note}", request_id),
+    )
 
 
-def _flush_locked(repo_root: Path, git_dir: Path, conn, non_blocking: bool) -> tuple[int, bool, str]:
+def _record_flush(
+    repo_root: Path, conn, non_blocking: bool
+) -> Tuple[int, bool, str, bool, Optional[str]]:
+    """Insert the flush row and signal the daemon while we still hold control_lock.
+
+    Returns ``(request_id, signaled, branch_ref, daemon_present, warning)``
+    so callers can release the control_lock immediately and then wait for
+    the ack in unlocked space. Holding control_lock across the (possibly
+    30-second) ack wait used to starve every other controller command.
+    """
     ctx = _light_context(repo_root)
     request_id = request_flush(conn, "flush", non_blocking, note="flush requested")
     signaled = _signal_daemon(conn, signal.SIGUSR1)
-    if non_blocking:
-        return request_id, signaled, ctx["branch_ref"]
-    if not signaled and not daemon_script_path().exists():
-        if not _wait_for_ack(conn, request_id, timeout=0.1):
-            raise TimeoutError("daemon is absent; flush recorded but not acknowledged")
+    script_present = daemon_script_path().exists()
+    daemon_present = signaled or script_present
+    warning: Optional[str] = None
+    if not signaled and not script_present:
+        # No daemon and no way to spawn one: the flush row will sit
+        # unacknowledged forever. Surface this rather than hang or pretend
+        # success — the caller decides whether to error or warn.
+        warning = "no daemon to honor flush; events recorded but not replayed"
+    return request_id, signaled, ctx["branch_ref"], daemon_present, warning
+
+
+def _await_flush_ack(conn, request_id: int) -> None:
+    """Wait for ack outside ``control_lock``; raise on timeout/absent daemon."""
     if not _wait_for_ack(conn, request_id):
         raise TimeoutError("flush timed out waiting for daemon ack")
-    return request_id, signaled, ctx["branch_ref"]
 
 
 def cmd_wake(repo_root: Path, git_dir: Path) -> int:
@@ -239,6 +311,9 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
                 _maybe_start(repo_root, git_dir, conn, note="wake-start fallback")
             print(json.dumps({"ok": True, "action": "wake", "request_id": request_id, "branch": ctx["branch_ref"]}, indent=2))
             return 0
+    except DetachedHeadError as exc:
+        print(f"refusing to wake daemon: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 
@@ -246,16 +321,48 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
 def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
     conn = ensure_state(git_dir)
     try:
+        # Hold control_lock only for the request-row insert and signal
+        # delivery. The ack wait happens outside the lock so a slow daemon
+        # cannot starve concurrent wake/sleep/stop commands.
         with control_lock(git_dir):
-            request_id, signaled, branch = _flush_locked(repo_root, git_dir, conn, non_blocking)
-            if non_blocking:
-                print(json.dumps({"ok": True, "action": "flush", "non_blocking": True, "request_id": request_id, "signaled": signaled, "branch": branch}, indent=2))
-                return 0
-            print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": branch}, indent=2))
+            request_id, signaled, branch, daemon_present, warning = _record_flush(
+                repo_root, conn, non_blocking
+            )
+        if non_blocking:
+            payload: Dict[str, Any] = {
+                "ok": True,
+                "action": "flush",
+                "non_blocking": True,
+                "request_id": request_id,
+                "signaled": signaled,
+                "branch": branch,
+            }
+            if not daemon_present:
+                payload["ok"] = False
+                payload["status"] = "degraded"
+                payload["warning"] = warning
+                print(json.dumps(payload, indent=2))
+                return 2
+            if warning:
+                payload["warning"] = warning
+            print(json.dumps(payload, indent=2))
             return 0
-    except TimeoutError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+        if not daemon_present:
+            print(
+                f"flush degraded: {warning}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            _await_flush_ack(conn, request_id)
+        except TimeoutError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps({"ok": True, "action": "flush", "request_id": request_id, "branch": branch}, indent=2))
+        return 0
+    except DetachedHeadError as exc:
+        print(f"refusing to flush: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 
@@ -270,6 +377,9 @@ def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
             _refresh_mode(conn, "sleeping", note="sleep requested")
             print(json.dumps({"ok": True, "action": "sleep", "request_id": request_id, "branch": ctx["branch_ref"]}, indent=2))
             return 0
+    except DetachedHeadError as exc:
+        print(f"refusing to sleep daemon: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 
@@ -305,60 +415,85 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
     try:
         with control_lock(git_dir):
             ctx = _light_context(repo_root)
+            flush_request_id: Optional[int] = None
+            flush_warning: Optional[str] = None
             if flush_first:
-                try:
-                    _flush_locked(repo_root, git_dir, conn, non_blocking=False)
-                except TimeoutError as exc:
-                    print(str(exc), file=sys.stderr)
+                flush_request_id, _signaled, _branch, _present, flush_warning = (
+                    _record_flush(repo_root, conn, non_blocking=False)
+                )
             request_id = request_flush(conn, "stop", False, note="stop requested")
+            target = _verified_target(conn)
             row = _daemon_row(conn)
-            pid = int(row.get("pid") or 0)
             cached_token = row.get("daemon_token")
+            cached_fingerprint = row.get("daemon_fingerprint")
+            pid = target[0] if target else int(row.get("pid") or 0)
             lock_fp = snapshot_state.lock_path(git_dir)
 
-            if pid > 0 and heartbeat_alive(pid):
-                _signal_daemon(conn, signal.SIGUSR1, expected_token=cached_token)
-                if not _wait_for_ack(conn, request_id):
-                    # Daemon did not consume the stop row in time; fall through
-                    # to SIGTERM then (if necessary) SIGKILL.
-                    pass
+        # Outside control_lock: wait for the optional preceding flush ack so
+        # we don't starve other controllers waiting on the same lock.
+        if flush_first and flush_request_id is not None:
+            try:
+                _await_flush_ack(conn, flush_request_id)
+            except TimeoutError as exc:
+                print(str(exc), file=sys.stderr)
 
-                # Ask politely, then verify exit.
-                try:
-                    if heartbeat_alive(pid):
-                        os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
-                if not _wait_for_exit(pid, lock_fp, ACK_TIMEOUT):
-                    # Escalate to SIGKILL with a bounded grace window.
-                    try:
-                        if heartbeat_alive(pid):
-                            os.kill(pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-                    if not _wait_for_exit(pid, lock_fp, 1.0):
-                        _settle_pending_requests(conn, "stop requested; escalation failed", request_id=request_id)
-                        print(
-                            json.dumps(
-                                {
-                                    "ok": False,
-                                    "action": "stop",
-                                    "request_id": request_id,
-                                    "branch": ctx["branch_ref"],
-                                    "error": "daemon refused to stop",
-                                    "pid": pid,
-                                },
-                                indent=2,
-                            ),
-                            file=sys.stderr,
-                        )
-                        return 1
-                _settle_pending_requests(conn, "daemon stopped", request_id=request_id)
-            else:
-                _settle_pending_requests(conn, "stop acknowledged; daemon absent", request_id=request_id)
-            _refresh_mode(conn, "stopped", note="stop requested")
+        if target is None:
+            _settle_pending_requests(conn, "stop acknowledged; daemon absent or unverified", request_id=request_id)
+            with control_lock(git_dir):
+                _refresh_mode(conn, "stopped", note="stop requested")
             print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
             return 0
+
+        # Send SIGUSR1 to encourage a clean drain. Re-verify identity each
+        # time before escalating, so a daemon that exited and had its PID
+        # recycled mid-stop never receives our signal.
+        _signal_daemon(conn, signal.SIGUSR1, expected_token=cached_token)
+        _wait_for_ack(conn, request_id)
+
+        if _verified_target(conn, expected_token=cached_token) is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+        if not _wait_for_exit(pid, lock_fp, ACK_TIMEOUT):
+            # Re-verify fingerprint before SIGKILL: if the original daemon
+            # is gone and the PID was reused, refuse to escalate. Without
+            # this re-check, escalation could SIGKILL an unrelated process.
+            if (
+                cached_fingerprint
+                and verify_process_identity(pid, str(cached_fingerprint))
+                and heartbeat_alive(pid)
+            ):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if not _wait_for_exit(pid, lock_fp, 1.0):
+                _settle_pending_requests(conn, "stop requested; escalation failed", request_id=request_id)
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "action": "stop",
+                            "request_id": request_id,
+                            "branch": ctx["branch_ref"],
+                            "error": "daemon refused to stop",
+                            "pid": pid,
+                        },
+                        indent=2,
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+        _settle_pending_requests(conn, "daemon stopped", request_id=request_id)
+        with control_lock(git_dir):
+            _refresh_mode(conn, "stopped", note="stop requested")
+        print(json.dumps({"ok": True, "action": "stop", "request_id": request_id, "branch": ctx["branch_ref"], "flushed": flush_first}, indent=2))
+        return 0
+    except DetachedHeadError as exc:
+        print(f"refusing to stop: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 
