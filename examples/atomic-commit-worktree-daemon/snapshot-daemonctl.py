@@ -539,11 +539,61 @@ def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
         _signal_daemon(conn, signal.SIGUSR1, expected_token=cached_token)
         _wait_for_ack(conn, request_id)
 
-        if _verified_target(conn, expected_token=cached_token) is not None:
+        # Re-verify fingerprint *and* the row's current pid before SIGTERM.
+        # ``_verified_target`` only checks the row's *current* pid against
+        # its fingerprint; if the daemon exited and the kernel recycled
+        # ``pid`` for an unrelated process, the row may now hold a fresh
+        # daemon's pid (different from our captured ``pid``) — we must not
+        # SIGTERM the captured pid in that case. Equivalently, if no
+        # cached_fingerprint exists or the live process at ``pid`` no
+        # longer matches it, we refuse to signal and log a daemon_meta
+        # note instead of risking a kill of a recycled-pid stranger.
+        sigterm_ok = bool(
+            cached_fingerprint
+            and heartbeat_alive(pid)
+            and verify_process_identity(pid, str(cached_fingerprint))
+        )
+        current_row = _daemon_row(conn)
+        current_pid = int(current_row.get("pid") or 0)
+        if sigterm_ok and current_pid and current_pid != pid:
+            # Row points at a different live daemon now; the original is
+            # gone. Don't signal a recycled pid.
+            sigterm_ok = False
+        if sigterm_ok:
             try:
                 os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
+        else:
+            with control_lock(git_dir):
+                set_daemon_state(
+                    conn,
+                    pid=int(current_row.get("pid") or 0),
+                    mode=str(current_row.get("mode") or "stopped"),
+                    branch_ref=current_row.get("branch_ref"),
+                    branch_generation=current_row.get("branch_generation"),
+                    note=f"refused SIGTERM to pid {pid}: identity mismatch",
+                )
+            _settle_pending_requests(
+                conn,
+                f"stop refused: pid {pid} fingerprint mismatch",
+                request_id=request_id,
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "action": "stop",
+                        "request_id": request_id,
+                        "branch": ctx["branch_ref"],
+                        "error": "refused to signal pid: identity mismatch",
+                        "pid": pid,
+                    },
+                    indent=2,
+                ),
+                file=sys.stderr,
+            )
+            return 1
 
         if not _wait_for_exit(pid, lock_fp, ACK_TIMEOUT):
             # Re-verify fingerprint before SIGKILL: if the original daemon
