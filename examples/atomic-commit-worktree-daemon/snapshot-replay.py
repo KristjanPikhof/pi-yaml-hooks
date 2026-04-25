@@ -584,39 +584,61 @@ def sanitize_message(text: str) -> str:
     return subject + "\n\n" + "\n".join(wrapped)
 
 
+def _scrubbed_subprocess_env() -> Dict[str, str]:
+    """Return a copy of the daemon env with AI/OpenAI secrets dropped.
+
+    The commit-message subprocess is operator-supplied and may run
+    untrusted code; passing it ``OPENAI_API_KEY`` or ``SNAPSHOTD_AI_*``
+    settings would let it exfiltrate the daemon's credentials. Strip
+    every key whose name starts with ``OPENAI_`` or ``SNAPSHOTD_AI_``.
+    """
+    env: Dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key.startswith("OPENAI_"):
+            continue
+        if key.startswith("SNAPSHOTD_AI_"):
+            continue
+        env[key] = value
+    return env
+
+
 def ai_message_via_command(
     event: Any,
     ops: List[Mapping[str, Any]],
     diffs: Mapping[int, str],
+    repo_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Run ``SNAPSHOTD_COMMIT_MESSAGE_CMD`` for one event, return sanitized stdout.
 
     Returns ``None`` (never raises) when the command is unset, fails to
     parse, exits non-zero, or times out, so the caller can fall back to AI
     or deterministic generation. Stdout is fed through ``sanitize_message``
-    so the format matches the rest of the pipeline.
+    so the format matches the rest of the pipeline. Sensitive paths are
+    redacted in the payload (path/old_path replaced and diff scrubbed)
+    before piping to the command. The subprocess inherits a scrubbed env
+    so it never sees ``OPENAI_API_KEY`` and friends.
     """
-    if not SNAPSHOTD_COMMIT_MESSAGE_CMD:
+    cmd = _commit_message_cmd()
+    if not cmd:
         return None
     try:
-        argv = shlex.split(SNAPSHOTD_COMMIT_MESSAGE_CMD)
+        argv = shlex.split(cmd)
     except ValueError:
         return None
     if not argv:
         return None
+    op_entries: List[Dict[str, Any]] = []
+    safe_paths: List[Optional[str]] = []
+    for idx, op in enumerate(ops):
+        entry, sensitive = _redacted_op_payload(op, idx, diffs)
+        op_entries.append(entry)
+        safe_paths.append("<redacted-path>" if sensitive else op.get("path"))
     payload = {
         "seq": _event_field(event, "seq"),
         "branch_ref": _event_field(event, "branch_ref"),
         "tool_name": DAEMON_TOOL_NAME,
-        "ops": [
-            {
-                "op": op.get("op"),
-                "path": op.get("path"),
-                "old_path": op.get("old_path"),
-                "diff": diffs.get(idx, ""),
-            }
-            for idx, op in enumerate(ops)
-        ],
+        "paths": safe_paths,
+        "ops": op_entries,
     }
     try:
         proc = subprocess.run(
@@ -624,7 +646,9 @@ def ai_message_via_command(
             input=json.dumps(payload).encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=OPENAI_API_TIMEOUT,
+            timeout=_openai_api_timeout(),
+            env=_scrubbed_subprocess_env(),
+            cwd=str(repo_root) if repo_root is not None else None,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
