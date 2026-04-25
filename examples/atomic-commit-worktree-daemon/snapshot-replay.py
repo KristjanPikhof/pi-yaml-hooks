@@ -66,6 +66,676 @@ def _replay_batch_max() -> int:
     return value
 
 
+# --------------------------------------------------------------------------- #
+# Commit-message generation (port of snapshot-worker helpers, daemon-adapted)
+#
+# These helpers are intentionally pure — they never mutate the SQLite queue or
+# the publish_state row. Callers may use the returned strings as commit
+# messages but DB state changes remain the caller's responsibility. The
+# daemon's ``CaptureEvent`` shape lacks ``tool_name`` and ``source`` columns
+# that snapshot-worker exposes; this module substitutes the literal
+# ``"daemon"`` for the tool name and omits the ``source`` field entirely so
+# fallback output stays deterministic when the AI/command paths are off.
+# --------------------------------------------------------------------------- #
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _env_int(name: str, default: int, *, lo: Optional[int] = None, hi: Optional[int] = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = default
+    if lo is not None and value < lo:
+        value = lo
+    if hi is not None and value > hi:
+        value = hi
+    return value
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+SNAPSHOTD_AI_ENABLE = _env_truthy("SNAPSHOTD_AI_ENABLE")
+SNAPSHOTD_AI_MAX_QUEUE_DEPTH = _env_int("SNAPSHOTD_AI_MAX_QUEUE_DEPTH", 2, lo=0)
+SNAPSHOTD_AI_CHUNK_SIZE = _env_int("SNAPSHOTD_AI_CHUNK_SIZE", 20, lo=1, hi=100)
+SNAPSHOTD_COMMIT_MESSAGE_CMD = os.environ.get("SNAPSHOTD_COMMIT_MESSAGE_CMD", "").strip()
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+OPENAI_API_TIMEOUT = _env_float("OPENAI_API_TIMEOUT", 15.0)
+
+
+# Default-deny redaction list. Matches snapshot-worker semantics: an empty
+# override is ignored and the safe baseline still applies. Operators can
+# extend or replace via ``SNAPSHOTD_SENSITIVE_GLOBS`` (comma-separated).
+_DEFAULT_SENSITIVE_PATTERNS: Tuple[str, ...] = (
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "**/id_rsa*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/secrets/*",
+    "**/credentials*",
+)
+
+
+def _sensitive_patterns() -> Tuple[str, ...]:
+    override = os.environ.get("SNAPSHOTD_SENSITIVE_GLOBS")
+    if override is None or not override.strip():
+        return _DEFAULT_SENSITIVE_PATTERNS
+    parsed = tuple(p.strip() for p in override.split(",") if p.strip())
+    return parsed or _DEFAULT_SENSITIVE_PATTERNS
+
+
+def _path_matches_sensitive(path: Optional[str]) -> bool:
+    if not path:
+        return False
+    from fnmatch import fnmatch
+
+    for pattern in _sensitive_patterns():
+        if fnmatch(path, pattern):
+            return True
+        # gitignore-style ``**/X`` should also match the bare top-level ``X``;
+        # fnmatch lacks recursive ``**`` semantics so pair the two forms.
+        if pattern.startswith("**/"):
+            tail = pattern[3:]
+            if tail and fnmatch(path, tail):
+                return True
+    return False
+
+
+AI_SYSTEM_PROMPT = (
+    "You are a git commit message generator.\n"
+    "Line 1: imperative subject, max 50 chars, no trailing period.\n"
+    "Blank line, then body bullets starting with '- ', wrapped at 72 chars.\n"
+    "Describe WHAT changed and WHY. No questions, no preamble.\n"
+    "Output only the commit message."
+)
+
+BATCH_SYSTEM_PROMPT = (
+    "You are a git commit message generator for a batch of snapshot events.\n"
+    "Input: one JSON payload listing events with seq, tool, paths, and diffs.\n"
+    "Output: a JSON object matching the provided schema with a 'messages'\n"
+    "array. Produce one item per input event, preserving its seq verbatim.\n"
+    "For each item:\n"
+    "- 'subject': imperative, max 50 chars, no trailing period.\n"
+    "- 'body': bullet list ('- ' prefix) describing WHAT changed and WHY,\n"
+    "  wrapped at 72 chars. One line per bullet. No preamble, no questions.\n"
+    "Do not emit any text outside the JSON object."
+)
+
+BATCH_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["messages"],
+    "properties": {
+        "messages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["seq", "subject", "body"],
+                "properties": {
+                    "seq": {"type": "integer"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+# Literal tool name used in deterministic messages and AI prompts. The daemon
+# does not capture per-write tool identity the way snapshot-worker does, so we
+# tag every produced message with ``"daemon"`` to keep formatting consistent.
+DAEMON_TOOL_NAME = "daemon"
+
+
+def _decode_blob_text(data: bytes) -> Optional[str]:
+    if b"\x00" in data:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def batch_cat_file(repo_root: Path, oids: Iterable[str]) -> Dict[str, bytes]:
+    """Resolve many blob OIDs in one ``git cat-file --batch`` call.
+
+    Returns a mapping of OID to raw blob bytes. Missing or non-blob OIDs are
+    silently dropped — callers fall back to ``<binary content changed>`` or
+    deterministic messaging when a blob cannot be resolved.
+    """
+    unique = sorted({oid for oid in oids if oid and set(oid) != {"0"}})
+    if not unique:
+        return {}
+    proc = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=str(repo_root),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_clean_git_env(),
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    try:
+        proc.stdin.write(("\n".join(unique) + "\n").encode("utf-8"))
+        proc.stdin.close()
+    except Exception:
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        return {}
+
+    out: Dict[str, bytes] = {}
+    try:
+        for _ in unique:
+            header = proc.stdout.readline()
+            if not header:
+                break
+            header = header.rstrip(b"\n")
+            parts = header.split(b" ")
+            if len(parts) < 3 or parts[1] != b"blob":
+                continue
+            oid = parts[0].decode()
+            try:
+                size = int(parts[2])
+            except ValueError:
+                continue
+            data = b""
+            while len(data) < size:
+                chunk = proc.stdout.read(size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            proc.stdout.read(1)  # trailing newline
+            out[oid] = data
+    finally:
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return out
+
+
+def op_diff_text(op: Mapping[str, Any], blobs: Mapping[str, bytes]) -> str:
+    """Render a unified diff for one op using already-fetched blob bytes.
+
+    Returns ``"<binary content changed>"`` when either side is non-text, and
+    ``"<no textual diff>"`` when before and after are byte-identical. Output
+    is capped at 4000 chars so a giant change cannot blow the prompt budget.
+    """
+    kind = op.get("op")
+    path = op.get("path") or ""
+    if kind == "create":
+        before_label, after_label = "/dev/null", path
+        before_bytes = b""
+        after_bytes = blobs.get(op.get("after_oid") or "", b"")
+    elif kind == "modify":
+        before_label = after_label = path
+        before_bytes = blobs.get(op.get("before_oid") or "", b"")
+        after_bytes = blobs.get(op.get("after_oid") or "", b"")
+    elif kind == "delete":
+        before_label, after_label = path, "/dev/null"
+        before_bytes = blobs.get(op.get("before_oid") or "", b"")
+        after_bytes = b""
+    else:  # rename / mode / symlink
+        before_label = op.get("old_path") or path
+        after_label = path
+        before_bytes = blobs.get(op.get("before_oid") or "", b"")
+        after_bytes = blobs.get(op.get("after_oid") or "", b"")
+
+    before_text = _decode_blob_text(before_bytes)
+    after_text = _decode_blob_text(after_bytes)
+    if before_text is None or after_text is None:
+        return "<binary content changed>"
+
+    diff = list(
+        difflib.unified_diff(
+            before_text.splitlines(),
+            after_text.splitlines(),
+            fromfile=before_label,
+            tofile=after_label,
+            lineterm="",
+            n=3,
+        )
+    )
+    if not diff:
+        return "<no textual diff>"
+    return "\n".join(diff)[:4000]
+
+
+def compute_diffs_for_event(
+    repo_root: Path, ops: List[Mapping[str, Any]]
+) -> Dict[int, str]:
+    """Return ``{op_index: diff_text}`` for every op in one event.
+
+    Resolves all referenced blob OIDs in a single ``git cat-file --batch``
+    call. Any path matching the sensitive glob list is replaced with a
+    redaction marker rather than its diff; callers do not need to reapply
+    the filter.
+    """
+    if not ops:
+        return {}
+    needed_oids: List[str] = []
+    for op in ops:
+        for key in ("before_oid", "after_oid"):
+            oid = op.get(key)
+            if oid:
+                needed_oids.append(str(oid))
+    blobs = batch_cat_file(repo_root, needed_oids) if needed_oids else {}
+    diffs: Dict[int, str] = {}
+    for idx, op in enumerate(ops):
+        if _path_matches_sensitive(op.get("path")) or (
+            op.get("op") == "rename" and _path_matches_sensitive(op.get("old_path"))
+        ):
+            diffs[idx] = "<redacted: sensitive path>"
+            continue
+        diffs[idx] = op_diff_text(op, blobs)
+    return diffs
+
+
+def _basename(path: Optional[str]) -> str:
+    if not path:
+        return ""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    return name or path
+
+
+def _trim_subject(subject: str, limit: int = 50) -> str:
+    """Trim a commit subject to ``limit`` chars, preferring a word boundary.
+
+    Mirrors snapshot-worker — never cuts mid-token; falls back to a hard cut
+    only when no boundary lies in the second half of the budget.
+    """
+    subject = subject.strip()
+    if len(subject) <= limit:
+        return subject
+    head = subject[: limit - 1]
+    boundary = max(head.rfind(" "), head.rfind("/"), head.rfind("."))
+    if boundary >= limit // 2:
+        return head[:boundary].rstrip(" /.") + "…"
+    return head.rstrip() + "…"
+
+
+def _common_dir(paths: List[str]) -> str:
+    if not paths:
+        return ""
+    parts = [p.split("/") for p in paths]
+    common: List[str] = []
+    for segments in zip(*parts):
+        first = segments[0]
+        if all(s == first for s in segments):
+            common.append(first)
+        else:
+            break
+    if common and common == parts[0][: len(common)] and len(common) == len(parts[0]):
+        common = common[:-1]
+    return "/".join(common)
+
+
+def _event_field(event: Any, key: str, default: Any = None) -> Any:
+    """Read ``key`` from a dict-like or sqlite3.Row-like ``event``.
+
+    sqlite3.Row supports ``__getitem__`` but not ``.get``; dict supports both.
+    Tests pass plain dicts; production passes Rows. Try both safely.
+    """
+    if event is None:
+        return default
+    try:
+        value = event[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return value
+
+
+def deterministic_message(event: Any, ops: List[Mapping[str, Any]]) -> str:
+    """Produce a deterministic commit message from event + ops alone.
+
+    Daemon-adapted: ``tool_name`` is always ``"daemon"`` (the worker reads it
+    from a per-event column the daemon does not have). The format mirrors
+    snapshot-worker's deterministic output so both lanes produce visually
+    consistent commits when AI/command paths are unavailable.
+    """
+    if not ops:
+        subject = "Update files"
+        seq = _event_field(event, "seq", 0)
+        return f"{subject}\n\n- Snapshot seq: {seq} tool: {DAEMON_TOOL_NAME}"
+    if len(ops) == 1:
+        op = ops[0]
+        kind = op.get("op")
+        name = _basename(op.get("path"))
+        if kind == "create":
+            subject = f"Add {name}"
+        elif kind == "modify":
+            subject = f"Update {name}"
+        elif kind == "delete":
+            subject = f"Remove {name}"
+        elif kind == "rename":
+            subject = f"Rename {_basename(op.get('old_path'))} to {name}"
+        else:
+            subject = f"Update {name}" if name else "Update files"
+    else:
+        paths = [str(op.get("path") or "") for op in ops]
+        shared = _common_dir(paths)
+        if shared:
+            subject = f"Update {len(ops)} files in {shared}"
+        else:
+            subject = f"Update {len(ops)} files"
+    subject = _trim_subject(subject)
+    lines = [subject, ""]
+    for op in ops[:10]:
+        kind = op.get("op") or "update"
+        if kind == "rename":
+            lines.append(f"- Rename {op.get('old_path')} -> {op.get('path')}")
+        else:
+            lines.append(f"- {str(kind).title()} {op.get('path')}")
+    seq = _event_field(event, "seq", 0)
+    lines.append(f"- Snapshot seq: {seq} tool: {DAEMON_TOOL_NAME}")
+    return "\n".join(lines)
+
+
+def sanitize_message(text: str) -> str:
+    """Normalize an AI/command-produced message into the daemon's format.
+
+    Strips bullet markers from the subject, trims it to 50 chars on a word
+    boundary, then re-wraps body bullets at 72 chars with ``- `` prefixes.
+    Empty input yields a safe ``"Update files"`` placeholder so callers never
+    need to handle ``None`` on top of fallback logic.
+    """
+    raw = [line.rstrip() for line in text.splitlines()]
+    lines = [line for line in raw if line.strip()]
+    if not lines:
+        return "Update files"
+    subject = re.sub(r"^[\-*\s]+", "", lines[0]).strip().rstrip(".")
+    subject = _trim_subject(subject) if subject else "Update files"
+    body: List[str] = []
+    current: Optional[str] = None
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^[\-*]\s+", stripped):
+            if current:
+                body.append(current)
+            current = re.sub(r"^[\-*\s]+", "", stripped).strip()
+        else:
+            current = f"{current} {stripped}".strip() if current else stripped
+    if current:
+        body.append(current)
+    if not body:
+        return subject
+    wrapped: List[str] = []
+    for bullet in body:
+        wrapped.extend(
+            textwrap.wrap(
+                bullet,
+                width=72,
+                initial_indent="- ",
+                subsequent_indent="  ",
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+        )
+    return subject + "\n\n" + "\n".join(wrapped)
+
+
+def ai_message_via_command(
+    event: Any,
+    ops: List[Mapping[str, Any]],
+    diffs: Mapping[int, str],
+) -> Optional[str]:
+    """Run ``SNAPSHOTD_COMMIT_MESSAGE_CMD`` for one event, return sanitized stdout.
+
+    Returns ``None`` (never raises) when the command is unset, fails to
+    parse, exits non-zero, or times out, so the caller can fall back to AI
+    or deterministic generation. Stdout is fed through ``sanitize_message``
+    so the format matches the rest of the pipeline.
+    """
+    if not SNAPSHOTD_COMMIT_MESSAGE_CMD:
+        return None
+    try:
+        argv = shlex.split(SNAPSHOTD_COMMIT_MESSAGE_CMD)
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    payload = {
+        "seq": _event_field(event, "seq"),
+        "branch_ref": _event_field(event, "branch_ref"),
+        "tool_name": DAEMON_TOOL_NAME,
+        "ops": [
+            {
+                "op": op.get("op"),
+                "path": op.get("path"),
+                "old_path": op.get("old_path"),
+                "diff": diffs.get(idx, ""),
+            }
+            for idx, op in enumerate(ops)
+        ],
+    }
+    try:
+        proc = subprocess.run(
+            argv,
+            input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=OPENAI_API_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout.decode("utf-8", errors="replace").strip()
+    return sanitize_message(text) if text else None
+
+
+def _build_batch_event_payload(
+    event: Any,
+    ops: List[Mapping[str, Any]],
+    diffs: Mapping[int, str],
+) -> Dict[str, Any]:
+    """Shape one event for inclusion in a batch request, redacting any
+    op diff whose path matches a sensitive glob.
+
+    Daemon-adapted: ``tool_name`` is the literal ``"daemon"``; the daemon's
+    capture row has no per-event tool column, so we never leak whatever the
+    operator's environment may have set in ``CLAUDE_TOOL_NAME`` or similar.
+    """
+    op_entries: List[Dict[str, Any]] = []
+    for idx, op in enumerate(ops):
+        redact = _path_matches_sensitive(op.get("path")) or (
+            op.get("op") == "rename" and _path_matches_sensitive(op.get("old_path"))
+        )
+        diff_text = "<redacted: sensitive path>" if redact else diffs.get(idx, "")
+        op_entries.append(
+            {
+                "op": op.get("op"),
+                "path": op.get("path"),
+                "old_path": op.get("old_path"),
+                "diff": diff_text,
+            }
+        )
+    return {
+        "seq": int(_event_field(event, "seq", 0) or 0),
+        "tool_name": DAEMON_TOOL_NAME,
+        "branch_ref": _event_field(event, "branch_ref", ""),
+        "paths": [op.get("path") for op in ops],
+        "ops": op_entries,
+    }
+
+
+def batch_ai_messages(
+    events_with_ops: List[Tuple[Any, List[Mapping[str, Any]]]],
+    diffs_by_event: Mapping[int, Mapping[int, str]],
+) -> Dict[int, str]:
+    """Generate commit messages for many events via OpenAI structured output.
+
+    Chunks events into groups of ``SNAPSHOTD_AI_CHUNK_SIZE``, issues one POST
+    to ``{OPENAI_BASE_URL}/chat/completions`` per chunk with a json_schema
+    response format, then parses the returned ``messages`` array into a
+    ``{seq: "subject\\n\\nbody"}`` mapping (sanitized).
+
+    Returns ``{}`` for any chunk whose request or response fails validation,
+    so callers fall back to ``SNAPSHOTD_COMMIT_MESSAGE_CMD`` or
+    ``deterministic_message`` for the affected events. The HTTPS-only base
+    URL guard prevents diffs from being sent to a plaintext endpoint that
+    could be intercepted on a hostile network.
+    """
+    if not events_with_ops:
+        return {}
+    if not SNAPSHOTD_AI_ENABLE or not OPENAI_API_KEY:
+        return {}
+    if not OPENAI_BASE_URL.lower().startswith("https://"):
+        return {}
+
+    endpoint = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+    out: Dict[int, str] = {}
+
+    chunk_size = max(1, SNAPSHOTD_AI_CHUNK_SIZE)
+    for start in range(0, len(events_with_ops), chunk_size):
+        chunk = events_with_ops[start : start + chunk_size]
+        chunk_seqs = [int(_event_field(ev, "seq", 0) or 0) for ev, _ops in chunk]
+        batch_events: List[Dict[str, Any]] = []
+        for event, ops in chunk:
+            seq = int(_event_field(event, "seq", 0) or 0)
+            diffs = diffs_by_event.get(seq, {})
+            batch_events.append(_build_batch_event_payload(event, ops, diffs))
+
+        user_prompt = (
+            "Generate commit messages for the following snapshot events.\n"
+            "Return one item per event, keyed by its input seq.\n\n"
+            f"{json.dumps({'events': batch_events}, ensure_ascii=False)}"
+        )
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.3,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "commit_messages",
+                    "strict": True,
+                    "schema": BATCH_RESPONSE_SCHEMA,
+                },
+            },
+        }
+        req = urllib_request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=OPENAI_API_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except (urllib_error.URLError, TimeoutError):
+            continue
+        except Exception:
+            continue
+
+        try:
+            parsed = json.loads(raw)
+            content = parsed["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            continue
+
+        try:
+            structured = json.loads(content)
+            items = structured["messages"]
+            if not isinstance(items, list):
+                raise ValueError("messages is not a list")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+        chunk_seq_set = set(chunk_seqs)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            seq = item.get("seq")
+            subject = item.get("subject")
+            body = item.get("body")
+            if not isinstance(seq, int) or seq not in chunk_seq_set:
+                continue
+            if not isinstance(subject, str) or not isinstance(body, str):
+                continue
+            if not subject.strip():
+                continue
+            composed = (
+                subject.strip() + "\n\n" + body.strip()
+                if body.strip()
+                else subject.strip()
+            )
+            sanitized = sanitize_message(composed)
+            if sanitized:
+                out[seq] = sanitized
+
+    return out
+
+
+def generate_message(
+    event: Any,
+    ops: List[Mapping[str, Any]],
+    diffs: Mapping[int, str],
+    *,
+    ai_message: Optional[str] = None,
+) -> str:
+    """Top-level fallback chain: AI -> command -> deterministic.
+
+    ``ai_message`` is a pre-fetched batch result (typically from
+    ``batch_ai_messages``); when present and non-empty it wins. Otherwise we
+    try the per-event command, falling back to deterministic output. This
+    helper itself is pure; callers that want to memoize results into
+    ``capture_events.commit_message`` (added by the schema lane) must do so
+    explicitly.
+    """
+    if ai_message:
+        stripped = ai_message.strip()
+        if stripped:
+            return stripped
+    if SNAPSHOTD_COMMIT_MESSAGE_CMD:
+        try:
+            msg = ai_message_via_command(event, ops, diffs)
+        except Exception:
+            msg = None
+        if msg:
+            return msg
+    return deterministic_message(event, ops)
+
+
+# --------------------------------------------------------------------------- #
+# Replay / publish primitives
+# --------------------------------------------------------------------------- #
+
+
 ABSENT: Tuple[str, str] = ("__absent__", "__absent__")
 
 
