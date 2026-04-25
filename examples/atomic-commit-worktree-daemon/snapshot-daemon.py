@@ -148,12 +148,20 @@ def _capture_then_replay(conn, repo_root: Path, git_dir: Path) -> int:
     """Capture the current stable polling snapshot before draining commits."""
     try:
         capture.poll_once(conn, repo_root, git_dir)
-        # poll_once may have caught _IgnoreCheckFailed internally and written
-        # a "check-ignore: …" error to last_capture_error. Only clear here
+        # poll_once may have caught an internal failure (bootstrap,
+        # head-baseline, check-ignore) and written a typed error to
+        # ``last_capture_error`` while still returning []. Only clear here
         # when the meta value did NOT come from that internal-error path,
-        # otherwise this blanket-clear masks the real failure.
-        if not _poll_once_wrote_internal_error(conn):
-            snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
+        # otherwise this blanket-clear masks the real failure. When it did
+        # come from there, surface it as an exception so blocking flushes
+        # ack with a non-zero status carrying the error text.
+        if _poll_once_wrote_internal_error(conn):
+            internal_err = (
+                snapshot_state.get_daemon_meta(conn, "last_capture_error")
+                or "internal capture error"
+            )
+            raise RuntimeError(internal_err)
+        snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
     except Exception as exc:
         snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
         raise
