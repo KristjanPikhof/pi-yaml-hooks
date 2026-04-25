@@ -164,8 +164,8 @@ class CoalescedAckBatchAtomicityTests(unittest.TestCase):
         # implementation rid #1 would be acked and rids #2/#3 would not — the
         # bug we are guarding against. Under the new transactional batch
         # NONE of the three should land.
-        original_ack = daemon._ack
         call_count = {"n": 0}
+        original_ack = daemon._ack
 
         def _flaky_ack(conn_arg, request_id, note=""):
             call_count["n"] += 1
@@ -173,8 +173,7 @@ class CoalescedAckBatchAtomicityTests(unittest.TestCase):
                 raise RuntimeError("simulated mid-batch failure")
             original_ack(conn_arg, request_id, note)
 
-        daemon._ack = _flaky_ack
-        try:
+        with mock.patch.object(daemon, "_ack", _flaky_ack):
             stop_event = threading.Event()
             with self.assertRaises(RuntimeError):
                 daemon.process_requests(
@@ -184,8 +183,6 @@ class CoalescedAckBatchAtomicityTests(unittest.TestCase):
                     sleeping=False,
                     stop_event=stop_event,
                 )
-        finally:
-            daemon._ack = original_ack
 
         rows = conn.execute(
             "SELECT id, acknowledged_ts FROM flush_requests ORDER BY id"
