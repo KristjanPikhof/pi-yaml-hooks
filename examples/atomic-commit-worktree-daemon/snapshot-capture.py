@@ -45,6 +45,7 @@ def _read_path_bytes(path: Path) -> bytes:
 
 
 def _is_git_ignored(repo_root: Path, rel: str) -> bool:
+    """Single-path fallback. Prefer ``_batch_check_ignored`` inside _scan_tree."""
     proc = subprocess.run(
         ["git", "check-ignore", "-q", "--", rel],
         cwd=str(repo_root),
@@ -55,12 +56,52 @@ def _is_git_ignored(repo_root: Path, rel: str) -> bool:
     return proc.returncode == 0
 
 
+def _batch_check_ignored(repo_root: Path, paths: List[str]) -> set[str]:
+    """Return the subset of ``paths`` that git considers ignored.
+
+    One subprocess for the whole tick beats N subprocesses on a 5k-file repo.
+    """
+    if not paths:
+        return set()
+    payload = ("\x00".join(paths) + "\x00").encode("utf-8")
+    proc = subprocess.run(
+        ["git", "check-ignore", "--stdin", "-z"],
+        cwd=str(repo_root),
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=snapshot_state._clean_git_env(),
+    )
+    # exit 0 = some matched; exit 1 = none matched; >1 = real error.
+    if proc.returncode > 1:
+        return set()
+    ignored: set[str] = set()
+    for chunk in proc.stdout.split(b"\x00"):
+        if not chunk:
+            continue
+        ignored.add(chunk.decode("utf-8", errors="replace"))
+    return ignored
+
+
 def _is_sensitive(rel: str) -> bool:
     return snapshot_state.is_sensitive_path(rel)
 
 
+# Stat cache: rel-path -> (size, mtime_ns, oid). Lets _scan_tree skip the
+# capture_blob_for_bytes call (and the implicit `git hash-object -w`) when a
+# file has not changed since the previous tick. The cache is module-scoped so
+# it survives across poll_once calls within a single daemon process.
+_STAT_CACHE: Dict[str, Dict[str, Tuple[int, int, str]]] = {}
+
+
 def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     entries: Dict[str, Dict[str, Any]] = {}
+    cache_key = str(repo_root)
+    cache = _STAT_CACHE.setdefault(cache_key, {})
+    next_cache: Dict[str, Tuple[int, int, str]] = {}
+    pending: List[Tuple[str, Path, os.stat_result]] = []
+    candidate_rels: List[str] = []
+
     for root, dirs, files in os.walk(repo_root, topdown=True, followlinks=False):
         root_path = Path(root)
         dirs[:] = [name for name in dirs if name not in IGNORE_NAMES]
@@ -72,20 +113,43 @@ def _scan_tree(repo_root: Path) -> Dict[str, Dict[str, Any]]:
                 st = path.lstat()
             except FileNotFoundError:
                 continue
-            if stat.S_ISDIR(st.st_mode):
+            # Skip anything that isn't a regular file or a symlink.  Sockets,
+            # FIFOs, block/char devices would either block on read or persist
+            # garbage into the object store.
+            if not (stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
                 continue
             rel = path.relative_to(repo_root).as_posix()
-            if _is_sensitive(rel) or _is_git_ignored(repo_root, rel):
+            if _is_sensitive(rel):
                 continue
+            pending.append((rel, path, st))
+            candidate_rels.append(rel)
+
+    ignored = _batch_check_ignored(repo_root, candidate_rels)
+
+    for rel, path, st in pending:
+        if rel in ignored:
+            continue
+        sig = (int(st.st_size), int(st.st_mtime_ns))
+        prev = cache.get(rel)
+        if prev is not None and prev[:2] == sig:
+            oid = prev[2]
+        else:
             try:
                 data = _read_path_bytes(path)
             except FileNotFoundError:
                 continue
-            entries[rel] = {
-                "path": rel,
-                "mode": _mode_for_stat(st),
-                "oid": snapshot_state.capture_blob_for_bytes(repo_root, data, rel_path=rel),
-            }
+            try:
+                oid = snapshot_state.capture_blob_for_bytes(repo_root, data, rel_path=rel)
+            except snapshot_state.SensitivePathRefused:
+                continue
+        next_cache[rel] = (sig[0], sig[1], oid)
+        entries[rel] = {
+            "path": rel,
+            "mode": _mode_for_stat(st),
+            "oid": oid,
+        }
+
+    _STAT_CACHE[cache_key] = next_cache
     return entries
 
 
