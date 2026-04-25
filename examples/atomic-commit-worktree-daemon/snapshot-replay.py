@@ -49,7 +49,27 @@ from snapshot_state import (
 )
 
 
-REPLAY_PUBLISH_LOCK_TIMEOUT = float(os.environ.get("SNAPSHOTD_PUBLISH_LOCK_TIMEOUT", "30.0"))
+def _publish_lock_timeout() -> float:
+    """Per-call read of ``SNAPSHOTD_PUBLISH_LOCK_TIMEOUT``.
+
+    Captured at import historically; callers now read on each invocation
+    so monkeypatched env in tests and on-the-fly operator overrides
+    take effect without reimporting the module.
+    """
+    raw = os.environ.get("SNAPSHOTD_PUBLISH_LOCK_TIMEOUT")
+    if raw is None or not raw.strip():
+        return 30.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 30.0
+
+
+# Module-level alias preserved for tests that read the constant at
+# import time after ``monkeypatch.setenv``. Production helpers below
+# call ``_publish_lock_timeout()`` directly so they pick up env changes
+# without requiring a module reload.
+REPLAY_PUBLISH_LOCK_TIMEOUT = _publish_lock_timeout()
 
 
 def _replay_batch_max() -> int:
