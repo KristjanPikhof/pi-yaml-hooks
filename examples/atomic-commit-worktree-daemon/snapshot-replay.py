@@ -1225,7 +1225,9 @@ def _replay_pending_events_locked(
         terminated = False
 
         for event in pending:
-            ops = [dict(row) for row in load_ops(conn, int(event["seq"]))]
+            ops = ops_by_seq.get(int(_event_field(event, "seq", 0) or 0)) or [
+                dict(row) for row in load_ops(conn, int(event["seq"]))
+            ]
             if int(event["branch_generation"]) != int(ctx["branch_generation"]):
                 update_publish_state(
                     conn,
