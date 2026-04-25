@@ -26,6 +26,7 @@ from snapshot_state import (
     publish_lock,
     repo_context,
     resolve_repo_paths,
+    set_daemon_meta,
     snapshot_state_for_index,
     status_snapshot,
     update_publish_state,
