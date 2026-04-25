@@ -583,7 +583,14 @@ def test_sensitive_path_redacted_in_ai_payload(
         # The path itself can appear (it's metadata, not content) —
         # we only redact the diff body. Confirm the seq round-trips
         # so the AI knows which event to address (when it returns).
-        assert f'"seq": {seq}' in body_text or f'"seq":{seq}' in body_text
+        # The events payload is JSON-encoded a second time as a string
+        # inside the chat user-message, so the seq appears with
+        # escaped quotes (``\"seq\": N``) rather than raw.
+        assert (
+            f'\\"seq\\": {seq}' in body_text
+            or f'"seq": {seq}' in body_text
+            or f'"seq":{seq}' in body_text
+        ), f"seq={seq} not found in OpenAI payload: {body_text[:200]!r}"
     finally:
         tmp.cleanup()
 
