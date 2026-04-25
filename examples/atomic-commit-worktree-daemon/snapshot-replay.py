@@ -208,14 +208,12 @@ def _reconcile_live_index(
             safe.append(path)
     if not safe:
         return
-    env = os.environ.copy()
-    env.pop("GIT_INDEX_FILE", None)
     proc = subprocess.run(
         ["git", "reset", "-q", "--", *safe],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=env,
+        env=_clean_git_env(),
         check=False,
     )
     if proc.returncode != 0 and conn is not None:
