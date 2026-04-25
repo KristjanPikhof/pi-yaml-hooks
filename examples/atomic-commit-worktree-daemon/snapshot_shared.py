@@ -243,17 +243,44 @@ def load_branch_registry(common_dir: Path, branch_ref: str) -> Optional[Dict[str
 def write_branch_registry(
     common_dir: Path, branch_ref: str, data: Dict[str, Any]
 ) -> None:
+    """Atomically replace the registry file, fsync'ing data and parent dir.
+
+    The fsync calls turn a "atomic for readers" rename into a "durable across
+    power loss" rename — without them, the kernel can buffer the write past a
+    crash and resurface a stale or empty registry on reboot, which
+    contaminates the generation counter.
+    """
     path = registry_path(common_dir, branch_ref)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
     payload = dict(data)
     payload["schema"] = REGISTRY_SCHEMA
     payload["branch_ref"] = branch_ref
     payload["updated_ts"] = time.time()
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
-    tmp.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    os.replace(tmp, path)
+    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    with restricted_umask():
+        fd = os.open(
+            str(tmp),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            STATE_FILE_MODE,
+        )
+        try:
+            os.write(fd, body)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        # fsync the parent directory so the rename itself is durable.
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(dir_fd)
 
 
 def branch_worktree_git_dirs(repo_root: Path, branch_ref: str) -> Tuple[Path, ...]:
