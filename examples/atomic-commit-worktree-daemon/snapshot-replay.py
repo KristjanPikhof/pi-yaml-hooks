@@ -1856,20 +1856,21 @@ def _replay_pending_events_locked(
                 # the new branch tip before any later event can land.
                 state = saved
                 _read_tree_safely(repo_root, env, event_parent, conn)
-                conn.execute(
-                    "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
-                    (str(exc), int(event["seq"])),
-                )
-                update_publish_state(
-                    conn,
-                    event_seq=int(event["seq"]),
-                    branch_ref=branch,
-                    branch_generation=int(ctx["branch_generation"]),
-                    source_head=event_parent,
-                    target_commit_oid=commit_oid,
-                    status="blocked_conflict",
-                    error=str(exc),
-                )
+                with transaction(conn):
+                    conn.execute(
+                        "UPDATE capture_events SET state='blocked_conflict', error=? WHERE seq=?",
+                        (str(exc), int(event["seq"])),
+                    )
+                    update_publish_state(
+                        conn,
+                        event_seq=int(event["seq"]),
+                        branch_ref=branch,
+                        branch_generation=int(ctx["branch_generation"]),
+                        source_head=event_parent,
+                        target_commit_oid=commit_oid,
+                        status="blocked_conflict",
+                        error=str(exc),
+                    )
                 processed += 1
                 terminated = True
                 break
