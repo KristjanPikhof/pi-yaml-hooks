@@ -320,8 +320,7 @@ def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
     if not pending:
         return 0
 
-    env = os.environ.copy()
-    env["GIT_INDEX_FILE"] = str(index_path(git_dir))
+    env = _clean_git_env({"GIT_INDEX_FILE": str(index_path(git_dir))})
 
     try:
         index_file = index_path(git_dir)
