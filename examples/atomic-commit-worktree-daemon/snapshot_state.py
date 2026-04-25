@@ -334,6 +334,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                    updated_ts REAL NOT NULL
                )"""
         )
+        # Additive idempotent column check for existing DBs at the current
+        # SCHEMA_VERSION that predate columns added without a version bump.
+        # ``CREATE TABLE IF NOT EXISTS`` above is a no-op on an existing
+        # table, so a freshly-introduced column would otherwise be missing
+        # on long-lived state DBs until the next version bump.
+        capture_cols = set(_column_names(conn, "capture_events"))
+        if "message" not in capture_cols:
+            conn.execute("ALTER TABLE capture_events ADD COLUMN message TEXT")
         conn.execute(
             """INSERT OR IGNORE INTO daemon_state(id, pid, mode, heartbeat_ts, updated_ts)
                VALUES (1, 0, 'stopped', 0, ?)""",
