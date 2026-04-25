@@ -1122,10 +1122,13 @@ class WorktreeDaemonExampleTests(unittest.TestCase):
             '[submodule "sub"]\n\tpath = sub\n\turl = ./sub\n',
             encoding="utf-8",
         )
-        # Manufacture a synthetic "commit" oid the gitlink can point at —
-        # the bytes don't have to resolve to a real object for the
-        # capture-side test (the scanner reads the mode, not the oid).
-        synthetic = "0" * 40
+        # Manufacture a gitlink that points at a real object id so
+        # ``update-index --cacheinfo`` accepts it (git refuses the null
+        # sha1). HEAD's commit oid is a convenient real oid; the scanner
+        # only reads the entry's mode (160000), not the oid contents.
+        head_rev = git(repo, "rev-parse", "HEAD")
+        self.assertEqual(head_rev.returncode, 0, head_rev.stderr)
+        synthetic = head_rev.stdout.strip()
         cacheinfo = git(
             repo,
             "update-index",
