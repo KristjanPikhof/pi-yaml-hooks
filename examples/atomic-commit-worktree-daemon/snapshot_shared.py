@@ -132,6 +132,53 @@ def local_state_dir(git_dir: Path) -> Path:
     return git_dir / STATE_SUBDIR
 
 
+@contextlib.contextmanager
+def restricted_umask() -> Iterator[None]:
+    """Force `0o077` umask for the duration of state-file creation."""
+    previous = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+def ensure_state_dir(path: Path) -> Path:
+    """Create ``path`` (and parents) with 0700 perms; chmod if it already exists.
+
+    Refuses to use a state directory that's a symlink or that's owned by a
+    different user — both indicate the worktree is not safe to write daemon
+    state under.
+    """
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
+    if path.is_symlink():
+        raise RuntimeError(f"state dir {path} is a symlink; refusing to use")
+    path.mkdir(exist_ok=True, mode=STATE_DIR_MODE)
+    try:
+        st = path.stat()
+        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise RuntimeError(
+                f"state dir {path} is owned by uid {st.st_uid}, expected {os.geteuid()}"
+            )
+        # Best-effort tighten; raced perms (e.g. parent dir) are not fatal.
+        if (st.st_mode & 0o077) != 0:
+            try:
+                os.chmod(path, STATE_DIR_MODE)
+            except OSError:
+                pass
+    except FileNotFoundError:
+        pass
+    return path
+
+
+def restrict_file_perms(path: Path) -> None:
+    """Tighten an existing state file to 0600 if it lives on a fs that supports it."""
+    try:
+        os.chmod(path, STATE_FILE_MODE)
+    except OSError:
+        pass
+
+
 def _lock_is_held(lock_path: Path) -> bool:
     if not lock_path.exists():
         return False
