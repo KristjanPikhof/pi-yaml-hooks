@@ -286,45 +286,9 @@ Useful settings:
   `git log --oneline`; the daemon should still have published the intermediate
   create, modify, and delete commits if polling observed each state.
 
-## PI SDK findings
-
-- PI exposes `session_start`, `agent_end`, `session_shutdown`,
-  `session_before_switch`, `tool_call`, and `tool_result`.
-- PI `session_start` includes a reason (`startup`, `reload`, `new`, `resume`, or
-  `fork`). pi-hooks intentionally maps only `startup` and `new` to
-  `session.created`, so daemon start is tied to genuinely new sessions.
-- pi-hooks currently maps `session_start` with reason `startup` or `new` to
-  `session.created`.
-- pi-hooks maps `agent_end` to `session.idle` only when `ctx.isIdle()` is true
-  and `ctx.hasPendingMessages()` is false.
-- PI has no dedicated "after idle" event beyond `agent_end`.
-- `session.deleted` is intentionally lossy on PI because shutdown also fires
-  for `/new`, `/resume`, and `/fork`.
-- `tool.before.*` is the best wake point before command execution.
-- `tool.after.*` and `session.idle` are good flush points, but they are too late
-  to discover transient filesystem states by themselves.
-
-## Hook architecture changes to consider
-
-No pi-hooks core change is required for the first runnable daemon example. The
-existing `session.created`, `tool.before.*`, `tool.after.*`, `session.idle`, and
-`session.deleted` events are sufficient because the hooks only control daemon
-lifecycle. File observation happens in the daemon, not in hook payloads.
-
-These future changes would make the daemon cleaner, but they are not required
-for the initial example:
-
-1. Add `session.resumed` or include PI `session_start.reason` in
-   `session.created` payloads. The daemon can currently recover from missing
-   starts by using `tool.before.*`, but explicit resume would be cleaner.
-2. Add a first-class `agent.started` / `agent.ended` hook pair, or expose
-   `agent_end` as its own event. Today `session.idle` is good enough for drain,
-   but its name hides that it is tied to agent-loop completion.
-3. Add a daemon-oriented action or helper command is optional, not required.
-   The existing `bash` action can run `snapshot-daemonctl.py` safely.
-4. Do not make `session.idle` async for this use case. The sleep command should
-   be quick and synchronous so queued idle file-change state is consumed only
-   after the drain request succeeds.
+For internal PI SDK research notes and hook architecture observations, see
+[`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) "Appendix A: PI SDK
+findings".
 
 ## Non-goals
 
