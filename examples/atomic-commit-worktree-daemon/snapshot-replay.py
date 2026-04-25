@@ -383,18 +383,49 @@ def replay_pending_events(
     flush rows with the failure note rather than leaving controllers hung.
     """
     timeout = REPLAY_PUBLISH_LOCK_TIMEOUT if lock_timeout is None else lock_timeout
-    with publish_lock(git_dir, timeout=timeout):
-        return _replay_pending_events_locked(conn, repo_root, git_dir)
+    limit = batch_max if batch_max is not None else _replay_batch_max()
+    if limit <= 0:
+        limit = _replay_batch_max()
+    total = 0
+    while True:
+        with publish_lock(git_dir, timeout=timeout):
+            published, processed, remaining = _replay_pending_events_locked(
+                conn, repo_root, git_dir, batch_limit=limit
+            )
+        total += published
+        try:
+            set_daemon_meta(conn, "last_replay_deferred", str(remaining))
+        except Exception:
+            pass
+        # Stop when the lane drained, when the batch made no progress
+        # (would loop forever on the same blocked event), or when nothing
+        # was processable. Otherwise the lock has been released and the
+        # next iteration re-acquires it, giving sibling tools a turn.
+        if remaining == 0 or processed == 0:
+            return total
 
 
-def _replay_pending_events_locked(conn, repo_root: Path, git_dir: Path) -> int:
+def _replay_pending_events_locked(
+    conn, repo_root: Path, git_dir: Path, *, batch_limit: Optional[int] = None
+) -> Tuple[int, int, int]:
+    """Process up to ``batch_limit`` pending events under publish_lock.
+
+    Returns ``(published, processed, remaining)``:
+      - ``published``: events that resulted in a new commit
+      - ``processed``: rows touched (published + skipped/failed) — 0 means
+        the caller should not loop, since nothing changed.
+      - ``remaining``: pending events still queued after this batch.
+    """
     ctx = repo_context(repo_root, git_dir)
     branch = ctx["branch_ref"]
     head = ctx["base_head"]
     recover_publishing(conn, repo_root, ctx)
     pending = load_pending_events(conn, branch)
     if not pending:
-        return 0
+        return 0, 0, 0
+    total_pending = len(pending)
+    if batch_limit is not None and batch_limit > 0:
+        pending = pending[:batch_limit]
 
     env = _clean_git_env({"GIT_INDEX_FILE": str(index_path(git_dir))})
 
