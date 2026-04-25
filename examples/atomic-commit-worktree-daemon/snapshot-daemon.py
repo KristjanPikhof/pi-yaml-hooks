@@ -418,11 +418,30 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                 try:
                     seqs = capture.poll_once(conn, repo_root, git_dir)
                     produced_events = len(seqs) if seqs else 0
-                    snapshot_state.set_daemon_meta(conn, "last_capture_error", "")
-                    snapshot_state.set_daemon_meta(
-                        conn, "consecutive_capture_errors", "0"
-                    )
-                    consecutive_capture_errors = 0
+                    # Same contract as ``_capture_then_replay``: poll_once may
+                    # have caught an internal failure (e.g. _IgnoreCheckFailed)
+                    # and stamped a "check-ignore: …" prefix into
+                    # last_capture_error. Clearing unconditionally would
+                    # silently mask that failure, so we only clear when the
+                    # current value is NOT a poll_once-internal error.
+                    if not _poll_once_wrote_internal_error(conn):
+                        snapshot_state.set_daemon_meta(
+                            conn, "last_capture_error", ""
+                        )
+                        snapshot_state.set_daemon_meta(
+                            conn, "consecutive_capture_errors", "0"
+                        )
+                        consecutive_capture_errors = 0
+                    else:
+                        # Treat the internal-error tick as a capture failure
+                        # for backoff bookkeeping so a persistent broken
+                        # check-ignore doesn't peg the CPU.
+                        consecutive_capture_errors += 1
+                        snapshot_state.set_daemon_meta(
+                            conn,
+                            "consecutive_capture_errors",
+                            str(consecutive_capture_errors),
+                        )
                 except Exception as exc:
                     consecutive_capture_errors += 1
                     snapshot_state.set_daemon_meta(conn, "last_capture_error", str(exc))
