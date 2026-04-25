@@ -38,7 +38,7 @@ LOCK_NAME = "daemon.lock"
 CONTROL_LOCK_NAME = "control.lock"
 PUBLISH_LOCK_NAME = "publish.lock"
 INDEX_NAME = "worker.index"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 # Only identity/commit metadata and a narrow, explicitly-passed GIT_INDEX_FILE
