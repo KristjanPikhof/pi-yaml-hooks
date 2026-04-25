@@ -1813,7 +1813,9 @@ def _replay_pending_events_locked(
                 elif use_command_msg:
                     diffs = diffs_by_event.get(int(event["seq"]), {})
                     try:
-                        cmd_msg = ai_message_via_command(event, ops, diffs)
+                        cmd_msg = ai_message_via_command(
+                            event, ops, diffs, repo_root=repo_root
+                        )
                     except Exception:
                         cmd_msg = None
                     message = cmd_msg if cmd_msg else build_message(event, ops)
