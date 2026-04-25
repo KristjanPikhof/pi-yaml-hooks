@@ -362,9 +362,19 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
         # delivery. The ack wait happens outside the lock so a slow daemon
         # cannot starve concurrent wake/sleep/stop commands.
         with control_lock(git_dir):
-            request_id, signaled, branch, daemon_present, warning = _record_flush(
+            request_id, signaled, branch, daemon_live, script_present, warning = _record_flush(
                 repo_root, conn, non_blocking
             )
+            if not daemon_live and script_present and not non_blocking:
+                # Blocking flush against a non-live daemon: mirror cmd_wake
+                # spawn-fallback so the row will actually be acked rather
+                # than hanging for ACK_TIMEOUT. We attempt the spawn under
+                # the same control_lock that wrote the request row.
+                _maybe_start(repo_root, git_dir, conn, note="flush-start fallback")
+                # Re-signal: a freshly bootstrapped daemon now owns the row.
+                if _signal_daemon(conn, signal.SIGUSR1):
+                    daemon_live = True
+                    warning = None
         if non_blocking:
             payload: Dict[str, Any] = {
                 "ok": True,
@@ -374,19 +384,25 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
                 "signaled": signaled,
                 "branch": branch,
             }
-            if not daemon_present:
+            if not daemon_live:
+                # Non-blocking against a non-live daemon would silently
+                # "succeed" while the row sits forever; surface a clear
+                # error instead. Return code 2 distinguishes this from
+                # success and from the blocking timeout path below.
                 payload["ok"] = False
                 payload["status"] = "degraded"
-                payload["warning"] = warning
+                payload["warning"] = warning or (
+                    "no live daemon; non-blocking flush would not be acked"
+                )
                 print(json.dumps(payload, indent=2))
                 return 2
             if warning:
                 payload["warning"] = warning
             print(json.dumps(payload, indent=2))
             return 0
-        if not daemon_present:
+        if not daemon_live:
             print(
-                f"flush degraded: {warning}",
+                f"flush degraded: {warning or 'no live daemon to ack flush'}",
                 file=sys.stderr,
             )
             return 2
