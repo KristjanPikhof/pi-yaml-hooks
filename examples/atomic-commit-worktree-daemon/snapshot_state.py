@@ -690,7 +690,7 @@ def current_branch(repo_root: Path) -> Optional[str]:
     detached HEAD and confuse downstream callers.
     """
     proc = subprocess.run(
-        ["git", "symbolic-ref", "-q", "HEAD"],
+        [git_bin(), "symbolic-ref", "-q", "HEAD"],
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
