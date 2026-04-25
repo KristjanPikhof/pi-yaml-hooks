@@ -76,31 +76,38 @@ class SensitiveGlobRegressionTests(unittest.TestCase):
 class ProcessFingerprintRegressionTests(unittest.TestCase):
     """State-lane P2 — fingerprint prefers /proc on Linux, ps on darwin."""
 
+    @unittest.skipIf(sys.platform != "linux", "linux-specific")
     def test_linux_uses_proc_stat_no_subprocess(self) -> None:
-        with mock.patch.object(sys, "platform", "linux"):
+        with mock.patch.object(
+            snapshot_state, "_proc_fingerprint_linux", return_value="linux:42:python"
+        ) as proc_mock:
             with mock.patch.object(
-                snapshot_state, "_proc_fingerprint_linux", return_value="linux:42:python"
-            ) as proc_mock:
-                with mock.patch.object(
-                    snapshot_state.subprocess, "run"
-                ) as run_mock:
-                    fp = snapshot_state.process_fingerprint(1234)
+                snapshot_state.subprocess, "run"
+            ) as run_mock:
+                fp = snapshot_state.process_fingerprint(1234)
         self.assertEqual(fp, "linux:42:python")
         proc_mock.assert_called_once_with(1234)
         run_mock.assert_not_called()  # /proc path must not fork ps.
 
+    @unittest.skipIf(sys.platform != "darwin", "darwin-specific")
     def test_darwin_falls_back_to_ps(self) -> None:
-        with mock.patch.object(sys, "platform", "darwin"):
-            # Sanity: even if a fake _proc_fingerprint_linux is around, it
-            # must not be consulted for non-Linux platforms.
-            with mock.patch.object(
-                snapshot_state, "_proc_fingerprint_linux", return_value="should-not-see"
-            ) as proc_mock:
-                fp = snapshot_state.process_fingerprint(os.getpid())
-            proc_mock.assert_not_called()
+        # Sanity: even if a fake _proc_fingerprint_linux is around, it
+        # must not be consulted for non-Linux platforms.
+        with mock.patch.object(
+            snapshot_state, "_proc_fingerprint_linux", return_value="should-not-see"
+        ) as proc_mock:
+            fp = snapshot_state.process_fingerprint(os.getpid())
+        proc_mock.assert_not_called()
         # Real ps invocation — should produce a non-empty stamp on darwin.
         self.assertIsNotNone(fp)
         self.assertTrue(fp)
+        # The fingerprint must encode the pid so the caller can identify the process.
+        pid_str = str(os.getpid())
+        self.assertIn(
+            pid_str,
+            fp,
+            f"expected pid {pid_str} in fingerprint, got {fp!r}",
+        )
 
     def test_proc_parser_handles_paren_in_comm(self) -> None:
         # Synthesize a /proc/<pid>/stat line whose comm contains ")"; the
