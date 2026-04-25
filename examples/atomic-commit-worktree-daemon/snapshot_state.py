@@ -433,6 +433,7 @@ def current_branch(repo_root: Path) -> Optional[str]:
         cwd=str(repo_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=_clean_git_env(),
     )
     if proc.returncode != 0:
         return None
