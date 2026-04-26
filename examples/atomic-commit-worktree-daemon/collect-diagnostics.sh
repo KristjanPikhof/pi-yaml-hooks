@@ -296,6 +296,7 @@ collect_branch_registry() {
 
 collect_suspect_paths() {
   local idx=0
+  [[ ${#SUSPECT_PATHS[@]} -gt 0 ]] || return 0
   for p in "${SUSPECT_PATHS[@]}"; do
     idx=$((idx + 1))
     local file="$BUNDLE_DIR/suspect-paths/path-${idx}.txt"
