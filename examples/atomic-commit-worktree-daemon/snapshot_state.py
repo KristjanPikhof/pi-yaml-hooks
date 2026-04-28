@@ -334,6 +334,20 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                    updated_ts REAL NOT NULL
                )"""
         )
+        # v5: refcount table so the daemon can self-terminate only when every
+        # registered pi session has exited. Each row is one live pi-harness
+        # process that wants the daemon kept alive. Liveness is reverified by
+        # the daemon's periodic GC via heartbeat_alive + verify_process_identity
+        # so a hard-killed pi (SIGHUP / SIGKILL / terminal close) cannot leak
+        # rows past the next sweep.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS daemon_clients(
+                   pid INTEGER PRIMARY KEY,
+                   fingerprint TEXT NOT NULL,
+                   registered_ts REAL NOT NULL,
+                   last_seen_ts REAL NOT NULL
+               )"""
+        )
         # Additive idempotent column check for existing DBs at the current
         # SCHEMA_VERSION that predate columns added without a version bump.
         # ``CREATE TABLE IF NOT EXISTS`` above is a no-op on an existing
@@ -396,6 +410,25 @@ def _migrate_schema(conn: sqlite3.Connection, current_version: int) -> None:
         # Defaulting to NULL — replay-lane is the writer; this lane is just
         # making the column available.
         conn.execute("ALTER TABLE capture_events ADD COLUMN message TEXT")
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "daemon_clients" not in existing_tables:
+        # v4 → v5 added the refcount table so the daemon only self-terminates
+        # once every registered pi session has exited. Pure additive — older
+        # daemons keep working without it; new daemons consult it on every
+        # sweep tick.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS daemon_clients(
+                   pid INTEGER PRIMARY KEY,
+                   fingerprint TEXT NOT NULL,
+                   registered_ts REAL NOT NULL,
+                   last_seen_ts REAL NOT NULL
+               )"""
+        )
 
 
 def open_state(git_dir: Path, allow_reset: bool = True) -> sqlite3.Connection:
@@ -1046,6 +1079,119 @@ def heartbeat_alive(pid: int) -> bool:
         return exc.errno == errno.EPERM
 
 
+# Default TTL after which a registered client is considered stale even if its
+# pid is still alive. Catches the "pi UI froze and stopped firing hooks" case
+# without forcing a real session to re-register more than once per window.
+# Override via SNAPSHOTD_CLIENT_STALE_SECONDS for tests.
+DEFAULT_CLIENT_STALE_SECONDS = 1800.0
+
+
+def _client_stale_seconds() -> float:
+    raw = os.environ.get("SNAPSHOTD_CLIENT_STALE_SECONDS")
+    if raw is None:
+        return DEFAULT_CLIENT_STALE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_CLIENT_STALE_SECONDS
+    if value <= 0:
+        return DEFAULT_CLIENT_STALE_SECONDS
+    return value
+
+
+def register_client(
+    conn: sqlite3.Connection, pid: int, fingerprint: str
+) -> None:
+    """Record one live pi session as a daemon client.
+
+    Re-registering the same pid is fine: the row is upserted with refreshed
+    ``last_seen_ts`` so a controller called from a session that rapid-cycled
+    the hook doesn't accidentally evict itself.
+    """
+    if pid <= 0 or not fingerprint:
+        return
+    now = time.time()
+    conn.execute(
+        """INSERT INTO daemon_clients(pid, fingerprint, registered_ts, last_seen_ts)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(pid) DO UPDATE SET
+              fingerprint=excluded.fingerprint,
+              last_seen_ts=excluded.last_seen_ts""",
+        (pid, fingerprint, now, now),
+    )
+
+
+def deregister_client(conn: sqlite3.Connection, pid: int) -> None:
+    if pid <= 0:
+        return
+    conn.execute("DELETE FROM daemon_clients WHERE pid=?", (pid,))
+
+
+def touch_client(conn: sqlite3.Connection, pid: int) -> None:
+    """Refresh ``last_seen_ts`` for an already-registered client.
+
+    No-op if the pid isn't registered — controllers that fire a hook from a
+    session that never registered (e.g. a pi build that predates this schema)
+    do not accidentally inject themselves into the refcount.
+    """
+    if pid <= 0:
+        return
+    conn.execute(
+        "UPDATE daemon_clients SET last_seen_ts=? WHERE pid=?",
+        (time.time(), pid),
+    )
+
+
+def list_clients(conn: sqlite3.Connection) -> list[Dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT pid, fingerprint, registered_ts, last_seen_ts FROM daemon_clients"
+        ).fetchall()
+    ]
+
+
+def gc_dead_clients(conn: sqlite3.Connection) -> int:
+    """Drop client rows whose pid is dead, fingerprint mismatched, or stale.
+
+    Returns the number of *alive* rows remaining after the sweep so the
+    daemon can decide whether to keep running. The fingerprint check defeats
+    PID reuse — without it, a recycled pid owned by an unrelated process
+    would keep the refcount artificially high.
+    """
+    rows = list_clients(conn)
+    if not rows:
+        return 0
+    stale_cutoff = time.time() - _client_stale_seconds()
+    dead_pids: list[int] = []
+    alive = 0
+    for row in rows:
+        pid = int(row["pid"])
+        fp = str(row["fingerprint"])
+        last_seen = float(row["last_seen_ts"])
+        if last_seen < stale_cutoff:
+            dead_pids.append(pid)
+            continue
+        if not heartbeat_alive(pid):
+            dead_pids.append(pid)
+            continue
+        if not verify_process_identity(pid, fp):
+            dead_pids.append(pid)
+            continue
+        alive += 1
+    if dead_pids:
+        conn.executemany(
+            "DELETE FROM daemon_clients WHERE pid=?",
+            [(pid,) for pid in dead_pids],
+        )
+    return alive
+
+
+def client_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM daemon_clients").fetchone()
+    return int(row[0] if row else 0)
+
+
 def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
     daemon = _row_to_dict(conn.execute("SELECT * FROM daemon_state WHERE id=1").fetchone())
     publish = _row_to_dict(conn.execute("SELECT * FROM publish_state WHERE id=1").fetchone())
@@ -1062,6 +1208,7 @@ def status_snapshot(conn: sqlite3.Connection, git_dir: Path) -> Dict[str, Any]:
         "counts": counts,
         "shadow_paths": int(conn.execute("SELECT COUNT(*) FROM shadow_paths").fetchone()[0]),
         "flush_requests": int(conn.execute("SELECT COUNT(*) FROM flush_requests").fetchone()[0]),
+        "clients": list_clients(conn),
     }
 
 
