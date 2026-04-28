@@ -57,6 +57,30 @@ RETENTION_DAYS = _clamp(
     name="SNAPSHOTD_RETENTION_DAYS",
 )
 PRUNE_INTERVAL_SECONDS = 60.0
+# Interval between client-refcount sweeps. Each sweep verifies pid liveness
+# + fingerprint for every registered pi session and drops dead rows. The
+# daemon self-terminates after two consecutive empty sweeps (see
+# CLIENT_EMPTY_SWEEPS_BEFORE_EXIT) so a controller mid-INSERT doesn't lose a
+# live session to a single race.
+CLIENT_SWEEP_INTERVAL_SECONDS = _clamp(
+    float(os.environ.get("SNAPSHOTD_CLIENT_SWEEP_INTERVAL", "60.0")),
+    minimum=1.0,
+    name="SNAPSHOTD_CLIENT_SWEEP_INTERVAL",
+)
+# Grace window after daemon launch where an empty client table does NOT
+# trigger self-termination. Lets the spawning controller's INSERT land
+# before the first sweep.
+CLIENT_BOOT_GRACE_SECONDS = _clamp(
+    float(os.environ.get("SNAPSHOTD_CLIENT_BOOT_GRACE", "30.0")),
+    minimum=1.0,
+    name="SNAPSHOTD_CLIENT_BOOT_GRACE",
+)
+# Number of consecutive empty sweeps required before the daemon exits. Two
+# means a single race window (controller mid-INSERT during sweep) cannot
+# kill the daemon out from under a session that is about to register.
+CLIENT_EMPTY_SWEEPS_BEFORE_EXIT = max(
+    1, int(os.environ.get("SNAPSHOTD_CLIENT_EMPTY_SWEEPS", "2") or "2")
+)
 # Adaptive idle backoff: when nothing has changed for many ticks we ramp the
 # poll interval up to this ceiling so an idle daemon doesn't dominate I/O on
 # a 50k-file worktree. Active ticks (any classification, any flush) reset.
@@ -411,6 +435,9 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
         last_prune = 0.0
         consecutive_idle_ticks = 0
         consecutive_capture_errors = 0
+        boot_ts = time.time()
+        last_client_sweep = 0.0
+        consecutive_empty_client_sweeps = 0
 
         while not stop_event.is_set():
             if wake_event.is_set():
@@ -497,6 +524,51 @@ def run_daemon(repo_root: Path, git_dir: Path) -> int:
                     snapshot_state.set_daemon_meta(conn, "last_prune_error", str(exc))
                     conn.commit()
                 last_prune = now_wall
+
+            # Refcount sweep. Drop client rows whose pid is dead, fingerprint
+            # mismatched, or last_seen too old. If the table is empty after
+            # GC for ``CLIENT_EMPTY_SWEEPS_BEFORE_EXIT`` consecutive sweeps —
+            # AND we are past the boot grace — exit cleanly. Lets the daemon
+            # outlive any one pi session but die once every session has
+            # exited (gracefully or otherwise).
+            if (now_wall - last_client_sweep) >= CLIENT_SWEEP_INTERVAL_SECONDS:
+                try:
+                    alive = snapshot_state.gc_dead_clients(conn)
+                    conn.commit()
+                except Exception as exc:
+                    snapshot_state.set_daemon_meta(
+                        conn, "last_client_sweep_error", str(exc)
+                    )
+                    conn.commit()
+                    alive = -1
+                if alive == 0 and (now_wall - boot_ts) >= CLIENT_BOOT_GRACE_SECONDS:
+                    consecutive_empty_client_sweeps += 1
+                    snapshot_state.set_daemon_meta(
+                        conn,
+                        "consecutive_empty_client_sweeps",
+                        str(consecutive_empty_client_sweeps),
+                    )
+                    if consecutive_empty_client_sweeps >= CLIENT_EMPTY_SWEEPS_BEFORE_EXIT:
+                        _heartbeat(
+                            conn,
+                            os.getpid(),
+                            "running",
+                            ctx,
+                            note=(
+                                f"no live clients for {consecutive_empty_client_sweeps} "
+                                f"sweeps; self-terminating"
+                            ),
+                        )
+                        conn.commit()
+                        stop_event.set()
+                        wake_event.set()
+                else:
+                    if consecutive_empty_client_sweeps:
+                        snapshot_state.set_daemon_meta(
+                            conn, "consecutive_empty_client_sweeps", "0"
+                        )
+                    consecutive_empty_client_sweeps = 0
+                last_client_sweep = now_wall
 
             if had_request_rows or produced_events > 0:
                 consecutive_idle_ticks = 0
