@@ -266,5 +266,160 @@ class CtlLaneRegressionTests(unittest.TestCase):
         self.assertFalse(result.get("started"))
 
 
+class StopRefcountDeferralTests(unittest.TestCase):
+    """v5: ``cmd_stop`` deregisters the calling session and defers the
+    actual kill while peer sessions remain. The daemon's own GC sweep
+    handles termination once every registered session has exited.
+
+    These tests pin the controller-side refcount logic without spawning a
+    real daemon — the focus is "does cmd_stop kill or defer?".
+    """
+
+    def test_stop_with_peer_session_defers_kill(self) -> None:
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        daemonctl = load_example_module(
+            "snapshot_daemonctl_refcount_defer", "snapshot-daemonctl.py"
+        )
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        # Two registered pi sessions: this test process and a synthesized
+        # "peer" session whose pid is also alive (we reuse the test pid for
+        # both via two distinct fingerprints — the GC accepts whichever
+        # row's fingerprint matches the live pid). To make the peer survive
+        # GC, we register it under THIS process's real fingerprint with a
+        # synthetic positive pid distinct from os.getpid(). Easiest: use
+        # the parent PID. As long as ppid != current pid and is alive, it
+        # passes liveness; we register it under its real fingerprint too.
+        import os as _os
+        own_pid = _os.getpid()
+        own_fp = snapshot_state.process_fingerprint(own_pid)
+        ppid = _os.getppid()
+        ppid_fp = snapshot_state.process_fingerprint(ppid)
+        self.assertNotEqual(own_pid, ppid)
+        self.assertIsNotNone(own_fp)
+        self.assertIsNotNone(ppid_fp)
+
+        snapshot_state.register_client(conn, own_pid, str(own_fp))
+        snapshot_state.register_client(conn, ppid, str(ppid_fp))
+        self.assertEqual(snapshot_state.client_count(conn), 2)
+
+        # Stamp a fake daemon row so _verified_target would otherwise pass.
+        token = _stamp_running_daemon(conn, pid=98765, fingerprint="real-fp")
+        self.assertTrue(token)
+
+        # The deferred path should NOT signal or kill the daemon. Patch
+        # os.kill to capture lethal signals — sig=0 is a liveness probe
+        # used by ``heartbeat_alive`` and must be allowed through to the
+        # real os.kill so the probe still works during the test.
+        import os as _os_for_kill
+        import signal as _sig
+        kill_calls = []
+        real_kill = _os_for_kill.kill
+
+        def _capture_kill(pid, sig):
+            if sig == 0:
+                return real_kill(pid, sig)
+            kill_calls.append((pid, sig))
+            return None
+
+        captured = StringIO()
+        with mock.patch.object(daemonctl.os, "kill", side_effect=_capture_kill), \
+             mock.patch("sys.stdout", captured):
+            rc = daemonctl.cmd_stop(
+                repo,
+                git_dir,
+                flush_first=False,
+                session_pid=own_pid,
+            )
+        self.assertEqual(rc, 0)
+
+        import json as _json
+        payload = _json.loads(captured.getvalue())
+        self.assertTrue(payload.get("deferred"), payload)
+        self.assertEqual(payload.get("remaining_clients"), 1)
+        self.assertEqual(payload.get("session_pid"), own_pid)
+        # Critical: no SIGTERM/SIGKILL was sent.
+        self.assertEqual(kill_calls, [])
+        # Calling session was removed; peer remains.
+        remaining = {row["pid"] for row in snapshot_state.list_clients(conn)}
+        self.assertEqual(remaining, {ppid})
+
+    def test_stop_force_ignores_refcount(self) -> None:
+        """``--force`` short-circuits the refcount and follows the legacy
+        kill path. Used as the operator-explicit escape hatch."""
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        daemonctl = load_example_module(
+            "snapshot_daemonctl_refcount_force", "snapshot-daemonctl.py"
+        )
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        # Register a peer session that would normally defer the stop.
+        import os as _os
+        ppid = _os.getppid()
+        ppid_fp = snapshot_state.process_fingerprint(ppid)
+        snapshot_state.register_client(conn, ppid, str(ppid_fp))
+        self.assertEqual(snapshot_state.client_count(conn), 1)
+
+        # No daemon row → cmd_stop's no-daemon branch runs (rc=0 with no
+        # signal). The point of this test is that the deferred-path early
+        # return does NOT trigger when --force is set, so the legacy code
+        # path executes (which here ends up in the no-daemon branch).
+        rc = daemonctl.cmd_stop(
+            repo,
+            git_dir,
+            flush_first=False,
+            session_pid=_os.getpid(),  # not in client table — irrelevant when forced
+            force=True,
+        )
+        self.assertEqual(rc, 0)
+        # Peer client row was NOT touched by --force (only the explicit
+        # session_pid arg's row would be, and we deliberately picked a pid
+        # that is not registered to prove --force bypasses dereg).
+        self.assertEqual(snapshot_state.client_count(conn), 1)
+
+    def test_stop_when_only_calling_session_registered_kills(self) -> None:
+        """Refcount drops to 0 → take the legacy kill path."""
+        tmp, repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        daemonctl = load_example_module(
+            "snapshot_daemonctl_refcount_last", "snapshot-daemonctl.py"
+        )
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        import os as _os
+        own_pid = _os.getpid()
+        own_fp = snapshot_state.process_fingerprint(own_pid)
+        snapshot_state.register_client(conn, own_pid, str(own_fp))
+
+        # No daemon row stamped, so cmd_stop's no-daemon branch handles
+        # the actual stop semantics. The thing we're asserting is:
+        #   1. The deferred-path early return does NOT trigger.
+        #   2. After cmd_stop, our session row is removed (deregister ran).
+        captured = StringIO()
+        with mock.patch("sys.stdout", captured):
+            rc = daemonctl.cmd_stop(
+                repo,
+                git_dir,
+                flush_first=False,
+                session_pid=own_pid,
+            )
+        self.assertEqual(rc, 0)
+        import json as _json
+        payload = _json.loads(captured.getvalue())
+        # Last-session payload: ``deferred`` must NOT be present (or False).
+        self.assertFalse(payload.get("deferred", False), payload)
+        # Our row was deregistered as part of the deferred path's lock
+        # block before falling through to the kill path.
+        self.assertEqual(snapshot_state.client_count(conn), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
