@@ -299,6 +299,64 @@ class SymlinkToctouTests(unittest.TestCase):
         self.assertIsNone(capture._validated_symlink_target_bytes(link, repo))
 
 
+class SymlinkToDirectoryClassificationTests(unittest.TestCase):
+    """Regression: ``os.walk(followlinks=False)`` lists symlinks-to-directories
+    in ``dirs``, not ``files``. ``_scan_tree`` previously processed only the
+    ``files`` list, so any tracked dir-symlink silently dropped from ``live``
+    and was reclassified as ``delete`` on every poll. Replay then committed
+    a per-symlink ``Remove <name>`` commit. This test pins both halves of the
+    fix: the symlink lands in ``live`` with mode 120000, AND no spurious
+    delete event is emitted across HEAD-advance + re-scan."""
+
+    def test_dir_symlink_recorded_in_live_and_no_spurious_delete(self) -> None:
+        capture = _load_capture_module()
+        tmp, repo, git_dir = _init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Real directory inside the repo so the symlink target validates.
+        target_dir = repo / "real_dir"
+        target_dir.mkdir()
+        (target_dir / "payload.txt").write_text("ok\n", encoding="utf-8")
+
+        # Symlink whose target is a directory — the case that broke before.
+        link = repo / "linked_skill"
+        os.symlink("real_dir", link)
+
+        # Commit the symlink so it enters the HEAD tree (and shadow).
+        _git(repo, "add", "linked_skill", "real_dir/payload.txt")
+        _git(repo, "commit", "-m", "track dir symlink")
+
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+        ctx = snapshot_state.repo_context(repo, git_dir)
+
+        # 1. The dir-symlink shows up in live with mode 120000.
+        capture.bootstrap_shadow(
+            conn,
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            base_head=ctx["base_head"],
+        )
+        head_baseline = capture._head_tree_with_submodules(
+            repo, ctx["base_head"], conn
+        )
+        live = capture._scan_tree(
+            repo,
+            branch_ref=ctx["branch_ref"],
+            branch_generation=ctx["branch_generation"],
+            head_baseline=head_baseline,
+            conn=conn,
+        )
+        self.assertIn("linked_skill", live)
+        self.assertEqual(live["linked_skill"]["mode"], "120000")
+
+        # 2. End-to-end poll emits zero events: shadow == live for the symlink,
+        #    so no spurious ``Remove linked_skill`` commit can be generated.
+        seqs = capture.poll_once(conn, repo, git_dir)
+        self.assertEqual(seqs, [])
+
+
 class StatCacheEvictionTests(unittest.TestCase):
     """Finding 4 (P2): _STAT_CACHE keeps at most one entry per repo."""
 
