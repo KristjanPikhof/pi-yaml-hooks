@@ -23,15 +23,20 @@ import snapshot_state
 
 from snapshot_state import (
     DetachedHeadError,
+    client_count,
     control_lock,
+    deregister_client,
     ensure_state,
     heartbeat_alive,
     current_branch,
+    gc_dead_clients,
     process_fingerprint,
+    register_client,
     request_flush,
     resolve_repo_paths,
     set_daemon_state,
     status_snapshot,
+    touch_client,
     verify_process_identity,
 )
 
@@ -39,6 +44,74 @@ from snapshot_state import (
 ACK_TIMEOUT = float(os.environ.get("SNAPSHOTD_ACK_TIMEOUT", "30.0"))
 FRESH_HEARTBEAT_SECONDS = float(os.environ.get("SNAPSHOTD_HEARTBEAT_FRESH_SECONDS", "15.0"))
 START_READY_TIMEOUT = float(os.environ.get("SNAPSHOTD_START_READY_TIMEOUT", "1.0"))
+
+
+def _resolve_session_pid(explicit: Optional[int]) -> Optional[int]:
+    """Pick the pi-harness pid to record as the daemon-keepalive client.
+
+    Priority:
+      1. Explicit ``--session-pid`` arg from the hook bash action.
+      2. ``$PI_SESSION_PID`` env var if pi-hooks ever exposes it.
+      3. Walk parents of this controller process until we find a likely pi
+         entry. The walk is best-effort: a missed walk just means this
+         particular session won't refcount and the daemon may exit earlier
+         than ideal — never worse than the current behaviour.
+
+    Returns ``None`` when no plausible pid is found, and callers fall back to
+    the legacy unconditional-stop semantics.
+    """
+    if explicit is not None and explicit > 0:
+        return explicit
+    raw = os.environ.get("PI_SESSION_PID")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return _walk_parents_for_pi(os.getppid())
+
+
+def _walk_parents_for_pi(start_pid: int, max_steps: int = 8) -> Optional[int]:
+    """Walk up the process tree looking for a pi-harness ancestor.
+
+    Stops at pid 1 (launchd / init) or after ``max_steps`` hops. Uses ``ps``
+    so we don't depend on /proc, which macOS lacks.
+    """
+    pid = int(start_pid)
+    for _ in range(max_steps):
+        if pid <= 1:
+            return None
+        try:
+            proc = subprocess.run(
+                ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+        line = proc.stdout.strip()
+        if not line:
+            return None
+        ppid_str, _space, command = line.partition(" ")
+        try:
+            ppid = int(ppid_str.strip())
+        except ValueError:
+            return None
+        cmd_lower = command.strip().lower()
+        # Match common pi launchers: ``pi``, ``pi-harness``, ``pi.app/``,
+        # ``node …/pi/cli``. Substring + boundary checks keep false positives
+        # low without requiring a hard list of binary names.
+        if any(
+            marker in cmd_lower
+            for marker in ("/pi ", "/pi\t", "pi-harness", "/pi-cli", "pi.app/")
+        ) or cmd_lower.endswith("/pi") or cmd_lower == "pi":
+            return pid
+        pid = ppid
+    return None
 
 
 def daemon_script_path() -> Path:
@@ -145,13 +218,41 @@ def _maybe_start(repo_root: Path, git_dir: Path, conn, note: str = "") -> Dict[s
     return {"started": True, "pid": proc.pid, "ready": False, "reason": "daemon readiness timeout", "daemon": _daemon_row(conn)}
 
 
-def cmd_start(repo_root: Path, git_dir: Path) -> int:
+def _register_session_client(conn, session_pid: Optional[int]) -> Optional[int]:
+    """Register one pi session as a daemon client; return the recorded pid.
+
+    No-op when ``session_pid`` is None or when we cannot fingerprint the
+    process (already exited, permission denied). The daemon's GC sweep is
+    the source of truth for liveness, so a missing fingerprint is safer to
+    skip than to record under a placeholder that would never expire.
+    """
+    if session_pid is None or session_pid <= 0:
+        return None
+    fp = process_fingerprint(session_pid)
+    if not fp:
+        return None
+    register_client(conn, session_pid, fp)
+    return session_pid
+
+
+def cmd_start(
+    repo_root: Path, git_dir: Path, session_pid: Optional[int] = None
+) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
+            registered_pid = _register_session_client(conn, session_pid)
             row = _daemon_row(conn)
             if row and _fresh_heartbeat(row):
-                print(json.dumps({"ok": True, "action": "start", "duplicate": True, "daemon": row}, indent=2))
+                payload = {
+                    "ok": True,
+                    "action": "start",
+                    "duplicate": True,
+                    "daemon": row,
+                    "session_pid": registered_pid,
+                    "client_count": client_count(conn),
+                }
+                print(json.dumps(payload, indent=2, sort_keys=True, default=str))
                 return 0
             ctx = _light_context(repo_root)
             if row.get("pid") and not heartbeat_alive(int(row.get("pid") or 0)):
@@ -159,7 +260,9 @@ def cmd_start(repo_root: Path, git_dir: Path) -> int:
             result = _maybe_start(repo_root, git_dir, conn, note="start request")
             result["action"] = "start"
             result["branch"] = ctx["branch_ref"]
-            print(json.dumps(result, indent=2, sort_keys=True))
+            result["session_pid"] = registered_pid
+            result["client_count"] = client_count(conn)
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
             return 0
     except DetachedHeadError as exc:
         print(f"refusing to start daemon: {exc}", file=sys.stderr)
@@ -338,10 +441,14 @@ def _await_flush_ack(conn, request_id: int) -> None:
         raise FlushFailedError(note)
 
 
-def cmd_wake(repo_root: Path, git_dir: Path) -> int:
+def cmd_wake(
+    repo_root: Path, git_dir: Path, session_pid: Optional[int] = None
+) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
+            if session_pid:
+                touch_client(conn, session_pid)
             ctx = _light_context(repo_root)
             request_id = request_flush(conn, "wake", True, note="wake requested")
             if not _signal_daemon(conn, signal.SIGUSR1):
@@ -355,13 +462,20 @@ def cmd_wake(repo_root: Path, git_dir: Path) -> int:
         conn.close()
 
 
-def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
+def cmd_flush(
+    repo_root: Path,
+    git_dir: Path,
+    non_blocking: bool,
+    session_pid: Optional[int] = None,
+) -> int:
     conn = ensure_state(git_dir)
     try:
         # Hold control_lock only for the request-row insert and signal
         # delivery. The ack wait happens outside the lock so a slow daemon
         # cannot starve concurrent wake/sleep/stop commands.
         with control_lock(git_dir):
+            if session_pid:
+                touch_client(conn, session_pid)
             request_id, signaled, branch, daemon_live, script_present, warning = _record_flush(
                 repo_root, conn, non_blocking
             )
@@ -439,10 +553,14 @@ def cmd_flush(repo_root: Path, git_dir: Path, non_blocking: bool) -> int:
         conn.close()
 
 
-def cmd_sleep(repo_root: Path, git_dir: Path) -> int:
+def cmd_sleep(
+    repo_root: Path, git_dir: Path, session_pid: Optional[int] = None
+) -> int:
     conn = ensure_state(git_dir)
     try:
         with control_lock(git_dir):
+            if session_pid:
+                touch_client(conn, session_pid)
             ctx = _light_context(repo_root)
             request_id = request_flush(conn, "sleep", True, note="sleep requested")
             _signal_daemon(conn, signal.SIGUSR1)
@@ -482,9 +600,83 @@ def _lock_is_held(lock_path: Path) -> bool:
         return False
 
 
-def cmd_stop(repo_root: Path, git_dir: Path, flush_first: bool) -> int:
+def cmd_stop(
+    repo_root: Path,
+    git_dir: Path,
+    flush_first: bool,
+    session_pid: Optional[int] = None,
+    force: bool = False,
+) -> int:
+    """Stop the daemon, optionally flushing first.
+
+    With multi-session refcount enabled (the default), stop is per-session:
+    deregister the calling pi from ``daemon_clients`` and let the daemon
+    self-terminate via its periodic GC sweep once every other registered
+    session has also exited. ``--force`` restores the legacy behaviour and
+    kills the daemon outright regardless of peer sessions, drains queued
+    work first when ``--flush`` is also set.
+
+    Behaviour matrix:
+      - peer sessions remain (refcount > 1) → deregister, signal a
+        graceful flush, do NOT kill the daemon. Reports ``deferred=True``.
+      - last session (refcount drops to 0)  → deregister, behave as before
+        (drain + SIGTERM + verify).
+      - ``--force``                          → ignore refcount, kill anyway.
+    """
     conn = ensure_state(git_dir)
     try:
+        # ---- Deferred-stop path (refcount > 0 after our deregister) -----
+        #
+        # If a session_pid was supplied and we are NOT forcing, hand the stop
+        # decision back to the daemon: deregister our row, GC stale peers,
+        # and return early when peers remain. The daemon's own sweep tick
+        # exits the process when ``daemon_clients`` empties, so this single
+        # session's exit cannot drag the daemon out from under siblings.
+        if session_pid and not force:
+            deferred_remaining = 0
+            deferred_flush_id: Optional[int] = None
+            with control_lock(git_dir):
+                ctx_deferred = _light_context(repo_root)
+                deregister_client(conn, session_pid)
+                gc_dead_clients(conn)
+                deferred_remaining = client_count(conn)
+                if deferred_remaining > 0 and flush_first:
+                    deferred_flush_id = request_flush(
+                        conn,
+                        "flush",
+                        False,
+                        note="flush requested before deferred stop",
+                    )
+                    _signal_daemon(conn, signal.SIGUSR1)
+            if deferred_remaining > 0:
+                # Outside the control lock so a slow daemon doesn't starve
+                # other controllers waiting on the same lock.
+                if deferred_flush_id is not None:
+                    try:
+                        _await_flush_ack(conn, deferred_flush_id)
+                    except TimeoutError as exc:
+                        print(str(exc), file=sys.stderr)
+                    except FlushFailedError as exc:
+                        print(
+                            f"deferred-stop flush reported failure: {exc.note or exc}",
+                            file=sys.stderr,
+                        )
+                payload = {
+                    "ok": True,
+                    "action": "stop",
+                    "deferred": True,
+                    "session_pid": session_pid,
+                    "remaining_clients": deferred_remaining,
+                    "branch": ctx_deferred["branch_ref"],
+                    "flush_request_id": deferred_flush_id,
+                    "flushed": flush_first,
+                }
+                print(
+                    json.dumps(payload, indent=2, sort_keys=True, default=str)
+                )
+                return 0
+
+        # ---- Last-session-out / forced-stop path ------------------------
         with control_lock(git_dir):
             ctx = _light_context(repo_root)
             flush_request_id: Optional[int] = None
@@ -676,6 +868,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--git-dir", help="explicit git dir override")
     parser.add_argument("--non-blocking", action="store_true", help="return immediately after flush request")
     parser.add_argument("--flush", action="store_true", help="drain before stopping")
+    parser.add_argument(
+        "--session-pid",
+        type=int,
+        default=None,
+        help=(
+            "PID of the pi-harness session calling this controller. "
+            "Used for the daemon-client refcount so the daemon only "
+            "self-terminates once every registered session has exited. "
+            "Falls back to $PI_SESSION_PID, then a parent-process walk."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "stop only: ignore the daemon-client refcount and kill the "
+            "daemon outright regardless of peer pi sessions."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_input = Path(args.repo).expanduser()
@@ -687,16 +898,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"not a git repository: {exc}", file=sys.stderr)
         return 1
 
+    session_pid = _resolve_session_pid(args.session_pid)
+
     if args.command == "start":
-        return cmd_start(repo_root, git_dir)
+        return cmd_start(repo_root, git_dir, session_pid=session_pid)
     if args.command == "wake":
-        return cmd_wake(repo_root, git_dir)
+        return cmd_wake(repo_root, git_dir, session_pid=session_pid)
     if args.command == "flush":
-        return cmd_flush(repo_root, git_dir, non_blocking=args.non_blocking)
+        return cmd_flush(
+            repo_root,
+            git_dir,
+            non_blocking=args.non_blocking,
+            session_pid=session_pid,
+        )
     if args.command == "sleep":
-        return cmd_sleep(repo_root, git_dir)
+        return cmd_sleep(repo_root, git_dir, session_pid=session_pid)
     if args.command == "stop":
-        return cmd_stop(repo_root, git_dir, flush_first=args.flush)
+        return cmd_stop(
+            repo_root,
+            git_dir,
+            flush_first=args.flush,
+            session_pid=session_pid,
+            force=args.force,
+        )
     return cmd_status(repo_root, git_dir)
 
 
