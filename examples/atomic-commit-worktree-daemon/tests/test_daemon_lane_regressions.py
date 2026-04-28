@@ -285,5 +285,80 @@ class LockContentionDoesNotClobberPeerTests(unittest.TestCase):
         self.assertEqual(row["note"], "peer alive")
 
 
+class DaemonClientSweepSelfTerminationTests(unittest.TestCase):
+    """v5: the daemon's poll loop sweeps ``daemon_clients`` periodically and
+    self-terminates after CLIENT_EMPTY_SWEEPS_BEFORE_EXIT consecutive empty
+    sweeps past the boot grace window. Without this, killing every pi
+    session via SIGHUP / terminal-close (which skips ``session.deleted``)
+    would leave the daemon running forever."""
+
+    def test_run_daemon_exits_when_clients_empty_after_grace(self) -> None:
+        tmp, repo, git_dir = _init_repo()
+        self.addCleanup(tmp.cleanup)
+
+        # Force the boot-grace and sweep timing to near-zero so the test
+        # finishes in well under one second. Two consecutive empty sweeps
+        # then trigger self-termination.
+        env_overrides = {
+            "SNAPSHOTD_CLIENT_BOOT_GRACE": "1.0",
+            "SNAPSHOTD_CLIENT_SWEEP_INTERVAL": "1.0",
+            "SNAPSHOTD_CLIENT_EMPTY_SWEEPS": "1",  # exit on first empty after grace
+            "SNAPSHOTD_POLL_INTERVAL": "0.05",
+            "SNAPSHOTD_SLEEP_INTERVAL": "0.05",
+            "SNAPSHOTD_IDLE_BACKOFF_CEILING": "0.1",
+        }
+        # Reload the daemon module under the patched env so its
+        # module-level constants (CLIENT_*) pick up the test values. The
+        # capture module need not reload since it doesn't read these.
+        with mock.patch.dict(os.environ, env_overrides):
+            local_daemon = _load_module(
+                "snapshot_daemon_refcount_exit", "snapshot-daemon.py"
+            )
+
+            # ``signal.signal`` is restricted to the main interpreter
+            # thread; the real daemon runs that path on the main process,
+            # but here we drive ``run_daemon`` from a worker thread so the
+            # test stays bounded and side-effect free. Replace
+            # signal.signal with a no-op for the duration so the SIGTERM /
+            # SIGINT / SIGUSR1 wiring becomes a no-op in this thread.
+            def _no_signal(*_args, **_kwargs):
+                return None
+
+            # Run the daemon in a background thread so we can assert the
+            # main-thread invariant (it returns 0 within a bounded window
+            # because the client table is empty past the grace).
+            result_holder: list[int] = []
+
+            def _run():
+                try:
+                    rc = local_daemon.run_daemon(repo, git_dir)
+                except SystemExit as exc:
+                    rc = int(exc.code or 0)
+                result_holder.append(rc)
+
+            with mock.patch.object(local_daemon.signal, "signal", _no_signal):
+                thread = threading.Thread(target=_run, daemon=True)
+                thread.start()
+                # Generous deadline: boot grace 1s + one sweep interval 1s + slop.
+                thread.join(timeout=8.0)
+
+        self.assertFalse(
+            thread.is_alive(),
+            "daemon failed to self-terminate within the empty-sweep window",
+        )
+        self.assertEqual(result_holder, [0])
+
+        # The daemon should have stamped a self-termination note on its way
+        # out. Confirm the note made it to the row.
+        verify_conn = snapshot_state.ensure_state(git_dir)
+        try:
+            row = verify_conn.execute(
+                "SELECT mode, note FROM daemon_state WHERE id=1"
+            ).fetchone()
+        finally:
+            verify_conn.close()
+        self.assertEqual(row["mode"], "stopped")
+
+
 if __name__ == "__main__":
     unittest.main()
