@@ -254,5 +254,98 @@ class FastForwardIncarnationTests(unittest.TestCase):
         self.assertEqual(missing, "missing")
 
 
+class DaemonClientsRefcountTests(unittest.TestCase):
+    """v5 schema: ``daemon_clients`` refcount + GC keeps the daemon alive
+    while at least one registered pi session lives, drops dead rows by
+    pid liveness + fingerprint mismatch + last_seen TTL."""
+
+    def test_register_touch_deregister_roundtrip(self) -> None:
+        tmp, _repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        pid = os.getpid()
+        fp = snapshot_state.process_fingerprint(pid)
+        self.assertIsNotNone(fp)
+        snapshot_state.register_client(conn, pid, str(fp))
+        self.assertEqual(snapshot_state.client_count(conn), 1)
+
+        # touch refreshes last_seen_ts without duplicating the row.
+        before = snapshot_state.list_clients(conn)[0]["last_seen_ts"]
+        import time as _time
+        _time.sleep(0.01)
+        snapshot_state.touch_client(conn, pid)
+        after = snapshot_state.list_clients(conn)[0]["last_seen_ts"]
+        self.assertGreater(after, before)
+        self.assertEqual(snapshot_state.client_count(conn), 1)
+
+        snapshot_state.deregister_client(conn, pid)
+        self.assertEqual(snapshot_state.client_count(conn), 0)
+
+    def test_gc_drops_dead_pid_rows(self) -> None:
+        tmp, _repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        # Live row: this test process. Dead row: a pid we know is not running.
+        live_pid = os.getpid()
+        live_fp = snapshot_state.process_fingerprint(live_pid)
+        snapshot_state.register_client(conn, live_pid, str(live_fp))
+
+        # Pick a pid that is almost certainly dead. We loop a few candidates
+        # to dodge the rare case where the chosen pid happens to be in use.
+        dead_pid = 999_998
+        for candidate in (999_998, 999_997, 999_996, 999_995):
+            if not snapshot_state.heartbeat_alive(candidate):
+                dead_pid = candidate
+                break
+        snapshot_state.register_client(conn, dead_pid, "fake-fingerprint")
+
+        alive = snapshot_state.gc_dead_clients(conn)
+        self.assertEqual(alive, 1)
+        remaining = {row["pid"] for row in snapshot_state.list_clients(conn)}
+        self.assertEqual(remaining, {live_pid})
+
+    def test_gc_drops_stale_lastseen_even_if_pid_alive(self) -> None:
+        tmp, _repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        live_pid = os.getpid()
+        live_fp = snapshot_state.process_fingerprint(live_pid)
+        snapshot_state.register_client(conn, live_pid, str(live_fp))
+
+        # Force the row's last_seen_ts to look ancient (one day old) so the
+        # TTL check evicts it even though the pid is live and fingerprinted.
+        import time as _time
+        ancient = _time.time() - 86400.0
+        conn.execute(
+            "UPDATE daemon_clients SET last_seen_ts=? WHERE pid=?",
+            (ancient, live_pid),
+        )
+
+        with mock.patch.dict(os.environ, {"SNAPSHOTD_CLIENT_STALE_SECONDS": "1.0"}):
+            alive = snapshot_state.gc_dead_clients(conn)
+        self.assertEqual(alive, 0)
+        self.assertEqual(snapshot_state.client_count(conn), 0)
+
+    def test_gc_drops_fingerprint_mismatch(self) -> None:
+        """PID-reuse defense: register a row under a wrong fingerprint and
+        confirm GC evicts it even though the pid is alive."""
+        tmp, _repo, git_dir = init_repo()
+        self.addCleanup(tmp.cleanup)
+        conn = snapshot_state.ensure_state(git_dir)
+        self.addCleanup(conn.close)
+
+        live_pid = os.getpid()
+        snapshot_state.register_client(conn, live_pid, "definitely-not-the-real-fingerprint")
+        alive = snapshot_state.gc_dead_clients(conn)
+        self.assertEqual(alive, 0)
+        self.assertEqual(snapshot_state.client_count(conn), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
