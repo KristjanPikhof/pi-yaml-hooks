@@ -32,25 +32,31 @@ hooks:
             exit 2
           fi
 
-  # Start the per-worktree daemon for genuinely new/startup sessions.
+  # Start the per-worktree daemon for genuinely new/startup sessions. The
+  # ``--session-pid`` arg registers this pi session in the daemon-client
+  # refcount table so the daemon only self-terminates once every other
+  # registered session has also stopped. ``$PI_SESSION_PID`` is consulted
+  # automatically when the flag is omitted; the controller falls back to a
+  # parent-process walk if neither is set.
   - id: snapshot-daemon-start
     event: session.created
     actions:
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" start --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" start --repo "$PI_PROJECT_DIR" --session-pid "${PI_SESSION_PID:-0}"'
 
   # Wake before tools run so long-running bash commands are observed while they
-  # execute, not only after PI reports the tool result.
+  # execute, not only after PI reports the tool result. Refreshes this
+  # session's last_seen_ts in the refcount table.
   - id: snapshot-daemon-wake-before-tool
     event: tool.before.*
     actions:
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" wake --repo "$PI_PROJECT_DIR"'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" wake --repo "$PI_PROJECT_DIR" --session-pid "${PI_SESSION_PID:-0}"'
 
-  # Ask the daemon to publish recent events after every tool. This is
-  # non-blocking so normal agent work is not delayed by commit creation.
+  # Ask the daemon to publish recent events after every tool. Non-blocking
+  # so normal agent work is not delayed by commit creation.
   - id: snapshot-daemon-flush-after-tool
     event: tool.after.*
     actions:
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR" --non-blocking'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR" --non-blocking --session-pid "${PI_SESSION_PID:-0}"'
 
   # PI has no distinct "after idle" hook. pi-hooks maps PI agent_end to
   # session.idle only when the current session is idle and no messages are
@@ -64,13 +70,16 @@ hooks:
       - bash: |
           set -e
           SNAPSHOT_DAEMON_DIR="<example-dir>"
-          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR"
-          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" flush --repo "$PI_PROJECT_DIR" --session-pid "${PI_SESSION_PID:-0}"
+          python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" sleep --repo "$PI_PROJECT_DIR" --session-pid "${PI_SESSION_PID:-0}"
 
   # session.deleted is intentionally lossy on PI and can fire for session
-  # switches such as /new, /resume, and /fork. The controller must make stop
-  # --flush idempotent.
+  # switches such as /new, /resume, and /fork. The controller now defaults
+  # to a deferred stop: this session is removed from the refcount, but the
+  # daemon stays alive whenever other registered pi sessions remain. The
+  # daemon's own GC sweep terminates the process once every session has
+  # exited (or been hard-killed and detected dead by liveness GC).
   - id: snapshot-daemon-stop-on-delete
     event: session.deleted
     actions:
-      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" stop --repo "$PI_PROJECT_DIR" --flush'
+      - bash: 'SNAPSHOT_DAEMON_DIR="<example-dir>"; python3 "$SNAPSHOT_DAEMON_DIR/snapshot-daemonctl.py" stop --repo "$PI_PROJECT_DIR" --flush --session-pid "${PI_SESSION_PID:-0}"'
