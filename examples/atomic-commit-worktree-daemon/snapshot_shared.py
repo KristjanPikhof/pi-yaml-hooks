@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 STATE_SUBDIR = "ai-snapshotd"
 REGISTRY_SUBDIR = f"{STATE_SUBDIR}/branch-registry"
 REGISTRY_SCHEMA = 1
-LOCAL_STATE_SCHEMA_VERSION = 4
+LOCAL_STATE_SCHEMA_VERSION = 5
 RESET_LOCK_NAME = f"{STATE_SUBDIR}.reset.lock"
 WORKER_LOCK_SUBPATH = f"{STATE_SUBDIR}/worker.lock"
 
