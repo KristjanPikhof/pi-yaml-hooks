@@ -310,12 +310,32 @@ def _scan_tree(
         # Prune ignored dirs, our own state dir, AND any nested repo /
         # submodule directory (it has its own .git pointer). Walking into a
         # submodule and hashing its files would corrupt the parent history.
+        #
+        # ``os.walk(followlinks=False)`` classifies entries by *target* type:
+        # a symlink whose target is a directory lands in ``dirs`` (and is not
+        # descended into), not in ``files``. If we let those pass through the
+        # dir-pruning loop without recording them, ``live`` will be missing
+        # every dir-symlink the repo tracks, and ``_classify_changes`` will
+        # emit a spurious ``delete`` event on every tick — which the replay
+        # lane then commits as ``Remove <name>``. Detect dir-symlinks here
+        # and route them to ``pending_files`` as ordinary symlink entries.
         kept_dirs: List[str] = []
         for name in dirs:
             if name in IGNORE_NAMES:
                 continue
             sub_rel = f"{rel_root}/{name}".lstrip("/")
             if sub_rel in submodule_paths:
+                continue
+            full = root_path / name
+            try:
+                dir_st = full.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(dir_st.st_mode):
+                rel = full.relative_to(repo_root).as_posix()
+                if not _is_sensitive(rel):
+                    pending_files.append((rel, full, dir_st))
+                    candidate_rels.append(rel)
                 continue
             if _is_under_nested_repo(root_path, name):
                 continue
