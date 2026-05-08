@@ -1411,6 +1411,44 @@ function hasCodeExtension(filePath: string): boolean {
   return Boolean(extension && CODE_EXTENSIONS.has(extension))
 }
 
+// P1-1 helper: cheap stat-based fingerprint shared by the runtime-side
+// refreshHooks short-circuit. Returns a stable string that changes whenever
+// any of the listed files' mtime/size changes, or whenever a file appears
+// or disappears. Mirrors the shape used by load-hooks' own snapshot cache.
+function computeStatFingerprint(files: readonly string[]): string {
+  if (files.length === 0) {
+    return ""
+  }
+  const parts: string[] = []
+  for (const filePath of files) {
+    try {
+      const stat = statSync(filePath)
+      parts.push(`${filePath}|${stat.mtimeMs}|${stat.size}`)
+    } catch {
+      parts.push(`${filePath}|missing`)
+    }
+  }
+  return parts.join("\n")
+}
+
+function mergeUnique(a: readonly string[], b: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of a) {
+    if (!seen.has(value)) {
+      seen.add(value)
+      out.push(value)
+    }
+  }
+  for (const value of b) {
+    if (!seen.has(value)) {
+      seen.add(value)
+      out.push(value)
+    }
+  }
+  return out
+}
+
 function formatHookLoadErrors(errors: Array<{ filePath: string; message: string; path?: string }>): string {
   const details = errors.map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`)
   return `[pi-yaml-hooks] Failed to load some hooks; continuing with valid hooks:\n${details.join("\n")}`
