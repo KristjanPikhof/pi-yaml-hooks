@@ -15,9 +15,17 @@ This repository documents the peer support range exactly as `^0.74.0` against th
 
 ## Install the extension
 
-`pi-yaml-hooks` is installable as a PI package straight from git. That should be your default unless you are actively editing a local checkout.
+`pi-yaml-hooks` is installable as a PI package from npm or directly from git. The npm path should be your default unless you are actively editing a local checkout or chasing unreleased changes.
 
-### Recommended: `pi install`
+### Recommended: `pi install npm:pi-yaml-hooks`
+
+```bash
+pi install npm:pi-yaml-hooks
+```
+
+This pulls the latest published `pi-yaml-hooks` from npm. By default it writes to `~/.pi/agent/settings.json`. Add `-l` to install into `.pi/settings.json` for the current project instead.
+
+To install from git instead (e.g. for unreleased changes):
 
 ```bash
 # SSH
@@ -27,18 +35,16 @@ pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks
 pi install https://github.com/KristjanPikhof/pi-yaml-hooks
 ```
 
-By default this writes to `~/.pi/agent/settings.json`. Add `-l` to install into `.pi/settings.json` for the current project instead.
-
 ### Add it through `packages`
 
-If you prefer to edit settings directly, add the git source to the `packages` array.
+If you prefer to edit settings directly, add the npm source to the `packages` array.
 
 **Global**, in `~/.pi/agent/settings.json`:
 
 ```json
 {
   "packages": [
-    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+    "npm:pi-yaml-hooks"
   ]
 }
 ```
@@ -48,7 +54,7 @@ If you prefer to edit settings directly, add the git source to the `packages` ar
 ```json
 {
   "packages": [
-    "git:git@github.com:KristjanPikhof/pi-yaml-hooks"
+    "npm:pi-yaml-hooks"
   ]
 }
 ```
@@ -59,7 +65,8 @@ Project settings override global ones, and PI installs missing project packages 
 
 | Method | Use when |
 |---|---|
-| `pi -e git:git@github.com:KristjanPikhof/pi-yaml-hooks` | You want a one-off run without writing settings |
+| `pi -e npm:pi-yaml-hooks` | You want a one-off run without writing settings |
+| `pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks` | You need unreleased changes from `main` |
 | `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-yaml-hooks.ts` | You are editing a local checkout and want PI to load that working tree |
 | `<project>/.pi/extensions/pi-yaml-hooks.ts` | You want a project-local local-dev install from a checkout |
 
