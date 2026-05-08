@@ -99,6 +99,11 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // available and we honour the project's hooks.yaml location. Once built,
   // we cache the runtime keyed by cwd so subsequent cwd changes in the same
   // process (should PI ever support that) pick up the right project config.
+  //
+  // P2 #18: bound the runtime + latestContexts maps with an LRU eviction so
+  // long-lived processes that move between many directories (e.g. monorepo
+  // tooling) do not retain runtimes for cwds we will never see again. Maps
+  // preserve insertion order, so we promote on access by re-setting the key.
   const runtimes = new Map<string, HooksRuntime>();
   const callIdsToSessionIds = new Map<string, string>();
   // Track the most recently observed ExtensionContext per cwd so that the
@@ -106,6 +111,35 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // though they live outside the event handler scope. The ctx is replayed
   // for each PI event, so "last seen" is the right handle to use.
   const latestContexts = new Map<string, ExtensionContext>();
+  const MAX_CWD_ENTRIES = 8;
+
+  function touchCwd(cwd: string): void {
+    if (latestContexts.has(cwd)) {
+      const ctx = latestContexts.get(cwd) as ExtensionContext;
+      latestContexts.delete(cwd);
+      latestContexts.set(cwd, ctx);
+    }
+    if (runtimes.has(cwd)) {
+      const runtime = runtimes.get(cwd) as HooksRuntime;
+      runtimes.delete(cwd);
+      runtimes.set(cwd, runtime);
+    }
+  }
+
+  function evictIfNeeded(): void {
+    while (latestContexts.size > MAX_CWD_ENTRIES) {
+      const oldest = latestContexts.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      latestContexts.delete(oldest);
+      runtimes.delete(oldest);
+    }
+    while (runtimes.size > MAX_CWD_ENTRIES) {
+      const oldest = runtimes.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      runtimes.delete(oldest);
+      latestContexts.delete(oldest);
+    }
+  }
   // P1 #4 fix: PI emits both session_before_switch AND session_shutdown for
   // the same logical /new, /resume, /fork transition. Track which session
   // ids we have already fired session.deleted for so cleanup hooks do not
