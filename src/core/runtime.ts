@@ -633,8 +633,42 @@ async function dispatchToolHooks(
     return wildcardResult
   }
 
+  // P1-14 fix: when a tool has multiple alias names (e.g. apply_patch resolves
+  // to ["patch", "apply_patch"]), dispatching against each alias key fires
+  // every hook bucket independently. A hook registered under `tool.after.patch`
+  // and another under `tool.after.apply_patch` would both run for a single
+  // apply_patch call even though they describe the same logical event.
+  // Dedupe HookConfig instances across alias buckets by reference identity
+  // and dispatch the union once under the canonical alias name (the last
+  // entry in `resolvedNames`, which is the normalized form returned by
+  // `normalizeMutationToolName`). Single-alias tools keep the original
+  // single-pass behaviour.
   const mutationNames = getMutationToolHookNames(toolName);
   const resolvedNames = mutationNames.length > 0 ? mutationNames : [toolName];
+  if (resolvedNames.length > 1) {
+    const unionedHooks = collectUniqueHooksAcrossAliases(hooks, phase, resolvedNames)
+    if (unionedHooks.length === 0) {
+      return { blocked: false }
+    }
+    const canonicalEvent = `tool.${phase}.${resolvedNames[resolvedNames.length - 1]}` as HookEvent
+    const aliasMap: HookMap = new Map()
+    aliasMap.set(canonicalEvent, unionedHooks)
+    return await dispatchHooks(
+      aliasMap,
+      state,
+      host,
+      projectDir,
+      runBashHook,
+      canonicalEvent,
+      sessionID,
+      context,
+      { canBlock: phase === "before" },
+      dispatchStates,
+      actionRecursionGuards,
+      asyncQueues,
+    )
+  }
+
   for (const resolvedToolName of resolvedNames) {
     const result = await dispatchHooks(
       hooks,
@@ -657,6 +691,26 @@ async function dispatchToolHooks(
   }
 
   return { blocked: false }
+}
+
+function collectUniqueHooksAcrossAliases(
+  hooks: HookMap,
+  phase: "before" | "after",
+  aliasNames: readonly string[],
+): HookConfig[] {
+  const seen = new Set<HookConfig>()
+  const out: HookConfig[] = []
+  for (const aliasName of aliasNames) {
+    const eventKey = `tool.${phase}.${aliasName}` as HookEvent
+    const bucket = hooks.get(eventKey)
+    if (!bucket) continue
+    for (const hook of bucket) {
+      if (seen.has(hook)) continue
+      seen.add(hook)
+      out.push(hook)
+    }
+  }
+  return out
 }
 
 async function dispatchHooks(
