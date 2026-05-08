@@ -664,7 +664,44 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
             details: { files, changes: summarizeChanges(changes) },
           })
         } catch (error) {
-          state.cancelIdleDispatch(sessionID)
+          // P2-10 fix: distinguish a hook-returned-failure (the dispatch
+          // ran, a hook threw and was logged elsewhere) from a host-died
+          // failure (the embedding host went down mid-dispatch). The
+          // former is bounded — re-dispatching the same idle changes will
+          // just re-throw the same error and pin the session. The latter
+          // is transient — the operator will restart and we want the
+          // pending changes intact when the next idle fires. Heuristic:
+          // host errors usually surface as connection/abort/EPIPE-style
+          // messages, while in-process hook failures bubble up generic
+          // Error instances (or are already swallowed by executeHook's
+          // try/catch). On host-died, keep the changes for replay; on a
+          // hook failure, consume so the session does not loop.
+          if (isHostDiedError(error)) {
+            state.cancelIdleDispatch(sessionID)
+            logger.warn("idle_dispatch_host_died", "Idle dispatch failed because the host appears to have died; pending changes retained for replay.", {
+              cwd: projectDir,
+              event: "session.idle",
+              sessionId: sessionID,
+              details: {
+                files,
+                changes: summarizeChanges(changes),
+                error: error instanceof Error ? error.message : String(error),
+              },
+            })
+            throw error
+          }
+
+          state.consumeFileChanges(sessionID, changes)
+          logger.error("idle_dispatch_failed", "Idle dispatch failed; consumed pending changes to avoid a re-dispatch loop.", {
+            cwd: projectDir,
+            event: "session.idle",
+            sessionId: sessionID,
+            details: {
+              files,
+              changes: summarizeChanges(changes),
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
           throw error
         }
       }
