@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=0
 INCLUDE_FUTURE=0
-SDK_SPECS=("0.68.1" "0.69.x")
+SDK_SPECS=("0.74.0")
 
 usage() {
   cat <<'USAGE'

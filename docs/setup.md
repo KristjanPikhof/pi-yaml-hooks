@@ -286,12 +286,11 @@ This command is safe for normal development state. It copies the repository to a
 
 The default matrix covers:
 
-- `0.68.1` — minimum supported SDK
-- `0.69.x` — current supported SDK line
+- `0.74.0` — minimum supported SDK on the `@earendil-works` scope
 
 Use `npm run compat:sdk-matrix:dry-run` to print the exact workflow without installing temporary dependencies.
 
-`0.70.x` is intentionally not part of the documented peer range yet. Maintainers can run `npm run compat:sdk-matrix:future` as an advisory future gate, but passing that command alone does not widen package support.
+Future SDK lines (`0.75.x` and later) can be probed via `npm run compat:sdk-matrix:future` as an advisory gate, but passing that command alone does not widen package support.
 
 ## Next step
 
