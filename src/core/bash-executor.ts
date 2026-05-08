@@ -32,7 +32,6 @@ const SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL = process.platform !== "win32"
 // the truncation seam.
 const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
 const TRUNCATION_MARKER = "\n…[pi-yaml-hooks: output truncated]"
-const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8")
 // P3 #25: cap the JSON-serialized context payload that we feed to the bash
 // hook over stdin. A pathological hook context (e.g. a write tool with a
 // multi-MB content body) would otherwise be buffered into the child's stdin
