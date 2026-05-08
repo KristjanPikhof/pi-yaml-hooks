@@ -422,7 +422,7 @@ function readSnapshotImports(snapshot: DiscoveredHooksFileSnapshot, errors: Hook
 
   const imports: DiscoveredHooksFileSnapshot[] = []
   for (const specifier of envelope.imports) {
-    const resolved = resolveHookImportTargets(snapshot.filePath, specifier)
+    const resolved = resolveHookImportTargets(snapshot.filePath, specifier, snapshot.scope)
     if (resolved.error) {
       errors.push(resolved.error)
       continue
@@ -439,12 +439,55 @@ function readSnapshotImports(snapshot: DiscoveredHooksFileSnapshot, errors: Hook
   return imports
 }
 
+// Trust gate: imports declared inside the global hooks.yaml are refused by
+// default. Global hooks live in $HOME/.pi/hook and run for every project, so a
+// stray import there is effectively an unsanctioned escalation. Operators who
+// rely on global imports must opt in explicitly.
+function isGlobalImportsAllowed(): boolean {
+  return process.env.PI_HOOKS_ALLOW_GLOBAL_IMPORTS === "1"
+}
+
+// Trust gate: package-specifier (bare) imports resolve through Node's module
+// resolution and can therefore pull a hooks.yaml from any installed npm
+// dependency. That is too much implicit trust for default discovery, so we
+// require an explicit opt-in.
+function isPackageImportsAllowed(): boolean {
+  return process.env.PI_HOOKS_ALLOW_PACKAGE_IMPORTS === "1"
+}
+
+function isBareSpecifier(specifier: string): boolean {
+  return !specifier.startsWith(".") && !specifier.startsWith("/")
+}
+
 function resolveHookImportTargets(
   importerPath: string,
   specifier: string,
+  importerScope: HookConfigSourceScope,
 ): { filePaths: string[]; error?: undefined } | { filePaths?: undefined; error: HookValidationError } {
+  if (importerScope === "global" && !isGlobalImportsAllowed()) {
+    return {
+      error: createError(
+        importerPath,
+        "invalid_imports",
+        `[PIHOOKS] Refusing to resolve import ${JSON.stringify(specifier)} from the global hooks file. Global imports are disabled by default; set PI_HOOKS_ALLOW_GLOBAL_IMPORTS=1 to opt in.`,
+        "imports",
+      ),
+    }
+  }
+
+  if (isBareSpecifier(specifier) && !isPackageImportsAllowed()) {
+    return {
+      error: createError(
+        importerPath,
+        "invalid_imports",
+        `[PIHOOKS] Refusing to resolve package import ${JSON.stringify(specifier)}. Bare-specifier (npm package) imports are disabled by default; use a relative path or set PI_HOOKS_ALLOW_PACKAGE_IMPORTS=1 to opt in.`,
+        "imports",
+      ),
+    }
+  }
+
   try {
-    const resolvedPath = specifier.startsWith(".") || specifier.startsWith("/")
+    const resolvedPath = !isBareSpecifier(specifier)
       ? path.resolve(path.dirname(importerPath), specifier)
       : createRequire(importerPath).resolve(specifier, { paths: [path.dirname(importerPath)] })
     return { filePaths: expandHookImportPath(resolvedPath) }
@@ -456,12 +499,25 @@ function resolveHookImportTargets(
   }
 }
 
+// Directory imports must only pick up real hook files. Restricting to
+// .yaml/.yml extensions and skipping dotfiles keeps OS metadata (e.g. macOS
+// `.DS_Store`), editor swap files, and stray non-yaml content from being
+// treated as hook configuration.
+function isImportableHookEntry(entryName: string): boolean {
+  if (entryName.startsWith(".")) {
+    return false
+  }
+  const lower = entryName.toLowerCase()
+  return lower.endsWith(".yaml") || lower.endsWith(".yml")
+}
+
 function expandHookImportPath(resolvedPath: string): string[] {
   const stat = statSync(resolvedPath)
   if (stat.isDirectory()) {
     return readdirSync(resolvedPath)
       .slice()
       .sort((a, b) => a.localeCompare(b))
+      .filter((entryName) => isImportableHookEntry(entryName))
       .map((entry) => path.join(resolvedPath, entry))
       .filter((entryPath) => statSync(entryPath).isFile())
   }
