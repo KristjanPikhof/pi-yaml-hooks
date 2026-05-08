@@ -305,17 +305,50 @@ function sanitizeLogValue(value: string): string {
 }
 
 function redactSensitiveContent(value: string): string {
-  return value
-    .replace(/\b(authorization\s*:\s*bearer\s+)([^\s]+)/gi, `$1${REDACTED}`)
-    .replace(
-      /((?:\\?["'])?(?:api[-_ ]?key|token|secret|password|passwd|pwd)(?:\\?["'])?[^\S\r\n]*[:=][^\S\r\n]*)(\\?["'])(.*?)(\2)/gi,
-      (_match, prefix: string, openingQuote: string, _secretValue: string, closingQuote: string) =>
-        `${prefix}${openingQuote}${REDACTED}${closingQuote}`,
-    )
-    .replace(
-      /(["']?(?:api[-_ ]?key|token|secret|password|passwd|pwd)["']?[^\S\r\n]*[:=][^\S\r\n]*)([^\s,"'}\]`]+)/gi,
-      `$1${REDACTED}`,
-    )
+  return (
+    value
+      // PEM blocks (private keys, RSA keys, etc.) — collapse the entire block to a marker
+      .replace(
+        /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g,
+        REDACTED,
+      )
+      // GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_) and fine-grained github_pat_
+      .replace(/\bgh[opusr]_[A-Za-z0-9]{20,255}\b/g, REDACTED)
+      .replace(/\bgithub_pat_[A-Za-z0-9_]{20,255}\b/g, REDACTED)
+      // GitLab personal access tokens
+      .replace(/\bglpat-[A-Za-z0-9_-]{20,255}\b/g, REDACTED)
+      // Slack tokens (xoxb-, xoxp-, xoxa-, xoxr-, xoxs-)
+      .replace(/\bxox[bpars]-[A-Za-z0-9-]{10,255}\b/g, REDACTED)
+      // Basic-auth credentials embedded in URLs: scheme://user:pass@host
+      .replace(
+        /\b((?:https?|ftp|ssh|git|mongodb|postgres(?:ql)?|mysql|redis|amqp):\/\/)([^\s:/@]+):([^\s/@]+)@/gi,
+        `$1$2:${REDACTED}@`,
+      )
+      // Authorization: Bearer <token>
+      .replace(/\b(authorization\s*:\s*bearer\s+)([^\s]+)/gi, `$1${REDACTED}`)
+      // Quoted secret assignments (api_key="..." / token: "..." / etc.)
+      .replace(
+        /((?:\\?["'])?(?:api[-_ ]?key|token|secret|password|passwd|pwd)(?:\\?["'])?[^\S\r\n]*[:=][^\S\r\n]*)(\\?["'])(.*?)(\2)/gi,
+        (_match, prefix: string, openingQuote: string, _secretValue: string, closingQuote: string) =>
+          `${prefix}${openingQuote}${REDACTED}${closingQuote}`,
+      )
+      // Unquoted secret assignments (api-key=..., token: ..., etc.)
+      .replace(
+        /(["']?(?:api[-_ ]?key|token|secret|password|passwd|pwd)["']?[^\S\r\n]*[:=][^\S\r\n]*)([^\s,"'}\]`]+)/gi,
+        `$1${REDACTED}`,
+      )
+      // Uppercase env-style names ending in KEY/TOKEN/SECRET/PASSWORD: GITHUB_TOKEN=abc, AWS_SECRET_ACCESS_KEY: ...
+      .replace(
+        /\b([A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD))(\s*[:=]\s*)(["']?)([^\s,"'}\]`]+)\3/g,
+        (_match, name: string, sep: string, quote: string) => `${name}${sep}${quote}${REDACTED}${quote}`,
+      )
+      // JWT shape: three dot-separated base64url segments. Header is always >=10 chars,
+      // payload >=10, signature >=10 — keep the threshold high enough to avoid false positives.
+      .replace(
+        /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+        REDACTED,
+      )
+  )
 }
 
 export function resetExecutionContextCacheForTests(): void {
