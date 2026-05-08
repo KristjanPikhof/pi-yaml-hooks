@@ -519,7 +519,9 @@ function isPackageImportsAllowed(): boolean {
 }
 
 function isBareSpecifier(specifier: string): boolean {
-  return !specifier.startsWith(".") && !specifier.startsWith("/")
+  if (specifier.startsWith(".")) return false
+  if (path.isAbsolute(specifier)) return false
+  return true
 }
 
 function resolveHookImportTargets(
