@@ -7,6 +7,7 @@ import {
   redactSensitiveContent,
   resetExecutionContextCacheForTests,
   resolveExecutionContext,
+  serializeContextForStdin,
 } from "./bash-executor.js"
 
 interface Case {
@@ -118,6 +119,40 @@ const cases: Case[] = [
         return { ok: false, detail: `no marker: ${out}` }
       }
       return { ok: true }
+    },
+  },
+  {
+    name: "stdin context serializer truncates oversized payloads with marker",
+    run: async () => {
+      const huge = "x".repeat(2_000_000) // ~2 MiB string field
+      const out = serializeContextForStdin({
+        session_id: "s1",
+        event: "tool.after.write",
+        cwd: "/repo",
+        // @ts-expect-error — extra fields are allowed by the actual context shape
+        toolArgs: { path: "/repo/file.txt", content: huge },
+      })
+      const parsed = JSON.parse(out) as Record<string, unknown>
+      const ok =
+        Buffer.byteLength(out, "utf8") <= 262_144 &&
+        parsed._pi_hooks_truncated === true &&
+        typeof parsed._pi_hooks_original_byte_length === "number" &&
+        (parsed._pi_hooks_original_byte_length as number) > 1_000_000 &&
+        parsed.session_id === "s1" &&
+        parsed.event === "tool.after.write" &&
+        parsed.cwd === "/repo"
+      return ok ? { ok: true } : { ok: false, detail: `out.byteLength=${Buffer.byteLength(out, "utf8")} parsed=${JSON.stringify(parsed).slice(0, 300)}` }
+    },
+  },
+  {
+    name: "stdin context serializer passes small payloads through unchanged",
+    run: async () => {
+      const ctx = { session_id: "s1", event: "tool.after.write", cwd: "/repo" } as const
+      const out = serializeContextForStdin(ctx)
+      const parsed = JSON.parse(out) as Record<string, unknown>
+      return parsed.session_id === "s1" && parsed._pi_hooks_truncated === undefined
+        ? { ok: true }
+        : { ok: false, detail: out }
     },
   },
   {
