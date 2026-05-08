@@ -16,9 +16,9 @@ const cases: Case[] = [
   {
     name: "MUTATION_TOOL_NAMES contains the documented direct-mutation tools",
     run: () => {
-      const required = ["write", "edit", "multiedit", "patch", "apply_patch", "bash"]
+      const required = ["write", "edit", "multiedit", "patch", "apply_patch", "bash"] as const
       for (const name of required) {
-        if (!MUTATION_TOOL_NAMES.has(name)) {
+        if (!(MUTATION_TOOL_NAMES as Set<string>).has(name)) {
           return { ok: false, detail: `missing ${name}` }
         }
       }
