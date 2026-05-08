@@ -954,7 +954,7 @@ async function executeHook(
   })
 
   try {
-    decision = await shouldRunHook(hook, state, host, projectDir, sessionID, context)
+    decision = await shouldRunHook(hook, state, host, projectDir, sessionID, context, globMatcher)
   } catch (error) {
     logger.error("hook_skip", "Hook evaluation failed.", {
       cwd: projectDir,
