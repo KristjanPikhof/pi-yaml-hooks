@@ -77,9 +77,9 @@ If you are editing this repo locally, the symlink workflow is still useful:
 
 | Method | When to use |
 |---|---|
-| `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-hooks.ts` | Local development with a checked-out repo. |
-| `pi -e /path/to/pi-hooks/extensions/index.ts` | One-off local testing from a checkout. |
-| `<project>/.pi/extensions/pi-hooks.ts` | Project-local local-dev install from a checkout. |
+| `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-yaml-hooks.ts` | Local development with a checked-out repo. |
+| `pi -e /path/to/pi-yaml-hooks/extensions/index.ts` | One-off local testing from a checkout. |
+| `<project>/.pi/extensions/pi-yaml-hooks.ts` | Project-local local-dev install from a checkout. |
 
 ### SDK compatibility matrix
 
