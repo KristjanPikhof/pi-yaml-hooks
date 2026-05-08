@@ -49,7 +49,6 @@
     "build": "tsc && mkdir -p dist/extensions && printf 'export { default } from \"../index.js\";\n' > dist/extensions/index.js",
     "build:publish": "rm -rf dist && tsc -p tsconfig.publish.json && mkdir -p dist/extensions && printf 'export { default } from \"../index.js\";\n' > dist/extensions/index.js",
     "prepack": "npm run build:publish",
-    "prepublishOnly": "npm run build:publish",
     "test": "echo \"no consumer tests\" && exit 0",
     "test:internal": "npm run build && node dist/pi/unsupported.test.js && node dist/pi/ux-actions.test.js && node dist/pi/config-paths.test.js && node dist/pi/logger.test.js && node dist/pi/logging.test.js && node dist/pi/adapter.test.js && node dist/pi/user-bash.test.js && node dist/pi/session-lineage.test.js && node dist/pi/commands.test.js && node dist/pi/autocomplete.test.js && node dist/pi/diagnostics.test.js && node dist/pi/prompt-support.test.js && node dist/core/tool-paths.test.js && node dist/core/bash-executor.test.js && node dist/core/load-hooks-composition.test.js && node dist/core/runtime-paths.test.js && node dist/core/runtime-async.test.js",
     "compat:sdk-matrix": "bash scripts/check-sdk-matrix.sh",
