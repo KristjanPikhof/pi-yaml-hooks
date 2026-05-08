@@ -61,11 +61,21 @@ Set `PI_HOOKS_ENABLE_USER_BASH=1` to run human `!` / `!!` shell commands through
 
 - imports load before local hooks
 - import order is preserved
-- directory imports expand files in lexical order
-- package imports use Node module resolution from the importing file
+- directory imports expand files in lexical order, but only `*.yaml` / `*.yml` entries are loaded; dotfiles (e.g. `.DS_Store`) and other extensions are skipped
+- package imports (bare specifiers like `hook-pack`) use Node module resolution from the importing file, but are **disabled by default**; set `PI_HOOKS_ALLOW_PACKAGE_IMPORTS=1` to opt in
+- imports declared inside the **global** `hooks.yaml` are **refused by default**; set `PI_HOOKS_ALLOW_GLOBAL_IMPORTS=1` to opt in
 - duplicate imports are skipped by canonical path
 - cycles and missing imports produce load errors
 - imported files inherit the importing root scope (`global` or `project`)
+
+### Trust expansion
+
+Trust on PI is anchored at the project root, not at every imported file. Once a project root is trusted, all of its `imports:` are loaded transitively under that same trust decision. Two safety rails keep that expansion narrow:
+
+1. The global hooks file (which always loads) cannot pull in additional files unless `PI_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set, so a global hook cannot silently extend its own footprint.
+2. Bare-specifier imports that resolve through `node_modules` are gated behind `PI_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, so an arbitrary npm dependency cannot register hooks just by being installed.
+
+Both gates fail closed with a `[PIHOOKS]` error message so operators see exactly which import was refused and which env var to set.
 
 ## Load order and precedence
 
