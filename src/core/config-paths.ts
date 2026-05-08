@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
@@ -147,7 +147,32 @@ export function resolveProjectHookResolution(options: HookConfigDiscoveryOptions
     ...(worktreeRoot ? { worktreeRoot } : {}),
     ...(discoveredProjectRoot ? { discoveredProjectRoot } : {}),
     ...(projectConfigPath ? { projectConfigPath } : {}),
-    trusted: isProjectTrusted(canonicalAnchorDir, homeDir, readFile, realpath),
+    trusted: isProjectTrusted(canonicalAnchorDir, homeDir, readFile, realpath, exists),
+  }
+}
+
+// P2 #20 fix: cache the parsed `trusted-projects.json` keyed on the file's
+// mtime + size so we do not re-read and re-parse JSON on every dispatch. The
+// cache is invalidated whenever the underlying file's stat changes (or the
+// file becomes missing/present). Test injections that drive `exists` and
+// `readFile` are still honoured because we always re-check existence and only
+// short-circuit when the stat fingerprint matches a previously cached parse.
+interface CachedTrustList {
+  fingerprint: string
+  canonicalEntries: Set<string>
+}
+const trustListCache = new Map<string, CachedTrustList>()
+
+export function __resetTrustListCacheForTests(): void {
+  trustListCache.clear()
+}
+
+function fingerprintTrustFile(trustFile: string): string {
+  try {
+    const stat = statSync(trustFile)
+    return `${stat.mtimeMs}|${stat.size}`
+  } catch {
+    return "missing"
   }
 }
 
@@ -156,20 +181,41 @@ function isProjectTrusted(
   homeDir: string,
   readFile: (filePath: string) => string,
   realpath: (filePath: string) => string,
+  exists: (filePath: string) => boolean,
 ): boolean {
   if (process.env.PI_HOOKS_TRUST_PROJECT === "1") return true
   const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
-  try {
-    if (!existsSync(trustFile)) return false
-    const raw = readFile(trustFile)
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return false
-    return parsed.some(
-      (entry) => typeof entry === "string" && canonicalizePath(entry, realpath) === canonicalAnchorDir,
-    )
-  } catch {
-    return false
+  // Honour the injected `exists` so tests with virtual filesystems remain
+  // deterministic — `existsSync` would leak through to the host filesystem.
+  if (!exists(trustFile)) return false
+
+  const fingerprint = fingerprintTrustFile(trustFile)
+  const cached = trustListCache.get(trustFile)
+  let canonicalEntries: Set<string>
+  if (cached && cached.fingerprint === fingerprint) {
+    canonicalEntries = cached.canonicalEntries
+  } else {
+    try {
+      const raw = readFile(trustFile)
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) {
+        // Cache the negative result so a malformed file does not re-parse on
+        // every call until it is fixed.
+        canonicalEntries = new Set()
+      } else {
+        canonicalEntries = new Set(
+          parsed
+            .filter((entry): entry is string => typeof entry === "string")
+            .map((entry) => canonicalizePath(entry, realpath)),
+        )
+      }
+    } catch {
+      canonicalEntries = new Set()
+    }
+    trustListCache.set(trustFile, { fingerprint, canonicalEntries })
   }
+
+  return canonicalEntries.has(canonicalAnchorDir)
 }
 
 function resolveGlobalConfigPath(
