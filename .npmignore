@@ -1,0 +1,5 @@
+# Exclude test files from published tarball
+src/**/*.test.ts
+
+# Exclude TypeScript build info files
+*.tsbuildinfo
