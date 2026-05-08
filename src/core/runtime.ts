@@ -931,6 +931,7 @@ async function executeHook(
   options: { canBlock?: boolean },
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, AsyncQueueState>,
+  globMatcher: GlobMatcher = defaultGlobMatcher,
 ): Promise<HookExecutionResult> {
   const logger = getPiHooksLogger()
   const hookId = getHookIdentifier(hook)
