@@ -1548,6 +1548,14 @@ function normalizeHostDeliveryResult(result: void | HostDeliveryResult | undefin
   return { status: "accepted" }
 }
 
+// P3 #24: cap the depth of nested action chains so a misconfigured hook that
+// triggers an event whose hook triggers another event (etc.) cannot run
+// unbounded. We keep the existing per-key dedup AND add a numeric counter
+// stored alongside the key set via a WeakMap so the type signature on
+// surrounding handlers stays unchanged.
+const RECURSION_DEPTH_CAP = 32
+const recursionDepthByStore = new WeakMap<Set<string>, { depth: number; loggedExceedance: boolean }>()
+
 async function withActionRecursionGuard<T>(
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   actionKey: string,
@@ -1559,20 +1567,41 @@ async function withActionRecursionGuard<T>(
   }
 
   if (activeKeys) {
+    const meta = recursionDepthByStore.get(activeKeys) ?? { depth: 0, loggedExceedance: false }
+    if (meta.depth >= RECURSION_DEPTH_CAP) {
+      if (!meta.loggedExceedance) {
+        meta.loggedExceedance = true
+        recursionDepthByStore.set(activeKeys, meta)
+        getPiHooksLogger().warn(
+          "hook_recursion_cap",
+          `Hook action recursion depth exceeded ${RECURSION_DEPTH_CAP}; skipping further nested actions.`,
+          { details: { actionKey, depth: meta.depth, cap: RECURSION_DEPTH_CAP } },
+        )
+      }
+      return undefined
+    }
     activeKeys.add(actionKey)
+    meta.depth += 1
+    recursionDepthByStore.set(activeKeys, meta)
     try {
       return await execute()
     } finally {
       activeKeys.delete(actionKey)
+      meta.depth -= 1
+      if (meta.depth === 0) {
+        recursionDepthByStore.delete(activeKeys)
+      }
     }
   }
 
   const rootKeys = new Set<string>([actionKey])
+  recursionDepthByStore.set(rootKeys, { depth: 1, loggedExceedance: false })
   return await actionRecursionGuards.run(rootKeys, async () => {
     try {
       return await execute()
     } finally {
       rootKeys.delete(actionKey)
+      recursionDepthByStore.delete(rootKeys)
     }
   })
 }
