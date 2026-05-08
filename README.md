@@ -115,6 +115,25 @@ npm run compat:sdk-matrix:future
 
 Do not widen support to 0.70.x until both the future matrix and the runtime smoke pass, including the no-builtin-tools gate.
 
+## Consumption
+
+Two install paths are supported:
+
+**PI package (recommended)** — use `pi install` or add the git URL to your `settings.json` as shown in the [Install](#install) section above. PI manages the clone and loads the extension automatically. This is the primary and fully-supported path.
+
+**npm library** — `pi-hooks` is also published to npm and can be imported directly:
+
+```ts
+import PiHooks from 'pi-hooks';
+import { extensions } from 'pi-hooks/extensions';
+```
+
+The package exposes:
+- `.` → `./dist/index.js` (default export: the PI extension)
+- `./extensions` → `./dist/extensions/index.js` (named re-export for the extensions entry-point)
+
+`npm install pi-hooks` requires Node.js `>=22.0.0` and the PI SDK peer dependencies to be present in the consuming project.
+
 ## Quick start
 
 Create a minimal global hook file so you can see the extension working right away.
