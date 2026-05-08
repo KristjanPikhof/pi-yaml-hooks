@@ -155,12 +155,19 @@ export function registerAdapter(pi: ExtensionAPI): void {
   }
 
   function rememberContext(cwd: string, ctx: ExtensionContext): void {
+    // Promote this cwd to most-recent, then evict oldest if over the cap.
+    if (latestContexts.has(cwd)) latestContexts.delete(cwd);
     latestContexts.set(cwd, ctx);
+    touchCwd(cwd);
+    evictIfNeeded();
   }
 
   function getRuntimeFor(cwd: string): HooksRuntime {
     const existing = runtimes.get(cwd);
-    if (existing) return existing;
+    if (existing) {
+      touchCwd(cwd);
+      return existing;
+    }
 
     // P1 #3 fix: do not close over a particular sessionManager. Read the
     // current one from the latest ctx on every host call so /new, /resume,
