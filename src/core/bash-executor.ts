@@ -14,20 +14,20 @@ const BLOCKING_EXIT_CODE = 2
 const KILL_GRACE_PERIOD_MS = 250
 // Prefer the PI-native override, but fall back to the legacy OpenCode env var so
 // existing deployments continue to work during the transition.
-const BASH_EXECUTABLE = process.env.PI_HOOKS_BASH_EXECUTABLE || process.env.OPENCODE_HOOKS_BASH_EXECUTABLE || "bash"
+const BASH_EXECUTABLE = process.env.PI_YAML_HOOKS_BASH_EXECUTABLE || process.env.OPENCODE_HOOKS_BASH_EXECUTABLE || "bash"
 const MAX_LOG_FIELD_LENGTH = 400
 const REDACTED = "[REDACTED]"
 const SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL = process.platform !== "win32"
 // P1 #9: cap captured stdout/stderr per hook invocation. A misbehaving hook
 // (e.g. `find / -type f`) would otherwise buffer arbitrarily large output
-// into the host process. Override via PI_HOOKS_MAX_OUTPUT_BYTES.
-const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
-const TRUNCATION_MARKER = "\n…[pi-hooks: output truncated]"
+// into the host process. Override via PI_YAML_HOOKS_MAX_OUTPUT_BYTES.
+const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
+const TRUNCATION_MARKER = "\n…[pi-yaml-hooks: output truncated]"
 // P3 #25: cap the JSON-serialized context payload that we feed to the bash
 // hook over stdin. A pathological hook context (e.g. a write tool with a
 // multi-MB content body) would otherwise be buffered into the child's stdin
-// in one shot. Override via PI_HOOKS_MAX_STDIN_BYTES.
-const MAX_STDIN_BYTES = parseMaxOutputBytes(process.env.PI_HOOKS_MAX_STDIN_BYTES) ?? 262_144
+// in one shot. Override via PI_YAML_HOOKS_MAX_STDIN_BYTES.
+const MAX_STDIN_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_STDIN_BYTES) ?? 262_144
 const executionContextCache = new Map<string, ExecutionContext>()
 
 interface ExecutionContext {
@@ -69,11 +69,11 @@ export function serializeContextForStdin(context: BashHookContext): string {
     }
     const value = (truncated as Record<string, unknown>)[key as string]
     if (typeof value === "string" && value.length > 1024) {
-      (truncated as Record<string, unknown>)[key as string] = `[pi-hooks: truncated string of ${value.length} chars]`
+      (truncated as Record<string, unknown>)[key as string] = `[pi-yaml-hooks: truncated string of ${value.length} chars]`
     } else if (value && typeof value === "object") {
       const nestedSize = Buffer.byteLength(JSON.stringify(value), "utf8")
       if (nestedSize > 4096) {
-        (truncated as Record<string, unknown>)[key as string] = `[pi-hooks: truncated nested value of ${nestedSize} bytes]`
+        (truncated as Record<string, unknown>)[key as string] = `[pi-yaml-hooks: truncated nested value of ${nestedSize} bytes]`
       }
     }
   }
@@ -324,7 +324,7 @@ function logBashOutcome(result: BashHookResult, request: BashExecutionRequest): 
   }
 
   const details = [
-    `[pi-hooks] Bash hook ${result.status}`,
+    `[pi-yaml-hooks] Bash hook ${result.status}`,
     `event=${request.context.event}`,
     `session=${request.context.session_id}`,
     `cwd=${request.context.cwd}`,

@@ -68,7 +68,7 @@ export function resolveHookConfigPaths(options: HookConfigDiscoveryOptions = {})
  * in `.pi/hook/hooks.yaml` or `.pi/hooks.yaml` and silently get arbitrary
  * `bash:` execution just
  * because someone `cd`'d into it. Trust is established by either:
- *   - Setting `PI_HOOKS_TRUST_PROJECT=1` for the process, or
+ *   - Setting `PI_YAML_HOOKS_TRUST_PROJECT=1` for the process, or
  *   - Adding the absolute project directory to ~/.pi/agent/trusted-projects.json
  *     (a JSON array of absolute paths, e.g. ["/Users/me/code/myproj"]).
  * Untrusted project files are skipped with a one-time warning.
@@ -107,9 +107,9 @@ function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
   if (warnedUntrustedProjects.has(projectDir)) return
   warnedUntrustedProjects.add(projectDir)
   const message =
-    `[pi-hooks] Skipping untrusted project hooks at ${candidate}.\n` +
+    `[pi-yaml-hooks] Skipping untrusted project hooks at ${candidate}.\n` +
     `         To trust this project, either:\n` +
-    `           - set PI_HOOKS_TRUST_PROJECT=1 for this session, or\n` +
+    `           - set PI_YAML_HOOKS_TRUST_PROJECT=1 for this session, or\n` +
     `           - add ${JSON.stringify(projectDir)} to ~/.pi/agent/trusted-projects.json`
   // eslint-disable-next-line no-console
   console.warn(message)
@@ -183,7 +183,7 @@ function isProjectTrusted(
   realpath: (filePath: string) => string,
   exists: (filePath: string) => boolean,
 ): boolean {
-  if (process.env.PI_HOOKS_TRUST_PROJECT === "1") return true
+  if (process.env.PI_YAML_HOOKS_TRUST_PROJECT === "1") return true
   const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
   // Honour the injected `exists` so tests with virtual filesystems remain
   // deterministic — `existsSync` would leak through to the host filesystem.

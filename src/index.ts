@@ -1,5 +1,5 @@
 /**
- * pi-hooks — PI extension entry point.
+ * pi-yaml-hooks — PI extension entry point.
  *
  * Registers the YAML-driven hooks adapter that wires PI events into the core
  * runtime (`src/core/runtime.ts`). The atomic-commit-snapshot-worker is an

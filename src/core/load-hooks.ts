@@ -102,7 +102,7 @@ function parseHooksFileEnvelope(filePath: string, content: string): ParsedHooksF
         {
           code: "invalid_frontmatter",
           filePath,
-          message: `[PIHOOKS] hooks.yaml exceeds the ${MAX_HOOKS_YAML_BYTES}-byte size cap (got ${byteLength} bytes); refusing to parse.`,
+          message: `[PIYAMLHOOKS] hooks.yaml exceeds the ${MAX_HOOKS_YAML_BYTES}-byte size cap (got ${byteLength} bytes); refusing to parse.`,
         },
       ],
     }
@@ -202,7 +202,7 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
       // Surface advisories so operators see them even without inspecting
       // ParsedHooksFile.advisories directly.
       // eslint-disable-next-line no-console
-      console.info(`[pi-hooks] ${advisory}`)
+      console.info(`[pi-yaml-hooks] ${advisory}`)
     }
   }
 
@@ -502,7 +502,7 @@ function readSnapshotImports(snapshot: DiscoveredHooksFileSnapshot, errors: Hook
               createError(
                 snapshot.filePath,
                 "invalid_imports",
-                `[PIHOOKS] imported hooks file ${filePath} exceeds the ${MAX_HOOKS_YAML_BYTES}-byte size cap (got ${importStat.size} bytes); refusing to read.`,
+                `[PIYAMLHOOKS] imported hooks file ${filePath} exceeds the ${MAX_HOOKS_YAML_BYTES}-byte size cap (got ${importStat.size} bytes); refusing to read.`,
                 "imports",
               ),
             )
@@ -526,7 +526,7 @@ function readSnapshotImports(snapshot: DiscoveredHooksFileSnapshot, errors: Hook
 // stray import there is effectively an unsanctioned escalation. Operators who
 // rely on global imports must opt in explicitly.
 function isGlobalImportsAllowed(): boolean {
-  return process.env.PI_HOOKS_ALLOW_GLOBAL_IMPORTS === "1"
+  return process.env.PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS === "1"
 }
 
 // Trust gate: package-specifier (bare) imports resolve through Node's module
@@ -534,7 +534,7 @@ function isGlobalImportsAllowed(): boolean {
 // dependency. That is too much implicit trust for default discovery, so we
 // require an explicit opt-in.
 function isPackageImportsAllowed(): boolean {
-  return process.env.PI_HOOKS_ALLOW_PACKAGE_IMPORTS === "1"
+  return process.env.PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS === "1"
 }
 
 function isBareSpecifier(specifier: string): boolean {
@@ -553,7 +553,7 @@ function resolveHookImportTargets(
       error: createError(
         importerPath,
         "invalid_imports",
-        `[PIHOOKS] Refusing to resolve import ${JSON.stringify(specifier)} from the global hooks file. Global imports are disabled by default; set PI_HOOKS_ALLOW_GLOBAL_IMPORTS=1 to opt in.`,
+        `[PIYAMLHOOKS] Refusing to resolve import ${JSON.stringify(specifier)} from the global hooks file. Global imports are disabled by default; set PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1 to opt in.`,
         "imports",
       ),
     }
@@ -564,7 +564,7 @@ function resolveHookImportTargets(
       error: createError(
         importerPath,
         "invalid_imports",
-        `[PIHOOKS] Refusing to resolve package import ${JSON.stringify(specifier)}. Bare-specifier (npm package) imports are disabled by default; use a relative path or set PI_HOOKS_ALLOW_PACKAGE_IMPORTS=1 to opt in.`,
+        `[PIYAMLHOOKS] Refusing to resolve package import ${JSON.stringify(specifier)}. Bare-specifier (npm package) imports are disabled by default; use a relative path or set PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1 to opt in.`,
         "imports",
       ),
     }
@@ -666,7 +666,7 @@ export function summarizeHookSources(sources: readonly HookSourceSummary[]): Hoo
 export function formatHookLoadSummary(result: Pick<HookDiscoveryResult, "sources">): string {
   const summary = summarizeHookSources(result.sources)
   const label = summary.total === 1 ? "hook" : "hooks"
-  return `[pi-hooks] Loaded ${summary.total} ${label} (global: ${summary.global}, project: ${summary.project}).`
+  return `[pi-yaml-hooks] Loaded ${summary.total} ${label} (global: ${summary.global}, project: ${summary.project}).`
 }
 
 export function mergeHookMaps(...hookMaps: HookMap[]): HookMap {

@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SMOKE_DIR="${1:-$(mktemp -d "${TMPDIR:-/tmp}/pi-hooks-runtime-smoke.XXXXXX")}" 
+SMOKE_DIR="${1:-$(mktemp -d "${TMPDIR:-/tmp}/pi-yaml-hooks-runtime-smoke.XXXXXX")}" 
 HOOK_DIR="$SMOKE_DIR/.pi/hook"
 EVIDENCE_DIR="$SMOKE_DIR/.pi/hooks-smoke"
-LOG_FILE="$EVIDENCE_DIR/pi-hooks.ndjson"
+LOG_FILE="$EVIDENCE_DIR/pi-yaml-hooks.ndjson"
 
 mkdir -p "$HOOK_DIR" "$EVIDENCE_DIR"
 cp "$ROOT_DIR/scripts/smoke/pi-runtime-smoke-hooks.yaml" "$HOOK_DIR/hooks.yaml"
@@ -19,11 +19,11 @@ for (const file of process.argv.slice(2)) {
 NODE
 
 cat > "$EVIDENCE_DIR/evidence.md" <<EOF
-# pi-hooks runtime smoke evidence
+# pi-yaml-hooks runtime smoke evidence
 
 - Date:
 - Tester:
-- pi-hooks checkout: $ROOT_DIR
+- pi-yaml-hooks checkout: $ROOT_DIR
 - Smoke project: $SMOKE_DIR
 - PI version: 
 - @mariozechner/pi-coding-agent version:
@@ -42,10 +42,10 @@ cat > "$EVIDENCE_DIR/evidence.md" <<EOF
 
 \`\`\`bash
 cd "$SMOKE_DIR"
-PI_HOOKS_TRUST_PROJECT=1 \\
-PI_HOOKS_DEBUG=1 \\
-PI_HOOKS_LOG_FILE="$LOG_FILE" \\
-PI_HOOKS_ENABLE_USER_BASH=1 \\
+PI_YAML_HOOKS_TRUST_PROJECT=1 \\
+PI_YAML_HOOKS_DEBUG=1 \\
+PI_YAML_HOOKS_LOG_FILE="$LOG_FILE" \\
+PI_YAML_HOOKS_ENABLE_USER_BASH=1 \\
 pi -e "$ROOT_DIR/extensions/index.ts"
 \`\`\`
 
@@ -74,7 +74,7 @@ pi -e "$ROOT_DIR/extensions/index.ts"
 EOF
 
 cat <<EOF
-Prepared pi-hooks runtime smoke project.
+Prepared pi-yaml-hooks runtime smoke project.
 
 Smoke project: $SMOKE_DIR
 Hook config:    $HOOK_DIR/hooks.yaml
@@ -85,10 +85,10 @@ Evidence:       $EVIDENCE_DIR/evidence.md
 Run PI manually with:
 
   cd "$SMOKE_DIR"
-  PI_HOOKS_TRUST_PROJECT=1 \\
-  PI_HOOKS_DEBUG=1 \\
-  PI_HOOKS_LOG_FILE="$LOG_FILE" \\
-  PI_HOOKS_ENABLE_USER_BASH=1 \\
+  PI_YAML_HOOKS_TRUST_PROJECT=1 \\
+  PI_YAML_HOOKS_DEBUG=1 \\
+  PI_YAML_HOOKS_LOG_FILE="$LOG_FILE" \\
+  PI_YAML_HOOKS_ENABLE_USER_BASH=1 \\
   pi -e "$ROOT_DIR/extensions/index.ts"
 
 Then follow docs/setup.md#runtime-pi-smoke-checklist.

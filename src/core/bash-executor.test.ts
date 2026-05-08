@@ -239,7 +239,7 @@ const cases: Case[] = [
         return { ok: true }
       }
 
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "pi-hooks-bash-timeout-"))
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "pi-yaml-hooks-bash-timeout-"))
       const pidFile = path.join(tempDir, "child.pid")
 
       try {

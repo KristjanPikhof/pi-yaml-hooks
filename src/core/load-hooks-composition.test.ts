@@ -17,7 +17,7 @@ interface Case {
 }
 
 function createSandbox(name: string): string {
-  return mkdtempSync(path.join(os.tmpdir(), `pi-hooks-${name}-`))
+  return mkdtempSync(path.join(os.tmpdir(), `pi-yaml-hooks-${name}-`))
 }
 
 function cleanup(dir: string): void {
@@ -101,7 +101,7 @@ const cases: Case[] = [
           `imports:\n  - ../../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: root-layer\n    override: package-layer\n    event: session.created\n    actions:\n      - notify: root\n`,
         )
 
-        const result = withEnv({ PI_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
+        const result = withEnv({ PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
         const hooks = result.hooks.get("session.created") ?? []
         const notify = hooks[0]?.actions[0]
         return hooks.length === 1 && hooks[0]?.id === "root-layer" && notify && "notify" in notify && notify.notify === "root"
@@ -165,7 +165,7 @@ const cases: Case[] = [
         writeYaml(path.join(packageRoot, "hooks.yaml"), `hooks:\n  - id: packaged\n    event: session.created\n    actions:\n      - notify: packaged\n`)
         writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - hook-pack\nhooks: []\n`)
 
-        const result = withEnv({ PI_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
+        const result = withEnv({ PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
         return JSON.stringify(getHookIds(result, "session.created")) === JSON.stringify(["packaged"])
           ? { ok: true }
           : { ok: false, detail: JSON.stringify({ files: result.files, errors: result.errors }) }
@@ -281,7 +281,7 @@ const cases: Case[] = [
     },
   },
   {
-    name: "package imports refused without PI_HOOKS_ALLOW_PACKAGE_IMPORTS",
+    name: "package imports refused without PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS",
     run: () => {
       const sandbox = createSandbox("pkg-gate")
       try {
@@ -292,9 +292,9 @@ const cases: Case[] = [
         writeYaml(path.join(packageRoot, "hooks.yaml"), `hooks:\n  - id: packaged\n    event: session.created\n    actions:\n      - notify: packaged\n`)
         writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - hook-pack\nhooks: []\n`)
 
-        const result = withEnv({ PI_HOOKS_ALLOW_PACKAGE_IMPORTS: undefined }, () => loadTrustedProject(projectRoot, homeDir))
+        const result = withEnv({ PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS: undefined }, () => loadTrustedProject(projectRoot, homeDir))
         const refused = result.errors.some(
-          (error) => error.code === "invalid_imports" && error.message.includes("[PIHOOKS]") && error.message.includes("PI_HOOKS_ALLOW_PACKAGE_IMPORTS"),
+          (error) => error.code === "invalid_imports" && error.message.includes("[PIYAMLHOOKS]") && error.message.includes("PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS"),
         )
         const notLoaded = (result.hooks.get("session.created") ?? []).length === 0
         return refused && notLoaded
@@ -306,7 +306,7 @@ const cases: Case[] = [
     },
   },
   {
-    name: "global hooks file refuses imports without PI_HOOKS_ALLOW_GLOBAL_IMPORTS",
+    name: "global hooks file refuses imports without PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS",
     run: () => {
       const sandbox = createSandbox("global-gate")
       try {
@@ -320,14 +320,14 @@ const cases: Case[] = [
         // Trust the project so we get a deterministic load path.
         writeYaml(path.join(homeDir, ".pi", "agent", "trusted-projects.json"), JSON.stringify([projectRoot]))
 
-        const result = withEnv({ PI_HOOKS_ALLOW_GLOBAL_IMPORTS: undefined }, () =>
+        const result = withEnv({ PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS: undefined }, () =>
           loadDiscoveredHooks({ homeDir, projectDir: projectRoot }),
         )
         const refused = result.errors.some(
           (error) =>
             error.code === "invalid_imports" &&
-            error.message.includes("[PIHOOKS]") &&
-            error.message.includes("PI_HOOKS_ALLOW_GLOBAL_IMPORTS"),
+            error.message.includes("[PIYAMLHOOKS]") &&
+            error.message.includes("PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS"),
         )
         const notLoaded = (result.hooks.get("session.created") ?? []).length === 0
         return refused && notLoaded
@@ -339,7 +339,7 @@ const cases: Case[] = [
     },
   },
   {
-    name: "global imports load when PI_HOOKS_ALLOW_GLOBAL_IMPORTS=1",
+    name: "global imports load when PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1",
     run: () => {
       const sandbox = createSandbox("global-allow")
       try {
@@ -352,7 +352,7 @@ const cases: Case[] = [
         )
         writeYaml(path.join(homeDir, ".pi", "agent", "trusted-projects.json"), JSON.stringify([projectRoot]))
 
-        const result = withEnv({ PI_HOOKS_ALLOW_GLOBAL_IMPORTS: "1" }, () =>
+        const result = withEnv({ PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS: "1" }, () =>
           loadDiscoveredHooks({ homeDir, projectDir: projectRoot }),
         )
         const ids = getHookIds(result, "session.created")
@@ -470,7 +470,7 @@ const cases: Case[] = [
     },
   },
   {
-    name: "yaml payload above 1 MiB is rejected with a [PIHOOKS] error",
+    name: "yaml payload above 1 MiB is rejected with a [PIYAMLHOOKS] error",
     run: () => {
       // Build a >1 MiB string of valid-looking YAML so the size guard fires
       // before YAML.parseDocument has a chance to spin on it.
@@ -481,7 +481,7 @@ const cases: Case[] = [
       const matched = result.errors.some(
         (error) =>
           error.code === "invalid_frontmatter" &&
-          error.message.includes("[PIHOOKS]") &&
+          error.message.includes("[PIYAMLHOOKS]") &&
           error.message.includes("size cap"),
       )
       const noHooksLoaded = Array.from(result.hooks.values()).every((list) => list.length === 0)

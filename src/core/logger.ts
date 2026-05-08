@@ -74,7 +74,7 @@ export function resetPiHooksLoggerForTests(): void {
 function openLogFileSafely(filePath: string): number | undefined {
   // Reuse the existing descriptor only if it points at the same path. The
   // path may change across resetPiHooksLoggerForTests() calls when tests
-  // override PI_HOOKS_LOG_FILE.
+  // override PI_YAML_HOOKS_LOG_FILE.
   if (cachedLogFd !== undefined && cachedLogFdPath === filePath) {
     return cachedLogFd
   }
@@ -121,7 +121,7 @@ function createPiHooksLogger(): PiHooksLogger {
   const enabled = shouldEnableLogging()
   const level = resolveLogLevel(enabled)
   const filePath = enabled ? resolveLogFilePath() : undefined
-  const mirrorToStderr = process.env.PI_HOOKS_LOG_STDERR === "1"
+  const mirrorToStderr = process.env.PI_YAML_HOOKS_LOG_STDERR === "1"
 
   return {
     enabled,
@@ -154,12 +154,12 @@ function createPiHooksLogger(): PiHooksLogger {
           warnedAboutLoggerFailure = true
           const message = error instanceof Error ? error.message : String(error)
           // eslint-disable-next-line no-console
-          console.warn(`[pi-hooks] Failed to write debug log ${filePath}: ${message}`)
+          console.warn(`[pi-yaml-hooks] Failed to write debug log ${filePath}: ${message}`)
         }
       }
 
       if (mirrorToStderr) {
-        const message = `[pi-hooks:${entryLevel}] ${entry.kind}${entry.message ? ` ${entry.message}` : ""}`
+        const message = `[pi-yaml-hooks:${entryLevel}] ${entry.kind}${entry.message ? ` ${entry.message}` : ""}`
         // eslint-disable-next-line no-console
         console.warn(message)
       }
@@ -181,9 +181,9 @@ function createPiHooksLogger(): PiHooksLogger {
 
 function shouldEnableLogging(): boolean {
   return (
-    process.env.PI_HOOKS_DEBUG === "1" ||
-    process.env.PI_HOOKS_LOG_LEVEL !== undefined ||
-    process.env.PI_HOOKS_LOG_FILE !== undefined
+    process.env.PI_YAML_HOOKS_DEBUG === "1" ||
+    process.env.PI_YAML_HOOKS_LOG_LEVEL !== undefined ||
+    process.env.PI_YAML_HOOKS_LOG_FILE !== undefined
   )
 }
 
@@ -192,12 +192,12 @@ function resolveLogLevel(enabled: boolean): PiHooksLogLevel | undefined {
     return undefined
   }
 
-  const envLevel = process.env.PI_HOOKS_LOG_LEVEL
+  const envLevel = process.env.PI_YAML_HOOKS_LOG_LEVEL
   if (envLevel === "error" || envLevel === "warn" || envLevel === "info" || envLevel === "debug") {
     return envLevel
   }
 
-  if (process.env.PI_HOOKS_DEBUG === "1") {
+  if (process.env.PI_YAML_HOOKS_DEBUG === "1") {
     return "debug"
   }
 
@@ -206,7 +206,7 @@ function resolveLogLevel(enabled: boolean): PiHooksLogLevel | undefined {
 
 function resolveLogFilePath(): string {
   const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir()
-  return process.env.PI_HOOKS_LOG_FILE || path.join(homeDir, ".pi", "agent", "logs", "pi-hooks.ndjson")
+  return process.env.PI_YAML_HOOKS_LOG_FILE || path.join(homeDir, ".pi", "agent", "logs", "pi-yaml-hooks.ndjson")
 }
 
 function serializeLogEntry(entry: PiHooksLogEntry): string {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOG_FILE="${PI_HOOKS_LOG_FILE:-$HOME/.pi/agent/logs/pi-hooks.ndjson}"
+LOG_FILE="${PI_YAML_HOOKS_LOG_FILE:-$HOME/.pi/agent/logs/pi-yaml-hooks.ndjson}"
 HOOK_FILTER=""
 EVENT_FILTER=""
 SESSION_FILTER=""
@@ -13,10 +13,10 @@ usage() {
   cat <<'EOF'
 Usage: tail-hook-log.sh [options]
 
-Tail the persistent pi-hooks NDJSON log and pretty-print entries.
+Tail the persistent pi-yaml-hooks NDJSON log and pretty-print entries.
 
 Options:
-  --file PATH        Read a specific log file instead of PI_HOOKS_LOG_FILE/default
+  --file PATH        Read a specific log file instead of PI_YAML_HOOKS_LOG_FILE/default
   --hook ID          Show only entries for a specific hookId
   --event EVENT      Show only entries for a specific event
   --session ID       Show only entries for a specific sessionId
@@ -76,8 +76,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! -f "$LOG_FILE" ]]; then
-  echo "pi-hooks log file not found yet: $LOG_FILE" >&2
-  echo "Start PI with PI_HOOKS_DEBUG=1 and trigger a hook first." >&2
+  echo "pi-yaml-hooks log file not found yet: $LOG_FILE" >&2
+  echo "Start PI with PI_YAML_HOOKS_DEBUG=1 and trigger a hook first." >&2
   exit 1
 fi
 

@@ -1168,7 +1168,7 @@ async function executeAction(
           })
         }
       } else {
-        console.warn(`[pi-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
+        console.warn(`[pi-yaml-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
         logger.warn("action_result", "Notification action skipped because host.notify is unavailable.", {
           cwd: projectDir,
           event,
@@ -1214,7 +1214,7 @@ async function executeAction(
           return { blocked: true, blockReason: "Blocked by user via confirm action" }
         }
       } else {
-        console.warn(`[pi-hooks] confirm action skipped (host.confirm not implemented): ${action.confirm.message}`)
+        console.warn(`[pi-yaml-hooks] confirm action skipped (host.confirm not implemented): ${action.confirm.message}`)
         logger.warn("action_result", "Confirmation action skipped because host.confirm is unavailable.", {
           cwd: projectDir,
           event,
@@ -1274,7 +1274,7 @@ async function executeAction(
           })
         }
       } else {
-        console.warn(`[pi-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
+        console.warn(`[pi-yaml-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
         logger.warn("action_result", "Status action skipped because host.setStatus is unavailable.", {
           cwd: projectDir,
           event,
@@ -1361,7 +1361,7 @@ async function abortSession(host: HostAdapter, sessionID: string): Promise<void>
     await host.abort(sessionID)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[pi-hooks] Failed to abort session ${sessionID}: ${message}`)
+    console.error(`[pi-yaml-hooks] Failed to abort session ${sessionID}: ${message}`)
   }
 }
 
@@ -1383,12 +1383,12 @@ function hasCodeExtension(filePath: string): boolean {
 
 function formatHookLoadErrors(errors: Array<{ filePath: string; message: string; path?: string }>): string {
   const details = errors.map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`)
-  return `[pi-hooks] Failed to load some hooks; continuing with valid hooks:\n${details.join("\n")}`
+  return `[pi-yaml-hooks] Failed to load some hooks; continuing with valid hooks:\n${details.join("\n")}`
 }
 
 function formatHookReloadErrors(errors: Array<{ filePath: string; message: string; path?: string }>): string {
   const details = errors.map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`)
-  return `[pi-hooks] Failed to reload hooks.yaml; keeping last known good hooks:\n${details.join("\n")}`
+  return `[pi-yaml-hooks] Failed to reload hooks.yaml; keeping last known good hooks:\n${details.join("\n")}`
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1422,7 +1422,7 @@ function getStatusSlotKey(hookId: string, _sourceFilePath: string): string {
   // namespaced via `${filePath}#hooks[idx]` when missing — the latter still
   // changes on file move, in which case the slot is intentionally
   // drop-and-recreate (the hook has no stable identity to track).
-  return `pi-hooks:${hookId}`
+  return `pi-yaml-hooks:${hookId}`
 }
 
 function resolveAsyncExecutionConfig(
@@ -1533,7 +1533,7 @@ function logHookFailure(event: HookEvent, filePath: string, error: unknown): voi
     hookSource: filePath,
     details: { error: message },
   })
-  console.error(`[pi-hooks] ${event} hook from ${filePath} failed: ${message}`)
+  console.error(`[pi-yaml-hooks] ${event} hook from ${filePath} failed: ${message}`)
 }
 
 function normalizeHostDeliveryResult(result: void | HostDeliveryResult | undefined): HostDeliveryResult {
