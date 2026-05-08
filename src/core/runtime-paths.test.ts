@@ -222,7 +222,10 @@ const cases: Case[] = [
     // P2-10 regression: when an idle dispatch hook returns a generic
     // failure (not a host-died error), the runtime must consume the
     // pending changes so the next idle event does not loop forever on
-    // the same poison change set.
+    // the same poison change set. We gate the hook on `matchesAnyPath` so
+    // it only fires when pending changes exist; if consume worked, the
+    // second idle will see no matching paths and the bash will not run
+    // a second time.
     name: "session.idle consumes changes when a hook throws a non-host-died error",
     run: async () => {
       const seenCommands: string[] = []
@@ -230,6 +233,7 @@ const cases: Case[] = [
       const hooks = buildHookMap(
         [{ bash: "job:idle" }],
         "session.idle",
+        [{ matchesAnyPath: ["**/*.ts"] }],
       )
       const runtime = createHooksRuntime(createFakeHost([]), {
         directory: "/repo",
@@ -276,8 +280,8 @@ const cases: Case[] = [
       const callsAfterFirst = seenCommands.length
 
       // Second idle: there should be NO pending changes left to dispatch
-      // (because we consumed on hook-no), so the bash hook should not be
-      // re-invoked.
+      // (because we consumed on hook-no), so the path condition rejects
+      // the hook and bash is not re-invoked.
       await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
 
       return seenCommands.length === callsAfterFirst
