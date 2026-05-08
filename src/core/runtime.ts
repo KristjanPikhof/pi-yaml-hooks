@@ -654,6 +654,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
             dispatchStates,
             actionRecursionGuards,
             asyncQueues,
+            boundGlobMatcher,
           )
           state.consumeFileChanges(sessionID, changes)
           logger.debug("idle_changes_consumed", "Consumed idle changes after dispatch.", {
