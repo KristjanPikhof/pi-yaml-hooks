@@ -1,6 +1,6 @@
 {
   "name": "pi-yaml-hooks",
-  "version": "2026.5.8",
+  "version": "2026.5.9",
   "description": "YAML hook automation for the PI coding agent: tool guards, session hooks, prompts, notifications, and bash actions.",
   "author": "Kristjan Pikhof <kristjan.pikhof@gmail.com> (https://github.com/KristjanPikhof)",
   "type": "module",
@@ -70,8 +70,8 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.73.1",
-    "@mariozechner/pi-tui": "^0.68.1 || ^0.69.0"
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0"
   },
   "dependencies": {
     "yaml": "^2.8.2"

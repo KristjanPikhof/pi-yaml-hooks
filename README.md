@@ -1,6 +1,6 @@
 # pi-yaml-hooks
 
-`pi-yaml-hooks` adds YAML-driven hooks to the [PI coding agent](https://www.npmjs.com/package/@mariozechner/pi-coding-agent). You can run `bash` around tool calls and session events, block risky actions before they run, and surface PI-native notifications, confirmations, and status entries from `hooks.yaml`.
+`pi-yaml-hooks` adds YAML-driven hooks to the [PI coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). You can run `bash` around tool calls and session events, block risky actions before they run, and surface PI-native notifications, confirmations, and status entries from `hooks.yaml`.
 
 This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/OpenCode-Hooks). The hook model is familiar, but the runtime is PI-native and the limits are explicit.
 
@@ -19,7 +19,7 @@ This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/O
 - macOS or Linux
 - Node.js `>=22.0.0`
 - `bash` on `$PATH` (override with `PI_YAML_HOOKS_BASH_EXECUTABLE`)
-- `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`
+- `@earendil-works/pi-coding-agent ^0.74.0`
 
 Windows is unsupported.
 
