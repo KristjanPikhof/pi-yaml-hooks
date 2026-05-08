@@ -15,14 +15,13 @@ peer packages. The repository checkout, package.json, package-lock.json, and nor
 node_modules are not modified; each SDK spec is installed in a throwaway copy.
 
 Default matrix:
-  - @mariozechner/pi-coding-agent@0.68.1 and @mariozechner/pi-tui@0.68.1
-  - @mariozechner/pi-coding-agent@0.69.x and @mariozechner/pi-tui@0.69.x
+  - @earendil-works/pi-coding-agent@0.74.0 and @earendil-works/pi-tui@0.74.0
 
 Options:
   --dry-run         Print the matrix and commands without creating temp installs.
-  --include-future Include the gated 0.70.x future target. This is advisory only and
+  --include-future Include the gated 0.75.x future target. This is advisory only and
                    does not change package peer support.
-  --versions        Override SDK specs, for example: --versions "0.68.1 0.69.x".
+  --versions        Override SDK specs, for example: --versions "0.74.0 0.75.x".
   -h, --help        Show this help.
 USAGE
 }
@@ -61,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$INCLUDE_FUTURE" -eq 1 ]]; then
-  SDK_SPECS+=("0.70.x")
+  SDK_SPECS+=("0.75.x")
 fi
 
 copy_repo() {
@@ -93,12 +92,12 @@ sdk_specs: ${SDK_SPECS[*]}
 For each SDK spec, the script will:
   1. create a temporary copy of the repository outside the checkout
   2. run npm install in that copy
-  3. install @mariozechner/pi-coding-agent@<spec> and @mariozechner/pi-tui@<spec> in that copy only
+  3. install @earendil-works/pi-coding-agent@<spec> and @earendil-works/pi-tui@<spec> in that copy only
   4. run npm run typecheck
   5. run npm test
   6. delete the temporary copy
 
-Future gate: pass --include-future to try 0.70.x without widening package peerDependencies.
+Future gate: pass --include-future to try 0.75.x without widening package peerDependencies.
 PLAN
 }
 
@@ -109,7 +108,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   for spec in "${SDK_SPECS[@]}"; do
     echo "[dry-run] SDK $spec"
     echo "[dry-run] npm install --no-audit --no-fund"
-    echo "[dry-run] npm install --no-audit --no-fund --no-save @mariozechner/pi-coding-agent@$spec @mariozechner/pi-tui@$spec"
+    echo "[dry-run] npm install --no-audit --no-fund --no-save @earendil-works/pi-coding-agent@$spec @earendil-works/pi-tui@$spec"
     echo "[dry-run] npm run typecheck"
     echo "[dry-run] npm test"
   done
@@ -131,8 +130,8 @@ for spec in "${SDK_SPECS[@]}"; do
     cd "$tmp_dir"
     npm install --no-audit --no-fund
     npm install --no-audit --no-fund --no-save \
-      "@mariozechner/pi-coding-agent@$spec" \
-      "@mariozechner/pi-tui@$spec"
+      "@earendil-works/pi-coding-agent@$spec" \
+      "@earendil-works/pi-tui@$spec"
     npm run typecheck
     npm test
   )
