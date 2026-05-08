@@ -1,9 +1,7 @@
 # Exclude test files from published tarball
-src/**/*.test.ts
-src/core/*.test.ts
-src/pi/*.test.ts
-dist/**/*.test.js
-dist/**/*.test.d.ts
+*.test.ts
+*.test.js
+*.test.d.ts
 
 # Exclude TypeScript build info files
 *.tsbuildinfo
