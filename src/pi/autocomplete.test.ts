@@ -153,7 +153,23 @@ const cases: Case[] = [
       }),
   },
   {
-    name: "suggests slash command completions when typing /hooks-",
+    name: "suggests all hook slash commands when token prefix is /hooks-",
+    run: async () =>
+      await withSandbox(async (projectDir) => {
+        const ctx = makeContext({ projectDir, hasUI: true, expose: true })
+        registerHookAutocomplete(ctx as never)
+        const provider = ctx.factories[0](createNoopProvider())
+        // Use the bare /hooks- prefix so every hooks-* label matches the substring filter.
+        const input = "/hooks-"
+        const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() })
+        const values = suggestions?.items.map((i) => i.value) ?? []
+        const required = ["hooks-status", "hooks-validate", "hooks-trust", "hooks-reload", "hooks-tail-log"]
+        const missing = required.filter((r) => !values.includes(r))
+        return missing.length === 0 ? { ok: true } : { ok: false, detail: `missing=${missing.join(",")} got=${JSON.stringify(values)}` }
+      }),
+  },
+  {
+    name: "filters slash command completions to substring matches on label",
     run: async () =>
       await withSandbox(async (projectDir) => {
         const ctx = makeContext({ projectDir, hasUI: true, expose: true })
@@ -162,7 +178,7 @@ const cases: Case[] = [
         const input = "/hooks-st"
         const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() })
         const values = suggestions?.items.map((i) => i.value) ?? []
-        return values.includes("hooks-status") && values.includes("hooks-validate")
+        return values.includes("hooks-status") && !values.includes("hooks-reload")
           ? { ok: true }
           : { ok: false, detail: JSON.stringify(values) }
       }),
