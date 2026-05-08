@@ -358,6 +358,48 @@ const cases: Case[] = [
     },
   },
   {
+    name: "async rejects notify action",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:\n  - id: async-notify\n    event: tool.after.write\n    async: true\n    actions:\n      - notify: "done"\n`,
+      )
+      return result.errors.some(
+        (error) => error.code === "invalid_async" && error.path === "hooks[0].async" && error.message.includes("notify"),
+      ) && (result.hooks.get("tool.after.write") ?? []).length === 0
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(result.errors) }
+    },
+  },
+  {
+    name: "async rejects confirm action",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:\n  - id: async-confirm\n    event: tool.after.write\n    async: true\n    actions:\n      - confirm:\n          prompt: "ok?"\n`,
+      )
+      return result.errors.some(
+        (error) => error.code === "invalid_async" && error.path === "hooks[0].async" && error.message.includes("confirm"),
+      ) && (result.hooks.get("tool.after.write") ?? []).length === 0
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(result.errors) }
+    },
+  },
+  {
+    name: "async rejects setStatus action",
+    run: () => {
+      const result = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:\n  - id: async-setstatus\n    event: tool.after.write\n    async: true\n    actions:\n      - setStatus: "watching"\n`,
+      )
+      return result.errors.some(
+        (error) => error.code === "invalid_async" && error.path === "hooks[0].async" && error.message.includes("setStatus"),
+      ) && (result.hooks.get("tool.after.write") ?? []).length === 0
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(result.errors) }
+    },
+  },
+  {
     name: "path conditions are accepted on tool.after events",
     run: () => {
       const result = parseHooksFile(
