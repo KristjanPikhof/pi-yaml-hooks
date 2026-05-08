@@ -1637,8 +1637,16 @@ async function abortSession(host: HostAdapter, sessionID: string): Promise<void>
   try {
     await host.abort(sessionID)
   } catch (error) {
+    // P2-11 fix: route abort failures through the structured logger so
+    // operators tailing ~/.pi/agent/log/hooks.log see the failure with
+    // sessionID and error context. Previously the raw console.error
+    // bypassed the logger entirely, which made tail-hook-log workflows
+    // miss aborted-session signals.
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[pi-yaml-hooks] Failed to abort session ${sessionID}: ${message}`)
+    getPiHooksLogger().error("session_abort_failed", "Failed to abort session.", {
+      sessionId: sessionID,
+      details: { error: message },
+    })
   }
 }
 
