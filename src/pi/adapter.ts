@@ -21,7 +21,7 @@ import type {
   ToolCallEvent,
   ToolCallEventResult,
   ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 /**
  * Aliased locally: ReadonlySessionManager is defined in the PI package but

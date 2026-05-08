@@ -7,7 +7,7 @@
  * `examples/atomic-commit-snapshot-worker/`); nothing is invoked here.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerAdapter } from "./pi/adapter.js";
 import { registerHookAutocomplete } from "./pi/autocomplete.js";
