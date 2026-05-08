@@ -39,6 +39,31 @@ function loadTrustedProject(projectRoot: string, homeDir: string) {
   return loadDiscoveredHooks({ homeDir, projectDir: projectRoot })
 }
 
+function withEnv<T>(overrides: Record<string, string | undefined>, fn: () => T): T {
+  const original: Record<string, string | undefined> = {}
+  for (const key of Object.keys(overrides)) {
+    original[key] = process.env[key]
+    const value = overrides[key]
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+  try {
+    return fn()
+  } finally {
+    for (const key of Object.keys(original)) {
+      const value = original[key]
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+}
+
 function getHookIds(result: ReturnType<typeof loadDiscoveredHooks>, event: string): string[] {
   return (result.hooks.get(event as never) ?? []).map((hook) => hook.id ?? "<none>")
 }
