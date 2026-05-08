@@ -4,6 +4,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { resetPiHooksLoggerForTests } from "../core/logger.js"
+import { __testing__ as adapterTesting } from "./adapter.js"
 import { resetHookAutocompleteForTests } from "./autocomplete.js"
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
