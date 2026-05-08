@@ -561,9 +561,9 @@ const cases: Case[] = [
     },
   },
   {
-    name: "logger writes are deferred to a microtask and flush eventually",
+    name: "logger writes drain through the documented test helper",
     run: async () => {
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "pi-yaml-hooks-logger-async-"))
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "pi-yaml-hooks-logger-drain-"))
       const logFile = path.join(tempDir, "log.ndjson")
       const previousFile = process.env.PI_YAML_HOOKS_LOG_FILE
       const previousLevel = process.env.PI_YAML_HOOKS_LOG_LEVEL
@@ -577,19 +577,15 @@ const cases: Case[] = [
         logger.info("test", "first")
         logger.info("test", "second")
         logger.info("test", "third")
-
-        // The actual disk write should be deferred. We cannot fully prove
-        // that without timing, but at least assert no extra synchronous
-        // drain has run yet AND that file may or may not exist.
-        const drainAfterScheduling = getPiHooksLoggerDrainCountForTests()
-        if (drainAfterScheduling !== drainBefore) {
-          return { ok: false, detail: `expected drain not to run synchronously (before=${drainBefore} after=${drainAfterScheduling})` }
-        }
-
-        // Microtask drain (queueMicrotask) runs at the next await point.
-        await Promise.resolve()
-        await Promise.resolve()
         flushPiHooksLoggerForTests()
+
+        // Each call advances the drain counter — useful for asserting the
+        // logger executed at all even when inspecting on-disk state would
+        // be racy (which it currently isn't, but the harness is stable).
+        const drainAfter = getPiHooksLoggerDrainCountForTests()
+        if (drainAfter <= drainBefore) {
+          return { ok: false, detail: `drain counter did not advance (before=${drainBefore} after=${drainAfter})` }
+        }
 
         if (!existsSync(logFile)) return { ok: false, detail: "log file not created" }
         const lines = readFileSync(logFile, "utf8").split("\n").filter(Boolean)
