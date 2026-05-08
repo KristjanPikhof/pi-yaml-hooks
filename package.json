@@ -37,7 +37,7 @@
   ],
   "files": [
     "dist",
-    "docs/README.md",
+    "docs",
     "examples/post-tool-developer-feedback",
     "examples/pre-tool-developer-guards",
     "examples/README.md",
