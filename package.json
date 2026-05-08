@@ -18,15 +18,22 @@
     ]
   },
   "keywords": [
-    "pi",
-    "pi-package",
-    "pi-coding-agent",
-    "coding-agent",
-    "agent-hooks",
     "hooks",
     "yaml",
+    "hook",
     "automation",
-    "developer-tools"
+    "ai",
+    "pi",
+    "developer-tools",
+    "agents",
+    "agentic-ai",
+    "coding-agent",
+    "agent-hooks",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "pi-extensions",
+    "pi-hooks"
   ],
   "files": [
     "dist",
