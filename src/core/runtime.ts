@@ -545,6 +545,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
           toolName: eventInput.tool,
           toolArgs,
         },
+        boundGlobMatcher,
       )
 
       if (result.blocked) {
