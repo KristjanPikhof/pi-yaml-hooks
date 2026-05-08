@@ -119,18 +119,18 @@ Two install paths are supported:
 
 **PI package (recommended)** — use `pi install` or add the git URL to your `settings.json` as shown in the [Install](#install) section above. PI manages the clone and loads the extension automatically. This is the primary and fully-supported path.
 
-**npm library** — `pi-hooks` is also published to npm and can be imported directly:
+**npm library** — `pi-yaml-hooks` is also published to npm and can be imported directly:
 
 ```ts
-import PiHooks from 'pi-hooks';
-import { extensions } from 'pi-hooks/extensions';
+import PiHooks from 'pi-yaml-hooks';
+import { extensions } from 'pi-yaml-hooks/extensions';
 ```
 
 The package exposes:
 - `.` → `./dist/index.js` (default export: the PI extension)
 - `./extensions` → `./dist/extensions/index.js` (named re-export for the extensions entry-point)
 
-`npm install pi-hooks` requires Node.js `>=22.0.0` and the PI SDK peer dependencies to be present in the consuming project.
+`npm install pi-yaml-hooks` requires Node.js `>=22.0.0` and the PI SDK peer dependencies to be present in the consuming project.
 
 ## Quick start
 
