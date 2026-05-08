@@ -179,6 +179,177 @@ const cases: Case[] = [
         : { ok: false, detail: `records=${JSON.stringify(records)}` }
     },
   },
+  {
+    // P2-5 regression: repeated dispatches with the same glob patterns
+    // hit the runtime-side glob matcher cache. We assert that pattern
+    // evaluation produces the same matched/unmatched outcome across
+    // many invocations — caching must not change observable behavior.
+    name: "memoized glob matchers preserve match correctness across many invocations",
+    run: async () => {
+      const records: string[] = []
+      const runtime = createHooksRuntime(createFakeHost(records), {
+        directory: "/repo",
+        hooks: buildHookMap(
+          [{ notify: "memo-match" }],
+          "tool.after.write",
+          [{ matchesAnyPath: ["src/**/*.ts", "lib/**/*.ts"] }],
+        ),
+      })
+
+      const matchedPaths = ["/repo/src/a.ts", "/repo/src/sub/b.ts", "/repo/lib/x.ts"]
+      const ignoredPaths = ["/repo/docs/readme.md", "/repo/scripts/deploy.sh"]
+
+      let callIdCounter = 0
+      for (let iteration = 0; iteration < 3; iteration += 1) {
+        for (const path of [...matchedPaths, ...ignoredPaths]) {
+          callIdCounter += 1
+          await runtime["tool.execute.after"]({
+            tool: "write",
+            sessionID: "s1",
+            callID: `c${callIdCounter}`,
+            args: { path, content: "ok" },
+          })
+        }
+      }
+
+      const expected = matchedPaths.length * 3
+      return records.length === expected && records.every((r) => r === "memo-match")
+        ? { ok: true }
+        : { ok: false, detail: `records=${JSON.stringify(records)} expected=${expected}` }
+    },
+  },
+  {
+    // P2-10 regression: when an idle dispatch hook returns a generic
+    // failure (not a host-died error), the runtime must consume the
+    // pending changes so the next idle event does not loop forever on
+    // the same poison change set.
+    name: "session.idle consumes changes when a hook throws a non-host-died error",
+    run: async () => {
+      const seenCommands: string[] = []
+      let throwsRemaining = 1
+      const hooks = buildHookMap(
+        [{ bash: "job:idle" }],
+        "session.idle",
+      )
+      const runtime = createHooksRuntime(createFakeHost([]), {
+        directory: "/repo",
+        hooks,
+        executeBash: (request: BashExecutionRequest): Promise<BashHookResult> => {
+          seenCommands.push(request.command)
+          if (throwsRemaining > 0) {
+            throwsRemaining -= 1
+            return Promise.reject(new Error("synthetic hook failure"))
+          }
+          return Promise.resolve({
+            command: request.command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            blocking: false,
+            status: "success" as const,
+            durationMs: 0,
+            signal: null,
+          })
+        },
+      })
+
+      // Stage one file change.
+      await runtime["tool.execute.after"]({
+        tool: "write",
+        sessionID: "s1",
+        callID: "c1",
+        args: { path: "/repo/a.ts", content: "x" },
+      })
+
+      // First idle: dispatch throws; runtime should consume changes anyway.
+      let firstIdleErrored = false
+      try {
+        await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+      } catch {
+        firstIdleErrored = true
+      }
+      if (!firstIdleErrored) {
+        return { ok: false, detail: "expected first idle to surface the hook error" }
+      }
+
+      const callsAfterFirst = seenCommands.length
+
+      // Second idle: there should be NO pending changes left to dispatch
+      // (because we consumed on hook-no), so the bash hook should not be
+      // re-invoked.
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      return seenCommands.length === callsAfterFirst
+        ? { ok: true }
+        : { ok: false, detail: `seenCommands=${JSON.stringify(seenCommands)}` }
+    },
+  },
+  {
+    // P2-10 regression #2: when the idle dispatch fails with a
+    // host-died-style error, pending changes must be RETAINED so the
+    // next idle (after the host comes back up) can replay them.
+    name: "session.idle retains changes when host appears to have died",
+    run: async () => {
+      const seenCommands: string[] = []
+      let throwsRemaining = 1
+      const hooks = buildHookMap(
+        [{ bash: "job:idle" }],
+        "session.idle",
+      )
+      const runtime = createHooksRuntime(createFakeHost([]), {
+        directory: "/repo",
+        hooks,
+        executeBash: (request: BashExecutionRequest): Promise<BashHookResult> => {
+          seenCommands.push(request.command)
+          if (throwsRemaining > 0) {
+            throwsRemaining -= 1
+            // ECONNREFUSED is one of the codes the runtime treats as a
+            // host-died signal; the runtime should NOT consume changes.
+            const error = Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" })
+            return Promise.reject(error)
+          }
+          return Promise.resolve({
+            command: request.command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            blocking: false,
+            status: "success" as const,
+            durationMs: 0,
+            signal: null,
+          })
+        },
+      })
+
+      await runtime["tool.execute.after"]({
+        tool: "write",
+        sessionID: "s1",
+        callID: "c1",
+        args: { path: "/repo/a.ts", content: "x" },
+      })
+
+      let firstIdleErrored = false
+      try {
+        await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+      } catch {
+        firstIdleErrored = true
+      }
+      if (!firstIdleErrored) {
+        return { ok: false, detail: "expected first idle to surface the host-died error" }
+      }
+
+      // Second idle: the host is "back" so the bash executor returns
+      // success — the pending change must replay, meaning the bash hook
+      // is invoked a second time.
+      await runtime.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } })
+
+      return seenCommands.length === 2
+        ? { ok: true }
+        : { ok: false, detail: `seenCommands=${JSON.stringify(seenCommands)}` }
+    },
+  },
 ]
 
 export async function main(): Promise<number> {
