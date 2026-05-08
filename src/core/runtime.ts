@@ -696,13 +696,24 @@ async function dispatchHooks(
   const dispatchKey = `${event}:${sessionID}`
   const dispatchState = dispatchStates.get(dispatchKey)
   if (dispatchState?.active) {
+    // P1-13 fix: snapshot the ALS recursion-guard store *now* so the queued
+    // dispatch re-enters the same frame on drain. `getStore()` returns the
+    // current Set if we are inside a withActionRecursionGuard run, or
+    // `undefined` if no guard is active — both cases are safe to capture.
+    const recursionGuardStore = actionRecursionGuards.getStore()
     if (!options.canBlock) {
-      dispatchState.pending.push({ context, options })
+      dispatchState.pending.push({ context, options, ...(recursionGuardStore ? { recursionGuardStore } : {}) })
       return { blocked: false }
     }
 
     return await new Promise<HookExecutionResult>((resolve, reject) => {
-      dispatchState.pending.push({ context, options, resolve, reject })
+      dispatchState.pending.push({
+        context,
+        options,
+        resolve,
+        reject,
+        ...(recursionGuardStore ? { recursionGuardStore } : {}),
+      })
     })
   }
 
