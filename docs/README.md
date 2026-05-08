@@ -28,7 +28,7 @@
 
 These are the details that matter most when authoring hooks:
 
-- The documented support range is `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`.
+- The documented support range is `@earendil-works/pi-coding-agent ^0.74.0`.
 - Only one global root config and one project root config are discovered.
 - Each root can import more hook files before its own hooks load.
 - Later files stay compatible with the same explicit `override:` / `disable:` behavior by `id`.

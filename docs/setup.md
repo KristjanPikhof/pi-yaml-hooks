@@ -7,11 +7,11 @@ This guide gets `pi-yaml-hooks` installed and gives you a safe place to put `hoo
 - macOS or Linux
 - Node.js `>= 22.0.0`
 - `bash` on `PATH`
-- `@mariozechner/pi-coding-agent ^0.68.1 || ^0.69.0`
+- `@earendil-works/pi-coding-agent ^0.74.0`
 
 Windows is unsupported because the hook runner expects a POSIX `bash`.
 
-This repository documents the peer support range exactly as `^0.68.1 || ^0.69.0`. Older 0.67-era installs are no longer part of the documented contract, even if some behavior still happens to work.
+This repository documents the peer support range exactly as `^0.74.0` against the new `@earendil-works` scope (PI moved from `@mariozechner/*` to `@earendil-works/*` in 0.74.0). Older 0.67–0.73 installs on the legacy scope are no longer part of the documented contract, even if some behavior still happens to work.
 
 ## Install the extension
 
