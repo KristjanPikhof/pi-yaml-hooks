@@ -304,7 +304,7 @@ function sanitizeLogValue(value: string): string {
   return `${redacted.slice(0, MAX_LOG_FIELD_LENGTH)}… [truncated ${redacted.length - MAX_LOG_FIELD_LENGTH} chars]`
 }
 
-function redactSensitiveContent(value: string): string {
+export function redactSensitiveContent(value: string): string {
   return (
     value
       // PEM blocks (private keys, RSA keys, etc.) — collapse the entire block to a marker

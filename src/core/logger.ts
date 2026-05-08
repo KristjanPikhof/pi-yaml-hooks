@@ -142,7 +142,10 @@ function createPiHooksLogger(): PiHooksLogger {
 
       try {
         mkdirSync(path.dirname(filePath), { recursive: true })
-        appendFileSync(filePath, `${line}\n`, "utf8")
+        const fd = openLogFileSafely(filePath)
+        if (fd !== undefined) {
+          writeSync(fd, `${line}\n`)
+        }
       } catch (error) {
         if (!warnedAboutLoggerFailure) {
           warnedAboutLoggerFailure = true
