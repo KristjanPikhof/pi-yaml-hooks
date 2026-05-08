@@ -30,12 +30,73 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isProcessAlive(pid: number): boolean {
+  // process.kill(pid, 0) returns true for zombies (the kernel keeps the entry
+  // around until the parent waits on it). For our tests "the process is no
+  // longer running" is the relevant predicate, so we explicitly classify
+  // state Z as dead by inspecting /proc on Linux and `ps -o stat` on macOS.
   try {
     process.kill(pid, 0)
-    return true
   } catch {
     return false
   }
+
+  const state = readProcessState(pid)
+  if (state === undefined) {
+    // We couldn't read the state — fall back to the kill(0) result, which
+    // means the kernel still has an entry for this pid.
+    return true
+  }
+  // Z = zombie, X = dead. Anything else (R, S, D, T, ...) is "still around".
+  return state !== "Z" && state !== "X"
+}
+
+function readProcessState(pid: number): string | undefined {
+  if (process.platform === "linux") {
+    try {
+      const raw = readFileSync(`/proc/${pid}/stat`, "utf8")
+      // Format: "<pid> (comm) <state> ..." — comm can contain spaces and
+      // close-paren so look for the LAST close-paren and read the next field.
+      const lastParen = raw.lastIndexOf(")")
+      if (lastParen < 0) return undefined
+      const after = raw.slice(lastParen + 1).trim()
+      const stateChar = after.split(/\s+/)[0]
+      return stateChar?.charAt(0)
+    } catch {
+      return undefined
+    }
+  }
+  if (process.platform === "darwin") {
+    try {
+      const raw = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+      const trimmed = raw.trim()
+      if (!trimmed) return undefined
+      // macOS ps state codes start with one of R, S, I, T, U, Z. Take the
+      // first character so we ignore modifiers like '+' and 'N'.
+      return trimmed.charAt(0)
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+async function waitForNonEmptyFile(filePath: string, timeoutMs: number): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      if (existsSync(filePath)) {
+        const contents = readFileSync(filePath, "utf8").trim()
+        if (contents.length > 0) return contents
+      }
+    } catch {
+      // ignore — keep polling
+    }
+    await sleep(50)
+  }
+  return undefined
 }
 
 function expectRedacted(input: string, mustNotContain: string[]): { ok: boolean; detail?: string } {
