@@ -94,7 +94,7 @@ const cases: Case[] = [
           `imports:\n  - ../../shared/base.yaml\n  - hook-pack\nhooks:\n  - id: root-layer\n    override: package-layer\n    event: session.created\n    actions:\n      - notify: root\n`,
         )
 
-        const result = loadTrustedProject(projectRoot, homeDir)
+        const result = withEnv({ PI_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
         const hooks = result.hooks.get("session.created") ?? []
         const notify = hooks[0]?.actions[0]
         return hooks.length === 1 && hooks[0]?.id === "root-layer" && notify && "notify" in notify && notify.notify === "root"
@@ -158,7 +158,7 @@ const cases: Case[] = [
         writeYaml(path.join(packageRoot, "hooks.yaml"), `hooks:\n  - id: packaged\n    event: session.created\n    actions:\n      - notify: packaged\n`)
         writeYaml(path.join(projectRoot, ".pi", "hook", "hooks.yaml"), `imports:\n  - hook-pack\nhooks: []\n`)
 
-        const result = loadTrustedProject(projectRoot, homeDir)
+        const result = withEnv({ PI_HOOKS_ALLOW_PACKAGE_IMPORTS: "1" }, () => loadTrustedProject(projectRoot, homeDir))
         return JSON.stringify(getHookIds(result, "session.created")) === JSON.stringify(["packaged"])
           ? { ok: true }
           : { ok: false, detail: JSON.stringify({ files: result.files, errors: result.errors }) }
