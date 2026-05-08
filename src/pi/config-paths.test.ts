@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
@@ -215,6 +215,91 @@ const cases: Case[] = [
         const paths = withEnv("PI_HOOKS_TRUST_PROJECT", "1", () => discoverHookConfigPaths({ homeDir, projectDir: nestedDir }))
         return JSON.stringify(paths) === JSON.stringify([configPath]) ? { ok: true } : { ok: false, detail: JSON.stringify(paths) }
       } finally {
+        cleanup(sandbox)
+      }
+    },
+  },
+  {
+    name: "trust list parsed once per mtime change",
+    run: () => {
+      const sandbox = createSandbox("trust-cache")
+      const homeDir = path.join(sandbox, "home")
+      const projectDir = path.join(sandbox, "project")
+      try {
+        __resetTrustListCacheForTests()
+        mkdirSync(projectDir, { recursive: true })
+        writePreferredHooks(projectDir)
+        writeTrustedProjects(homeDir, [projectDir])
+        const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
+
+        // Track every readFile invocation that targets the trust file.
+        let trustFileReadCount = 0
+        const tracker = (filePath: string): string => {
+          if (filePath === trustFile) trustFileReadCount += 1
+          return readFileSync(filePath, "utf8")
+        }
+
+        const opts = { homeDir, projectDir, readFile: tracker }
+        const r1 = resolveProjectHookResolution(opts)
+        const r2 = resolveProjectHookResolution(opts)
+        const r3 = resolveProjectHookResolution(opts)
+        const readsBeforeMutation = trustFileReadCount
+        const trustedBefore = r1?.trusted && r2?.trusted && r3?.trusted
+
+        // Mutate the trust file: change content + bump mtime so the
+        // fingerprint changes and the cache invalidates.
+        writeTrustedProjects(homeDir, [projectDir, "/some/other/project"])
+        const future = new Date(Date.now() + 5_000)
+        utimesSync(trustFile, future, future)
+
+        const r4 = resolveProjectHookResolution(opts)
+        const r5 = resolveProjectHookResolution(opts)
+        const readsAfterMutation = trustFileReadCount - readsBeforeMutation
+        const trustedAfter = r4?.trusted && r5?.trusted
+
+        return trustedBefore && trustedAfter && readsBeforeMutation === 1 && readsAfterMutation === 1
+          ? { ok: true }
+          : {
+              ok: false,
+              detail: JSON.stringify({ trustedBefore, trustedAfter, readsBeforeMutation, readsAfterMutation }),
+            }
+      } finally {
+        __resetTrustListCacheForTests()
+        cleanup(sandbox)
+      }
+    },
+  },
+  {
+    name: "isProjectTrusted honours injected exists for virtual filesystems",
+    run: () => {
+      const sandbox = createSandbox("trust-exists")
+      const homeDir = path.join(sandbox, "home")
+      const projectDir = path.join(sandbox, "project")
+      try {
+        __resetTrustListCacheForTests()
+        mkdirSync(projectDir, { recursive: true })
+        writePreferredHooks(projectDir)
+
+        // Note: no actual trust file on disk. We inject `exists` returning
+        // true and `readFile` returning a synthetic trust list to confirm the
+        // injected exists is honoured (rather than `existsSync` short-circuit).
+        const fakeTrustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
+        const projectConfigPath = path.join(projectDir, ".pi", "hook", "hooks.yaml")
+        const resolution = resolveProjectHookResolution({
+          homeDir,
+          projectDir,
+          exists: (filePath) => filePath === fakeTrustFile || filePath === projectConfigPath,
+          readFile: (filePath) => {
+            if (filePath === fakeTrustFile) return JSON.stringify([projectDir])
+            return readFileSync(filePath, "utf8")
+          },
+        })
+
+        return resolution?.trusted === true
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify({ resolution }) }
+      } finally {
+        __resetTrustListCacheForTests()
         cleanup(sandbox)
       }
     },
