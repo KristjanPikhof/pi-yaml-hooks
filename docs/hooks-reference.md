@@ -101,7 +101,7 @@ Without overrides, hooks from both files stay active.
 | `action` | no | `stop` | Accepted only on `tool.before.*` hooks. On PI it does not add much beyond the normal pre-tool block behavior. |
 | `conditions` | no | array | Additional filters. All conditions must pass. |
 | `scope` | no | `all`, `main`, `child` | Filters which session lineage the hook itself runs in. Defaults to `all`. |
-| `runIn` | no | `current`, `main` | Compatibility field for action targeting. Defaults to `current`. See the PI-specific notes below before relying on it. |
+| `runIn` | no | `current`, `main` | Compatibility field for action targeting. Defaults to `current`. On PI, non-`bash` actions (i.e. `tool`, `notify`, `confirm`, `setStatus`) with `runIn: main` are rejected at load time and the hook is dropped. See the PI-specific notes below before relying on it. |
 | `async` | no | boolean or object | Queues the hook for background execution. `true` keeps serialized per-event behavior. `{ group?, concurrency? }` lets hooks share a named async queue with optional bounded concurrency. Only allowed on non-`tool.before` hooks, not on `session.idle`, and only for `bash`-only hooks. |
 | `override` | no | string | Replaces a previously loaded hook with the given `id`. |
 | `disable` | no | boolean | When used with `override`, removes the targeted earlier hook instead of replacing it. |
