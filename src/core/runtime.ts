@@ -260,12 +260,16 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
     }
 
     hooks = nextLoaded.hooks
+    // P3 #23: prefer the precomputed loaded.files list over re-flattening the
+    // hook map on every reload. The two are equivalent (both are the unique
+    // file paths a hook came from), but `loaded.files` is built once during
+    // discovery and avoids an O(hooks) flatten + dedupe on the hot path.
     logger.info("config_reload", "Hook configuration reloaded.", {
       cwd: projectDir,
       details: {
         signature: nextLoaded.signature,
         eventCount: hooks.size,
-        files: Array.from(new Set(Array.from(hooks.values()).flat().map((hook) => hook.source.filePath))),
+        files: nextLoaded.files,
       },
     })
     lastReportedInvalidSignature = undefined
