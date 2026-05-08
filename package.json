@@ -34,7 +34,8 @@
     "pi-extension",
     "pi-package",
     "pi-extensions",
-    "pi-hooks"
+    "pi-hooks",
+    "pi-yaml-hooks"
   ],
   "files": [
     "dist",
