@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -571,11 +571,10 @@ const cases: Case[] = [
           `hooks:\n  - id: leaf\n    event: session.created\n    actions:\n      - notify: edited\n`,
           "utf8",
         )
-        // Force a distinct mtime by touching the file via fs.utimes equivalent.
-        // Using writeFileSync alone is usually enough but we additionally bump
-        // mtime to be paranoid on coarse filesystems.
-        const fs = require("node:fs") as typeof import("node:fs")
-        fs.utimesSync(importedPath, future, future)
+        // Force a distinct mtime by touching the file. writeFileSync alone is
+        // usually enough but we additionally bump mtime to be paranoid on
+        // coarse-grained filesystems.
+        utimesSync(importedPath, future, future)
 
         const second = loadDiscoveredHooksSnapshot({ homeDir, projectDir: projectRoot })
         const secondNotify = second.hooks.get("session.created")?.[0]?.actions[0]
