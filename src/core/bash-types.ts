@@ -27,7 +27,27 @@ export interface BashProcessResult {
   readonly exitCode: number
   readonly signal: NodeJS.Signals | null
   readonly timedOut: boolean
+  /**
+   * True when stdout and/or stderr exceeded the byte cap configured via
+   * PI_YAML_HOOKS_MAX_OUTPUT_BYTES (default 1 MiB) and was truncated. Hooks
+   * inspecting captured output should treat the trailing content as a
+   * partial view in that case.
+   */
+  readonly outputTruncated: boolean
+  /**
+   * True when the JSON-serialized hook context exceeded the stdin cap
+   * configured via PI_YAML_HOOKS_MAX_STDIN_BYTES (default 256 KiB) and the
+   * payload delivered to the bash process was a reduced placeholder.
+   */
+  readonly stdinTruncated: boolean
 }
+
+/**
+ * Exit code returned by `executeBashHook` when the hook command times out.
+ * Matches the GNU coreutils `timeout` convention so that consumers can
+ * distinguish a timeout from a real exit-1 / exit-2 outcome.
+ */
+export const TIMEOUT_EXIT_CODE = 124
 
 export type BashHookResultStatus = "success" | "failed" | "blocked" | "timed_out"
 
