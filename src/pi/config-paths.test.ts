@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 
 import {
+  __resetTrustListCacheForTests,
   discoverHookConfigPaths,
   resolveProjectHookResolution,
 } from "../core/config-paths.js"
