@@ -5,6 +5,7 @@ import path from "node:path"
 
 import type { ExtensionAPI, ExtensionContext, UserBashEvent, UserBashEventResult } from "@earendil-works/pi-coding-agent"
 
+import { getPiHooksLogger } from "../core/logger.js"
 import type { HooksRuntime } from "../core/runtime.js"
 
 const ENABLE_USER_BASH_ENV = "PI_YAML_HOOKS_ENABLE_USER_BASH"
