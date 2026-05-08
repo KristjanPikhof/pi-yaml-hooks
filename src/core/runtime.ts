@@ -678,6 +678,7 @@ async function dispatchToolHooks(
   toolName: string,
   sessionID: string,
   context: RuntimeActionContext,
+  globMatcher: GlobMatcher = defaultGlobMatcher,
 ): Promise<HookExecutionResult> {
   const wildcardResult = await dispatchHooks(
     hooks,
@@ -692,6 +693,7 @@ async function dispatchToolHooks(
     dispatchStates,
     actionRecursionGuards,
     asyncQueues,
+    globMatcher,
   )
   if (wildcardResult.blocked) {
     return wildcardResult
