@@ -225,6 +225,18 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   let hooks = loaded.hooks
   let lastLoadedSignature = loaded.signature
   let lastReportedInvalidSignature = loaded.errors.length > 0 ? loaded.signature : undefined
+  // P1-1 fix: stat-only fingerprint computed from the most recently loaded
+  // file set so refreshHooks can short-circuit without re-entering the
+  // (heavier) load-hooks parsing path on every event. The fingerprint covers
+  // the discovered roots PLUS any imports that the previous load resolved,
+  // so editing an imported file still busts the cache. The first refresh
+  // after construction uses the file set captured by the initial discovery
+  // call above (or, for `options.hooks`, an empty set so the gate below
+  // continues to short-circuit).
+  let lastLoadedFiles: readonly string[] = options.hooks
+    ? []
+    : (loaded as { files?: readonly string[] }).files ?? []
+  let lastStatFingerprint = computeStatFingerprint(lastLoadedFiles)
   const state = new SessionStateStore()
   const runBashHook: ExecuteBashHook = options.executeBash ?? ((request) => host.runBash(request))
   const dispatchStates = new Map<string, DispatchState>()
@@ -236,7 +248,23 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       return hooks
     }
 
+    // P1-1 fix: compute a cheap stat fingerprint over the previously loaded
+    // file set plus the currently discovered roots. If nothing has changed
+    // we skip the YAML parse + import expansion entirely. Discovered roots
+    // are included so a newly added (or removed) hooks.yaml still triggers
+    // a real reload — `statSync` returns "missing" for absent paths, which
+    // changes the fingerprint as expected.
+    const discoveredEntries = discoverHookConfigEntries({ projectDir })
+    const discoveredFiles = discoveredEntries.map((entry) => entry.filePath)
+    const fingerprintFiles = mergeUnique(lastLoadedFiles, discoveredFiles)
+    const nextStatFingerprint = computeStatFingerprint(fingerprintFiles)
+    if (nextStatFingerprint === lastStatFingerprint && lastLoadedFiles.length > 0) {
+      return hooks
+    }
+
     const nextLoaded = loadDiscoveredHooksSnapshot({ projectDir })
+    lastLoadedFiles = nextLoaded.files
+    lastStatFingerprint = computeStatFingerprint(mergeUnique(nextLoaded.files, discoveredFiles))
     if (nextLoaded.signature === lastLoadedSignature) {
       return hooks
     }
