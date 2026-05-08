@@ -769,9 +769,24 @@ function parseAsync(
     }
   }
 
-  if (Array.isArray(actions) && actions.some((a) => typeof a === "object" && a !== null && ("command" in a || "tool" in a))) {
+  if (
+    Array.isArray(actions) &&
+    actions.some(
+      (a) =>
+        typeof a === "object" &&
+        a !== null &&
+        ("command" in a || "tool" in a || "notify" in a || "confirm" in a || "setStatus" in a),
+    )
+  ) {
     return {
-      errors: [createError(filePath, "invalid_async", `hooks[${index}].async hooks must use only bash actions. command and tool actions have no timeout and can stall the async queue.`, `hooks[${index}].async`)],
+      errors: [
+        createError(
+          filePath,
+          "invalid_async",
+          `hooks[${index}].async hooks must use only bash actions. command, tool, notify, confirm, and setStatus actions either have no timeout, depend on the live UI session, or block the agent turn, and would stall or misroute the async queue.`,
+          `hooks[${index}].async`,
+        ),
+      ],
     }
   }
 
