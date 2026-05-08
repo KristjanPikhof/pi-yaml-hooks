@@ -508,7 +508,7 @@ For a real PI run in the documented peer range, verify these compatibility-sensi
 - `/new` triggers lossy cleanup via `session.deleted` and a fresh `session.created`
 - `/resume` and `/fork` do not re-fire `session.created` for an existing session re-entry
 - `/new`, `/resume`, `/fork`, and `/quit` do not double-run `session.deleted` cleanup when PI emits both `session_before_switch` and `session_shutdown`
-- PI 0.70.x remains gated until the future SDK matrix and the runtime smoke both pass, including the no-builtin-tools check
+- Future PI minor lines (e.g. `0.75.x`) remain gated until `npm run compat:sdk-matrix:future` and the runtime smoke both pass, including the no-builtin-tools check
 
 ## Unsupported and advisory cases
 
