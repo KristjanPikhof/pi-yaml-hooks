@@ -1093,6 +1093,7 @@ async function shouldRunHook(
   projectDir: string,
   sessionID: string,
   context: RuntimeActionContext,
+  globMatcher: GlobMatcher = defaultGlobMatcher,
 ): Promise<HookMatchDecision> {
   const pathMatchContext = context.pathMatchContext ?? buildPathMatchContext(projectDir, context)
   const changedPaths = pathMatchContext.changedPaths
@@ -1130,7 +1131,7 @@ async function shouldRunHook(
         }
       }
 
-      if (!changedPaths.some((filePath) => condition.matchesAnyPath.some((pattern) => matchesGlob(filePath, pattern)))) {
+      if (!changedPaths.some((filePath) => condition.matchesAnyPath.some((pattern) => globMatcher(filePath, pattern)))) {
         return {
           matched: false,
           reason: "matchesAnyPath_failed",
@@ -1151,7 +1152,7 @@ async function shouldRunHook(
       }
     }
 
-    if (!changedPaths.every((filePath) => condition.matchesAllPaths.some((pattern) => matchesGlob(filePath, pattern)))) {
+    if (!changedPaths.every((filePath) => condition.matchesAllPaths.some((pattern) => globMatcher(filePath, pattern)))) {
       return {
         matched: false,
         reason: "matchesAllPaths_failed",
