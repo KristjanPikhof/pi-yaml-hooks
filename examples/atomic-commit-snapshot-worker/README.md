@@ -7,6 +7,12 @@ objects, and replays them as real commits after a short quiet window.
 This is **not** a built-in feature of pi-yaml-hooks — it is an example you wire up
 yourself by adding the snippet below to your `hooks.yaml`.
 
+> **Repository-only example.** This example directory is **not** shipped with
+> the npm package. Use it by cloning the
+> [pi-yaml-hooks GitHub repository](https://github.com/KristjanPikhof/pi-yaml-hooks)
+> and pointing your `hooks.yaml` at the on-disk path. `pi install pi-yaml-hooks`
+> alone does not give you these scripts.
+
 ## Use as a pi-yaml-hooks hook
 
 ### 1. Prerequisites
