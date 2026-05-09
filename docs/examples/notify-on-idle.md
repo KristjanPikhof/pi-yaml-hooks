@@ -1,6 +1,6 @@
 # Notify on idle
 
-Use this when you want the smallest possible visible confirmation that hooks are working.
+The smallest possible visible confirmation that hooks are working: a notification each time PI finishes a turn with no pending messages.
 
 ## Hook snippet
 
