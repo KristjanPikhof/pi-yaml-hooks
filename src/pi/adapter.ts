@@ -25,20 +25,7 @@ import type {
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 
-/**
- * P3-2: prefer the SDK's `ReadonlySessionManager` shape via the canonical
- * accessor on `ExtensionContext`. The SDK defines `ReadonlySessionManager`
- * in `core/session-manager.ts` but does not re-export it from the package
- * root, and `package.json#exports` blocks deep subpath imports under
- * `moduleResolution: "NodeNext"`. Indexing `ExtensionContext["sessionManager"]`
- * is the SDK's only public surface for this type, so we use it directly
- * rather than maintain a hand-rolled `Pick<SessionManager, ...>` mirror.
- */
-type ReadonlySessionManager = ExtensionContext["sessionManager"];
-
 import path from "node:path";
-import { executeBashHook } from "../core/bash-executor.js";
-import type { BashExecutionRequest, BashHookResult } from "../core/bash-types.js";
 import { getPiHooksLogger } from "../core/logger.js";
 import { formatHookLoadSummary, loadDiscoveredHooksSnapshot } from "../core/load-hooks.js";
 import {
@@ -48,10 +35,17 @@ import {
   type ToolExecuteBeforeInput,
   type ToolExecuteBeforeOutput,
 } from "../core/runtime.js";
-import type { HookNotifyLevel, HostAdapter, HostDeliveryResult } from "../core/types.js";
 import { sendHookDiagnostics } from "./diagnostics.js";
-import { getRootSessionId } from "./session-lineage.js";
+import {
+  createHostAdapter,
+  debugLog,
+  isStaleSessionBoundError,
+  type ReadonlySessionManager,
+  safeGetSessionId,
+} from "./host-adapter.js";
 import { registerUserBashInterception } from "./user-bash.js";
+
+export { createHostAdapter } from "./host-adapter.js";
 
 /**
  * Register the PI adapter on the given extension API.
