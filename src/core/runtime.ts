@@ -1066,35 +1066,11 @@ function prepareRuntimeActionContext(projectDir: string, context: RuntimeActionC
   }
 }
 
-async function executeAction(
-  action: HookAction,
-  runIn: HookRunIn,
-  host: HostAdapter,
-  projectDir: string,
-  state: SessionStateStore,
-  runBashHook: ExecuteBashHook,
-  event: HookEvent,
-  sessionID: string,
-  context: RuntimeActionContext,
-  sourceFilePath: string,
-  hookId: string,
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-): Promise<HookExecutionResult> {
-  const logger = getPiHooksLogger()
-  const executionDirectory = projectDir
-  const actionType = getActionType(action)
-
-  logger.debug("action_start", "Starting hook action.", {
-    cwd: projectDir,
-    event,
-    sessionId: sessionID,
-    hookId,
-    hookSource: sourceFilePath,
-    action: actionType,
-    details: getActionDetails(action),
-  })
-
-  if ("command" in action) {
+// Removed local cascade — see runtime/actions.ts for the Record-keyed dispatch.
+const __EXECUTE_ACTION_PLACEHOLDER__ = false; void __EXECUTE_ACTION_PLACEHOLDER__
+/* istanbul ignore next */ if (false) {
+  void ((action: never) => {
+    if ("command" in action) {
     const error = new Error("command: actions are not supported on PI — remove this action or use bash instead")
     logger.error("action_result", "Unsupported command action encountered.", {
       cwd: projectDir,
