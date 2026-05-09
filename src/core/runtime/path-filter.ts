@@ -214,7 +214,7 @@ export function evaluatePathConditions(
 ): HookMatchDecision | null {
   const changedPaths = pathMatchContext.changedPaths
 
-  for (const condition of (hook.conditions ?? []) as readonly HookCondition[]) {
+  for (const condition of hook.conditions ?? []) {
     if (condition === "matchesCodeFiles") {
       if (!pathMatchContext.hasCodeFiles) {
         return {
