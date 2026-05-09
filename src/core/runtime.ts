@@ -427,21 +427,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
           sessionId: sessionID,
           details: { parentID: parentID ?? null },
         })
-        await dispatchHooks(
-          activeHooks,
-          state,
-          host,
-          projectDir,
-          runBashHook,
-          "session.created",
-          sessionID,
-          {},
-          {},
-          dispatchStates,
-          actionRecursionGuards,
-          asyncQueues,
-          boundGlobMatcher,
-        )
+        await invokeDispatchHooks(activeHooks, "session.created", sessionID, {})
         return
       }
 
