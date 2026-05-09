@@ -55,7 +55,14 @@ function buildHookAwarenessSystemPrompt(ctx: ExtensionContext): string | undefin
   }
 
   lines.push("- command actions are unsupported on PI; prefer bash-backed hooks or user-invoked /hooks commands")
-  lines.push("- cross-session targeting for non-bash actions is limited; tool prompts still target the current session")
+  // P2-16: be explicit about the targeting boundary. The previous wording
+  // ("tool prompts still target the current session") was easy to misread
+  // as "tool actions can target sessions" with the current one as a default.
+  // tool: actions on PI inject a follow-up prompt into the same PI session
+  // the hook fired in — they cannot route a prompt to any other session.
+  lines.push(
+    "- tool actions inject a follow-up prompt into the current PI session only; they cannot target other sessions",
+  )
 
   if (!ctx.hasUI) {
     lines.push("- UI is unavailable in this mode: notify/setStatus degrade and confirm denies by default")
