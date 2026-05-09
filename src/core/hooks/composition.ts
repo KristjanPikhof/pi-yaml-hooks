@@ -255,8 +255,9 @@ export function resolveOverrides(
 
     if (override.replacement) {
       orderedHooks.splice(targetIndex, 1, override.replacement)
-      // Replacement keeps the same index; if the replacement carries an id
-      // it becomes the new owner of that slot.
+      // Replacement keeps the same index. The overridden id no longer owns
+      // that slot; if the replacement carries an id, the new id owns it.
+      idIndex.delete(override.targetId)
       if (override.replacement.id) {
         idIndex.set(override.replacement.id, targetIndex)
       }

@@ -135,6 +135,35 @@ const cases: Case[] = [
     },
   },
   {
+    name: "replacement drops old id and indexes replacement id for later overrides",
+    run: () => {
+      const sandbox = createSandbox("replace-id-index")
+      try {
+        const homeDir = path.join(sandbox, "home")
+        const projectRoot = path.join(sandbox, "project")
+        writeYaml(path.join(projectRoot, "shared", "base.yaml"), `hooks:\n  - id: original\n    event: session.created\n    actions:\n      - notify: base\n`)
+        writeYaml(
+          path.join(projectRoot, ".pi", "hook", "hooks.yaml"),
+          `imports:\n  - ../../shared/base.yaml\nhooks:\n  - id: replacement\n    override: original\n    event: session.created\n    actions:\n      - notify: replacement\n  - override: original\n    disable: true\n  - override: replacement\n    disable: true\n`,
+        )
+
+        const result = loadTrustedProject(projectRoot, homeDir)
+        const originalNotFound = result.errors.filter(
+          (error) => error.code === "override_target_not_found" && error.message.includes('"original"'),
+        ).length
+        const replacementNotFound = result.errors.some(
+          (error) => error.code === "override_target_not_found" && error.message.includes('"replacement"'),
+        )
+        const hooks = getHookIds(result, "session.created")
+        return hooks.length === 0 && originalNotFound === 1 && !replacementNotFound
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify({ hooks, errors: result.errors }) }
+      } finally {
+        cleanup(sandbox)
+      }
+    },
+  },
+  {
     name: "directory imports expand in lexical order",
     run: () => {
       const sandbox = createSandbox("dir-import")
