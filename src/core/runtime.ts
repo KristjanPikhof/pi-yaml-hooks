@@ -15,6 +15,7 @@ import {
   type GlobMatcher,
   type GlobMatcherCache,
 } from "./runtime/path-filter.js"
+import { withActionRecursionGuard } from "./runtime/recursion-guard.js"
 import { SessionStateStore } from "./session-state.js"
 import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
 import type {
