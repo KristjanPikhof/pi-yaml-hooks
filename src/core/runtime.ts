@@ -390,24 +390,10 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       }
 
       const toolArgs = eventOutput.args ?? {}
-      const result = await dispatchToolHooks(
-        activeHooks,
-        state,
-        host,
-        projectDir,
-        runBashHook,
-        dispatchStates,
-        actionRecursionGuards,
-        asyncQueues,
-        "before",
-        eventInput.tool,
-        sessionID,
-        {
-          toolName: eventInput.tool,
-          toolArgs,
-        },
-        boundGlobMatcher,
-      )
+      const result = await invokeDispatchToolHooks(activeHooks, "before", eventInput.tool, sessionID, {
+        toolName: eventInput.tool,
+        toolArgs,
+      })
 
       if (result.blocked) {
         if (result.stopSession) {
