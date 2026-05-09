@@ -23,9 +23,17 @@ export type ToolHookEvent = `tool.${ToolHookPhase}.*` | `tool.${ToolHookPhase}.$
 export type HookEvent = SessionHookEvent | ToolHookEvent
 export type HookLegacyCondition = (typeof LEGACY_HOOK_CONDITIONS)[number]
 export type HookPathConditionKey = (typeof PATH_HOOK_CONDITION_KEYS)[number]
+/**
+ * Discriminated union for path conditions. The two members are mutually
+ * exclusive: a single condition entry must specify either `matchesAnyPath`
+ * or `matchesAllPaths`, never both. The `never`-typed excluder is the TS
+ * idiom for compile-time enforcement (P2-24): a value carrying both keys
+ * fails type-checking even though both keys are individually optional in
+ * the underlying record shape.
+ */
 export type HookPathCondition =
-  | { readonly matchesAnyPath: readonly string[] }
-  | { readonly matchesAllPaths: readonly string[] }
+  | { readonly matchesAnyPath: readonly string[]; readonly matchesAllPaths?: never }
+  | { readonly matchesAllPaths: readonly string[]; readonly matchesAnyPath?: never }
 export type HookCondition = HookLegacyCondition | HookPathCondition
 export type HookScope = (typeof HOOK_SCOPES)[number]
 export type HookRunIn = (typeof HOOK_RUN_IN)[number]
