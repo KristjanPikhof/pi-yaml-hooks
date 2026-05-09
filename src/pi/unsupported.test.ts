@@ -80,6 +80,54 @@ const cases: Case[] = [
       return hasAdvisory ? { ok: true } : { ok: false, detail: `advisories=${JSON.stringify(result.advisories)}, errors=${JSON.stringify(result.errors)}` }
     },
   },
+  {
+    // P3-4: allow-list now flags ANY unknown tool name, not just the three
+    // OpenCode-only legacy names. Typos like `write_file` are caught.
+    name: "tool.after.write_file → advisory (unknown tool, allow-list reject)",
+    yaml: `hooks:
+  - event: tool.after.write_file
+    actions:
+      - bash: "echo hi"
+`,
+    check: (result) => {
+      const hasAdvisory = (result.advisories ?? []).some((a) => a.includes("PI built-ins are bash, read, edit, write, grep, find, ls"))
+      return hasAdvisory ? { ok: true } : { ok: false, detail: `advisories=${JSON.stringify(result.advisories)}, errors=${JSON.stringify(result.errors)}` }
+    },
+  },
+  {
+    // P3-4: built-in tool names must NOT trigger the advisory. `write`
+    // is in PI_BUILTIN_TOOLS, so a hook on tool.after.write should load
+    // cleanly with no PI-specific advisories.
+    name: "tool.after.write → no advisory (PI built-in)",
+    yaml: `hooks:
+  - event: tool.after.write
+    actions:
+      - bash: "echo hi"
+`,
+    check: (result) => {
+      const advisories = result.advisories ?? []
+      const hasUnexpected = advisories.some((a) => a.includes("PI built-ins are bash"))
+      return hasUnexpected
+        ? { ok: false, detail: `unexpected advisory for built-in: ${JSON.stringify(advisories)}` }
+        : { ok: true }
+    },
+  },
+  {
+    // P3-4: wildcard event must be silent (no advisory).
+    name: "tool.before.* wildcard → no advisory",
+    yaml: `hooks:
+  - event: tool.before.*
+    actions:
+      - bash: "echo hi"
+`,
+    check: (result) => {
+      const advisories = result.advisories ?? []
+      const hasUnexpected = advisories.some((a) => a.includes("PI built-ins are bash"))
+      return hasUnexpected
+        ? { ok: false, detail: `unexpected advisory for wildcard: ${JSON.stringify(advisories)}` }
+        : { ok: true }
+    },
+  },
 ]
 
 export function main(): number {
