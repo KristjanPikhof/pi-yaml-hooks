@@ -133,6 +133,18 @@ export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
  * Advisories are intended to be surfaced via console.info and/or a new
  * `advisories` field on ParsedHooksFile (load succeeds).
  */
+// PI policy registered with the host-agnostic core loader. P2 #22: the loader
+// no longer imports from `src/pi/*`, so callers that want PI's
+// "unsupported on PI" diagnostics must side-effect-import this module. The
+// production entry point (src/index.ts) does so unconditionally; PI test
+// files that load `parseHooksFile` directly should also import this module
+// to install the policy.
+export const piHookPolicy: HookPolicy = {
+  diagnose: (hookMap: HookMap): HookPolicyDiagnostics => collectUnsupportedDiagnostics(hookMap),
+}
+
+setActiveHookPolicy(piHookPolicy)
+
 export function collectUnsupportedDiagnostics(hookMap: HookMap): UnsupportedDiagnostics {
   const errors: string[] = []
   const advisories: string[] = []
