@@ -700,17 +700,6 @@ function safeGetSessionId(sessionManager: ReadonlySessionManager | undefined): s
   }
 }
 
-function safeGetParentSessionPath(sessionManager: ReadonlySessionManager | undefined): string | undefined {
-  if (!sessionManager) return undefined;
-  try {
-    const header = sessionManager.getHeader();
-    const parent = header?.parentSession;
-    return typeof parent === "string" && parent.length > 0 ? parent : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function isStaleSessionBoundError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /stale|invalidated|replaced session|session-bound/i.test(message);
