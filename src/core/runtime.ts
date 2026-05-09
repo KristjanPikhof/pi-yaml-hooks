@@ -705,47 +705,4 @@ function resolveToolArgs(
   return pendingArgs ?? eventArgs ?? {}
 }
 
-function getHookIdentifier(hook: HookConfig): string {
-  return hook.id ?? `${hook.source.filePath}#hooks[${hook.source.index}]`
-}
-
-function formatHookSource(hook: HookConfig): string {
-  return `${hook.source.filePath}#hooks[${hook.source.index}]`
-}
-
-// P1-15 runtime guard: warn (once per hook source) when a hook combines
-// `async: true` with `action: stop`. The async queue runs after the
-// dispatch loop has already returned, so `action: stop` is silently
-// dropped. Parse-time rejection should land in load-hooks; this warning
-// is the runtime safety net.
-const warnedAsyncStopHookSources = new Set<string>()
-
-function warnAsyncStopOnce(
-  logger: ReturnType<typeof getPiHooksLogger>,
-  hook: HookConfig,
-  projectDir: string,
-): void {
-  const sourceKey = formatHookSource(hook)
-  if (warnedAsyncStopHookSources.has(sourceKey)) {
-    return
-  }
-  warnedAsyncStopHookSources.add(sourceKey)
-  const message = `[pi-yaml-hooks] hook ${sourceKey} declares both async and action: stop; the stop directive is ignored because async hooks cannot block dispatch.`
-  // eslint-disable-next-line no-console
-  console.warn(message)
-  logger.warn("hook_async_stop_ignored", "Async hook combined with action: stop; stop ignored.", {
-    cwd: projectDir,
-    event: hook.event,
-    hookId: getHookIdentifier(hook),
-    hookSource: formatHookSource(hook),
-  })
-}
-
-function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, unknown>> {
-  return changes.map((change) =>
-    change.operation === "rename"
-      ? { operation: change.operation, fromPath: change.fromPath, toPath: change.toPath }
-      : { operation: change.operation, path: change.path },
-  )
-}
 
