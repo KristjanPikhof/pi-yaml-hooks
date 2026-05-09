@@ -1066,11 +1066,7 @@ function prepareRuntimeActionContext(projectDir: string, context: RuntimeActionC
   }
 }
 
-// Removed local cascade — see runtime/actions.ts for the Record-keyed dispatch.
-const __EXECUTE_ACTION_PLACEHOLDER__ = false; void __EXECUTE_ACTION_PLACEHOLDER__
-/* istanbul ignore next */ if (false) {
-  void ((action: never) => {
-    if ("command" in action) {
+if ("command" in action) {
     const error = new Error("command: actions are not supported on PI — remove this action or use bash instead")
     logger.error("action_result", "Unsupported command action encountered.", {
       cwd: projectDir,
