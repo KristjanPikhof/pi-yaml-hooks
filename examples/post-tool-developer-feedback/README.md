@@ -8,8 +8,8 @@ Use this pack when you want lightweight feedback after tools mutate code or proj
 |---|---|
 | `log-source-write` | You want a small audit trail for source files written by PI. |
 | `log-source-edit` | You want the same audit trail for edits. |
-| `mark-package-change` | You want the UI to show that dependency metadata changed. |
-| `suggest-package-check` | You want the current PI session nudged to consider validation after package files change. |
+| `mark-package-change-write` / `mark-package-change-edit` | You want the UI to show that dependency metadata changed, regardless of whether PI wrote or edited the file. |
+| `suggest-package-check-write` / `suggest-package-check-edit` | You want the current PI session nudged to consider validation after package files change, for both write and edit tool calls. |
 
 ## Install
 
