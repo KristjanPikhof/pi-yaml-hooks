@@ -172,12 +172,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (sessionId) {
       try {
         const runtime = getRuntimeFor(ctx.cwd);
-        const input: ToolExecuteAfterInput = {
-          tool: event.toolName,
-          sessionID: sessionId,
-          callID: event.toolCallId,
-          args: (event.input ?? {}) as Record<string, unknown>,
-        };
+        const input = mapToolResultToAfterInput(event, sessionId);
         await runtime["tool.execute.after"](input);
       } catch (error) {
         reportDispatchFailure(logger, {
