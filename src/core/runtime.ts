@@ -15,6 +15,11 @@ import {
   type GlobMatcher,
   type GlobMatcherCache,
 } from "./runtime/path-filter.js"
+import {
+  enqueueAsyncHook,
+  resolveAsyncExecutionConfig,
+  type AsyncQueueState,
+} from "./runtime/async-queue.js"
 import { withActionRecursionGuard } from "./runtime/recursion-guard.js"
 import { SessionStateStore } from "./session-state.js"
 import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
