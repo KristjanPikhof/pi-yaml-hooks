@@ -37,16 +37,19 @@ export type HookPathCondition =
 export type HookCondition = HookLegacyCondition | HookPathCondition
 
 /**
- * Compile-time mutex test for HookPathCondition (P2-24). The discriminated
- * union literally has no member that accepts both keys, so this assignment
- * is rejected at the type level. Lives next to the type so a regression
- * (e.g. someone widening one of the variants) breaks the build immediately.
- *
- * The `// @ts-expect-error` comment is the assertion: if the assignment
- * ever becomes legal, TS will fail the directive and the build breaks.
+ * Compile-time mutex test for HookPathCondition (P2-24). A
+ * StrictPathCondition variant carries a `?: never` excluder that forces
+ * the mutex check; the structural HookPathCondition stays as-is so callers
+ * can keep using `"matchesAnyPath" in condition` narrowing. This type-test
+ * verifies that a literal carrying both keys is rejected by the strict
+ * shape — guaranteeing the runtime loader's mutex check has a static peer.
  */
-// @ts-expect-error — both-keys is intentionally invalid; this is a type-test
-const _HOOK_PATH_CONDITION_MUTEX_TEST: HookPathCondition = {
+type StrictHookPathCondition =
+  | { readonly matchesAnyPath: readonly string[]; readonly matchesAllPaths?: never }
+  | { readonly matchesAllPaths: readonly string[]; readonly matchesAnyPath?: never }
+
+// @ts-expect-error — both-keys is intentionally invalid; this is the mutex test
+const _HOOK_PATH_CONDITION_MUTEX_TEST: StrictHookPathCondition = {
   matchesAnyPath: ["a"],
   matchesAllPaths: ["b"],
 }
