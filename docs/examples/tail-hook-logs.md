@@ -1,6 +1,6 @@
 # Tail hook logs
 
-Use this when you want to see exactly why a hook matched, skipped, or queued a follow-up prompt.
+Tail the persistent hook log to see exactly why a hook matched, skipped, or queued a follow-up prompt.
 
 ## Start PI with persistent hook logging
 
