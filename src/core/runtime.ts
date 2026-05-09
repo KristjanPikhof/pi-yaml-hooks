@@ -1236,25 +1236,3 @@ function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, 
   )
 }
 
-function logHookFailure(event: HookEvent, filePath: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  getPiHooksLogger().error("hook_error", "Hook execution failed.", {
-    event,
-    hookSource: filePath,
-    details: { error: message },
-  })
-  console.error(`[pi-yaml-hooks] ${event} hook from ${filePath} failed: ${message}`)
-}
-
-function normalizeHostDeliveryResult(result: void | HostDeliveryResult | undefined): HostDeliveryResult {
-  if (
-    result &&
-    typeof result === "object" &&
-    (result.status === "accepted" || result.status === "degraded")
-  ) {
-    return result
-  }
-
-  return { status: "accepted" }
-}
-
