@@ -109,13 +109,14 @@ export function registerAdapter(pi: ExtensionAPI): void {
   // tooling) do not retain runtimes for cwds we will never see again. Maps
   // preserve insertion order, so we promote on access by re-setting the key.
   const runtimes = new Map<string, HooksRuntime>();
-  // P2-23: cache the in-flight construction promise per cwd so concurrent
-  // callers cannot trigger dual loads. The first call inserts a pending
-  // promise; subsequent callers receive the same promise. Once construction
-  // resolves, the promise is replaced by the resolved runtime in `runtimes`
-  // (resolved synchronously in the construction path) and the placeholder
-  // is dropped.
-  const pendingRuntimes = new Map<string, Promise<HooksRuntime>>();
+  // P2-23: track cwds whose runtime construction is currently in-flight so
+  // a re-entrant call (e.g. an early hook firing during construction) can
+  // see and reuse the partially-built runtime instead of triggering a
+  // second `loadDiscoveredHooksSnapshot` + `createHooksRuntime`. Today
+  // construction is synchronous so reentry is the only realistic dual-load
+  // path; if we ever make `loadDiscoveredHooksSnapshot` async, this slot
+  // also gives us a place to stash the in-flight Promise.
+  const constructingRuntimes = new Set<string>();
   const callIdsToSessionIds = new Map<string, string>();
   // Track the most recently observed ExtensionContext per cwd so that the
   // HostAdapter UI methods (notify/confirm/setStatus) can reach ctx.ui even
