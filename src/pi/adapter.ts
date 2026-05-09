@@ -514,25 +514,27 @@ export function createHostAdapter(
       // actions runIn: "current" this matches the runtime's intent; runIn:
       // "main" cannot be honoured from a subprocess-less extension and is
       // treated the same as "current".
-      try {
-        const currentSessionId = safeGetSessionId(getSessionManager());
-        pi.sendUserMessage(text, { deliverAs: "followUp" });
-        if (currentSessionId && currentSessionId === sessionId) {
-          logger.info("host_send_prompt", "Queued follow-up prompt in the current PI session.", {
+      // P2-8 fix: check sessions match BEFORE calling sendUserMessage.
+      // Previously the call was made first and then the result was
+      // downgraded if the session mismatched, which queued a follow-up
+      // prompt in the WRONG session as a side effect. Skip the call when
+      // the live session does not match the requested target — the runtime
+      // can degrade gracefully instead.
+      const currentSessionId = safeGetSessionId(getSessionManager());
+      if (!currentSessionId || currentSessionId !== sessionId) {
+        const detail = {
+          requestedSessionId: sessionId,
+          ...(currentSessionId ? { currentSessionId } : {}),
+          text,
+        };
+        logger.debug(
+          "host_send_prompt",
+          "Skipped sendUserMessage because the live PI session no longer matches the hook's target.",
+          {
             cwd: projectDir,
-            details: { sessionId, text },
-          });
-          return { status: "accepted" };
-        }
-
-        logger.warn("host_send_prompt", "Queued follow-up prompt, but PI can only target the current session.", {
-          cwd: projectDir,
-          details: {
-            requestedSessionId: sessionId,
-            ...(currentSessionId ? { currentSessionId } : {}),
-            text,
+            details: detail,
           },
-        });
+        );
         return {
           status: "degraded",
           reason: "current_session_only",
@@ -541,6 +543,15 @@ export function createHostAdapter(
             ...(currentSessionId ? { currentSessionId } : {}),
           },
         };
+      }
+
+      try {
+        pi.sendUserMessage(text, { deliverAs: "followUp" });
+        logger.info("host_send_prompt", "Queued follow-up prompt in the current PI session.", {
+          cwd: projectDir,
+          details: { sessionId, text },
+        });
+        return { status: "accepted" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("host_send_prompt", "sendUserMessage failed.", {
