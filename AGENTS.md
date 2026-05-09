@@ -59,22 +59,7 @@ Examples-only (not product): `examples/atomic-commit-snapshot-worker/`, `/snapsh
 
 ## Env vars
 
-| Var | Effect |
-|---|---|
-| `PI_YAML_HOOKS_ENABLE_USER_BASH` | `=1` enable `user_bash` |
-| `PI_YAML_HOOKS_TRUST_PROJECT` | `=1` trust current project |
-| `PI_YAML_HOOKS_PROMPT_AWARENESS` | `=0` disable prompt injection |
-| `PI_YAML_HOOKS_BASH_EXECUTABLE` | Override bash path |
-| `PI_YAML_HOOKS_MAX_OUTPUT_BYTES` | Bash out cap (def 1 MiB) |
-| `PI_YAML_HOOKS_MAX_STDIN_BYTES` | Bash stdin cap (def 256 KiB) |
-| `PI_YAML_HOOKS_CONFIRM_AUTO_APPROVE` | Auto-accept `confirm:` (testing) |
-| `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS` | Allow imports outside config root |
-| `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS` | Allow npm-package imports |
-| `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR` | Allow project imports whose target escapes the trust anchor |
-| `PI_YAML_HOOKS_DEBUG` | `=1` verbose |
-| `PI_YAML_HOOKS_LOG_LEVEL` | `debug\|info\|warn\|error` |
-| `PI_YAML_HOOKS_LOG_FILE` | Override log path |
-| `PI_YAML_HOOKS_LOG_STDERR` | `=1` mirror to stderr |
+Canonical reference: [`docs/setup.md#environment-variables`](docs/setup.md#environment-variables). All env-var docs link there; do not duplicate the table.
 
 ## Doc rules
 
