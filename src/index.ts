@@ -9,6 +9,10 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// Side-effect import: registers the PI HookPolicy with the core loader so
+// `unsupported_on_pi` diagnostics fire on every parse. P2 #22: core no longer
+// imports from `src/pi/*`, so production must opt the policy in here.
+import "./pi/unsupported.js";
 import { registerAdapter } from "./pi/adapter.js";
 import { registerHookAutocomplete } from "./pi/autocomplete.js";
 import { registerCommands } from "./pi/commands.js";
