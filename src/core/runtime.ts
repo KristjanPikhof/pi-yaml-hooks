@@ -15,16 +15,13 @@ import {
   type GlobMatcher,
   type GlobMatcherCache,
 } from "./runtime/path-filter.js"
+import type { AsyncQueueState } from "./runtime/async-queue.js"
 import {
-  executeAction,
-  logHookFailure,
-  resolveParentSessionID,
-} from "./runtime/actions.js"
-import {
-  enqueueAsyncHook,
-  resolveAsyncExecutionConfig,
-  type AsyncQueueState,
-} from "./runtime/async-queue.js"
+  dispatchHooks,
+  dispatchToolHooks,
+  summarizeChanges,
+  type DispatchState,
+} from "./runtime/dispatch.js"
 import { SessionStateStore } from "./session-state.js"
 import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
 import type {
