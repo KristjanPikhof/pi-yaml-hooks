@@ -17,9 +17,6 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  SessionBeforeSwitchEvent,
-  SessionShutdownEvent,
-  SessionStartEvent,
   ToolCallEvent,
   ToolCallEventResult,
   ToolResultEvent,
