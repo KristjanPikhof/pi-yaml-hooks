@@ -25,8 +25,9 @@ const MAX_LINEAGE_DEPTH = 64;
 const MAX_HEADER_BYTES = 64 * 1024;
 
 /**
- * ReadonlySessionManager is exposed via ExtensionContext.sessionManager but
- * is not re-exported as a named type from the package root. Derive it.
+ * P3-2: same justification as in `adapter.ts` — use the SDK's
+ * `ReadonlySessionManager` shape by indexing `ExtensionContext["sessionManager"]`
+ * (its only public surface) rather than a structural mirror.
  */
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
