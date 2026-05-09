@@ -90,7 +90,7 @@ Typical examples:
 
 ### Use multiple conditions for intersection
 
-If you mean “all changed files are in `src/` and all are TypeScript”, do this:
+If you mean "all changed files are in `src/` and all are TypeScript", do this:
 
 ```yaml
 conditions:
