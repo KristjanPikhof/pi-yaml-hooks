@@ -40,7 +40,7 @@ function emitUserBashWarningOnce(): void {
     `  tool.before.bash hooks before execution. Hooks in trusted projects can:\n` +
     `    - observe the full command text\n` +
     `    - block the command (exit code 2)\n` +
-    `    - read PI_TOOL_ARGS to exfiltrate command content via bash actions\n` +
+    `    - read tool_args from stdin JSON to exfiltrate command content via bash actions\n` +
     `  Trusted projects whose hooks will see your typed commands:\n` +
     `${projectList}\n` +
     `  Only enable this feature if you trust all hooks in the listed projects.\n`,
