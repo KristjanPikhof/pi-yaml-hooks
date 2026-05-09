@@ -66,18 +66,21 @@ Enabling this feature expands the trust surface: hooks in trusted projects can o
 - directory imports expand files in lexical order, but only `*.yaml` / `*.yml` entries are loaded; dotfiles (e.g. `.DS_Store`) and other extensions are skipped
 - package imports (bare specifiers like `hook-pack`) use Node module resolution from the importing file, but are **disabled by default**; set `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1` to opt in
 - imports declared inside the **global** `hooks.yaml` are **refused by default**; set `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` to opt in
+- imports declared inside a **project** `hooks.yaml` whose target (after symlink resolution) falls outside the project's trust anchor are **refused by default**; set `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` to opt in
 - duplicate imports are skipped by canonical path
 - cycles and missing imports produce load errors
+- import recursion is bounded at depth 32; deeper chains fail with `invalid_imports`
 - imported files inherit the importing root scope (`global` or `project`)
 
 ### Trust expansion
 
-Trust on PI is anchored at the project root, not at every imported file. Once a project root is trusted, all of its `imports:` are loaded transitively under that same trust decision. Two safety rails keep that expansion narrow:
+Trust on PI is anchored at the project root, not at every imported file. Once a project root is trusted, all of its `imports:` are loaded transitively under that same trust decision. Three safety rails keep that expansion narrow:
 
 1. The global hooks file (which always loads) cannot pull in additional files unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set, so a global hook cannot silently extend its own footprint.
 2. Bare-specifier imports that resolve through `node_modules` are gated behind `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, so an arbitrary npm dependency cannot register hooks just by being installed.
+3. Project imports cannot escape the project's trust anchor (its repo/worktree root, or the discovered project root). The check follows symlinks, so a link that lives inside the project but points outside is still refused. Set `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` to opt in.
 
-Both gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set.
+All three gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set.
 
 ## Load order and precedence
 
