@@ -32,7 +32,21 @@ const SCOPE_CHILD_ADVISORY =
 const TOOL_NAME_NEVER_MATCH_ADVISORY =
   "PI built-ins are bash, read, edit, write, grep, find, ls. This tool name will never match unless you install a matching custom tool."
 
-const UNSUPPORTED_TOOL_NAMES = new Set<string>(["multiedit", "patch", "apply_patch"])
+// P3-4: switch from a hard-coded deny-list (multiedit, patch, apply_patch)
+// to an allow-list of PI's known built-in tools. Anything outside this set
+// (and outside the wildcard "*") earns the "never match" advisory. The list
+// is intentionally conservative — these are the tool names that pi-yaml-hooks
+// has been observed dispatching against in PI runtime traces. Adding new
+// PI built-ins here is a doc-only change.
+const PI_BUILTIN_TOOLS: ReadonlySet<string> = new Set<string>([
+  "bash",
+  "read",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+])
 
 function prefixWithSource(hook: HookConfig, message: string): string {
   const src = hook.source
