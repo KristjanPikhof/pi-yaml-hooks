@@ -712,10 +712,6 @@ function collectUniqueHooksAcrossAliases(
   return out
 }
 
-type GlobMatcher = (filePath: string, pattern: string) => boolean
-
-const defaultGlobMatcher: GlobMatcher = (filePath, pattern) => matchesGlob(filePath, pattern)
-
 async function dispatchHooks(
   hooks: HookMap,
   state: SessionStateStore,
