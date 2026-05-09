@@ -1461,11 +1461,6 @@ async function resolveParentSessionID(host: HostAdapter, sessionID: string): Pro
   }
 }
 
-function hasCodeExtension(filePath: string): boolean {
-  const extension = extname(filePath).toLowerCase()
-  return Boolean(extension && CODE_EXTENSIONS.has(extension))
-}
-
 // P1-1 helper: cheap stat-based fingerprint shared by the runtime-side
 // refreshHooks short-circuit. Returns a stable string that changes whenever
 // any of the listed files' mtime/size changes, or whenever a file appears
