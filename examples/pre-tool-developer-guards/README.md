@@ -1,5 +1,7 @@
 # Pre-tool developer guards
 
+This is an opt-in example pack, not a built-in `pi-yaml-hooks` feature. Copy or adapt the snippets below into your own `hooks.yaml`.
+
 Use this pack when you want fast checks before PI runs tools that can mutate a project.
 
 ## Good use cases
