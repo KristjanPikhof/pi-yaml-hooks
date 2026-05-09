@@ -11,10 +11,7 @@
 
 import { extname, isAbsolute, matchesGlob, relative } from "node:path"
 
-import type {
-  HookCondition,
-  HookConfig,
-} from "../types.js"
+import type { HookConfig } from "../types.js"
 import type {
   HookMatchDecision,
   PathMatchContext,
