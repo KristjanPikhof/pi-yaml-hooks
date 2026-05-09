@@ -1,4 +1,12 @@
-import type { HookAction, HookConfig, HookEvent, HookMap } from "../core/types.js"
+import type {
+  HookAction,
+  HookConfig,
+  HookEvent,
+  HookMap,
+  HookPolicy,
+  HookPolicyDiagnostics,
+} from "../core/types.js"
+import { setActiveHookPolicy } from "../core/load-hooks.js"
 
 /**
  * PI-specific diagnostics for hook configurations loaded from OpenCode-compatible
@@ -7,16 +15,7 @@ import type { HookAction, HookConfig, HookEvent, HookMap } from "../core/types.j
  * advisories (load succeeds, user is informed).
  */
 
-export interface UnsupportedDiagnostics {
-  readonly errors: string[]
-  readonly advisories: string[]
-  /**
-   * Hooks that produced load-blocking errors. The loader must remove these
-   * from the active hook map so unsupported configs do not execute (P1 #2:
-   * "diagnostic-only" was the prior bug).
-   */
-  readonly invalidHooks: ReadonlySet<HookConfig>
-}
+export type UnsupportedDiagnostics = HookPolicyDiagnostics
 
 const COMMAND_ACTION_ERROR =
   "command: actions are not supported on PI. PI exposes no API to invoke slash commands from event handlers. Remove this action or use bash instead."
