@@ -26,9 +26,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 /**
- * Aliased locally: ReadonlySessionManager is defined in the PI package but
- * not re-exported from its root module. We recover it from ExtensionContext
- * so we don't reach into a subpath export.
+ * P3-2: prefer the SDK's `ReadonlySessionManager` shape via the canonical
+ * accessor on `ExtensionContext`. The SDK defines `ReadonlySessionManager`
+ * in `core/session-manager.ts` but does not re-export it from the package
+ * root, and `package.json#exports` blocks deep subpath imports under
+ * `moduleResolution: "NodeNext"`. Indexing `ExtensionContext["sessionManager"]`
+ * is the SDK's only public surface for this type, so we use it directly
+ * rather than maintain a hand-rolled `Pick<SessionManager, ...>` mirror.
  */
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
