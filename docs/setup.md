@@ -11,7 +11,7 @@ This guide gets `pi-yaml-hooks` installed and gives you a safe place to put `hoo
 
 Windows is unsupported because the hook runner expects a POSIX `bash`.
 
-The peer support range is `^0.74.0` against the new `@earendil-works` scope. PI moved from `@mariozechner/*` to `@earendil-works/*` in 0.74.0. Older 0.67 to 0.73 installs on the legacy scope are no longer part of the documented contract, even if some behavior still happens to work.
+The peer support range is `^0.74.0` against the `@earendil-works` scope. Older 0.67 to 0.73 installs are no longer part of the documented contract, even if some behavior still happens to work.
 
 ## Install the extension
 
@@ -78,11 +78,13 @@ Project settings override global ones. PI auto-installs missing project packages
 ```ts
 import PiHooks from 'pi-yaml-hooks';
 import { extensions } from 'pi-yaml-hooks/extensions';
+import type { HookConfig, BashHookContext } from 'pi-yaml-hooks/types';
 ```
 
 The package exposes:
 
-- `.` to `./dist/index.js` (default export: the PI extension)
+- `.` to `./dist/index.js` (default export: the PI extension, plus public type re-exports)
+- `./types` to the public type surface for type-only imports such as `HookConfig`, `HookEvent`, `SessionDeletedReason`, and `BashHookContext`
 - `./extensions` to `./dist/extensions/index.js` (named re-export for the extensions entry-point)
 
 `npm install pi-yaml-hooks` requires Node.js `>= 22.0.0` and the PI SDK peer dependencies in the consuming project.
@@ -252,6 +254,7 @@ This is the canonical environment-variable reference for `pi-yaml-hooks`. Other 
 | `PI_YAML_HOOKS_DEBUG` | `=1` enables verbose, persistent NDJSON logging |
 | `PI_YAML_HOOKS_LOG_LEVEL` | Set the log level explicitly: `debug`, `info`, `warn`, or `error` |
 | `PI_YAML_HOOKS_LOG_FILE` | Override the log file location (default `~/.pi/agent/logs/pi-yaml-hooks.ndjson`) |
+| `PI_YAML_HOOKS_LOG_MAX_BYTES` | Rotate the structured log file once it exceeds this many bytes (positive integer) |
 | `PI_YAML_HOOKS_LOG_STDERR` | `=1` mirrors structured log entries to stderr |
 
 ## First troubleshooting steps
