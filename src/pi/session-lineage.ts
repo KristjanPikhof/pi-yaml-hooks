@@ -17,7 +17,7 @@
  */
 
 import type { ExtensionContext, SessionHeader } from "@earendil-works/pi-coding-agent";
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
 
 import { getPiHooksLogger } from "../core/logger.js";
 
