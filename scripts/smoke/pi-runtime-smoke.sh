@@ -125,5 +125,5 @@ Run PI manually with:
   PI_YAML_HOOKS_ENABLE_USER_BASH=1 \\
   pi -e "$ROOT_DIR/extensions/index.ts"
 
-Then follow docs/setup.md#runtime-pi-smoke-checklist.
+Then follow docs/maintaining.md#runtime-pi-smoke-checklist.
 EOF
