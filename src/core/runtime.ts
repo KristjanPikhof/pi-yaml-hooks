@@ -6,12 +6,7 @@ import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
 import { discoverHookConfigEntries } from "./config-paths.js"
 import { loadDiscoveredHooksSnapshot } from "./load-hooks.js"
 import { getPiHooksLogger } from "./logger.js"
-import {
-  createGlobMatcherCache,
-  getGlobMatcher,
-  type GlobMatcher,
-  type GlobMatcherCache,
-} from "./runtime/path-filter.js"
+import { abortSession, isHostDiedError } from "./runtime/actions.js"
 import type { AsyncQueueState } from "./runtime/async-queue.js"
 import {
   dispatchHooks,
@@ -19,6 +14,12 @@ import {
   summarizeChanges,
   type DispatchState,
 } from "./runtime/dispatch.js"
+import {
+  createGlobMatcherCache,
+  getGlobMatcher,
+  type GlobMatcher,
+  type GlobMatcherCache,
+} from "./runtime/path-filter.js"
 import { SessionStateStore } from "./session-state.js"
 import { getChangedPaths, getToolFileChanges } from "./tool-paths.js"
 import type {
