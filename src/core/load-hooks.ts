@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, realpathSync, statSync, type Stats } from "node:fs"
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
 
