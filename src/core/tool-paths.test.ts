@@ -214,6 +214,102 @@ const cases: Case[] = [
     },
   },
   {
+    name: "P1-17: rm -- --dashfile treats dash-prefixed token as a path after --",
+    run: () => {
+      const changes = getToolFileChanges("bash", { command: "rm -- --bad-name" })
+      const paths = changes.map((c) => (c.operation === "delete" ? c.path : ""))
+      return paths.length === 1 && paths[0] === "--bad-name"
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "P1-17: rm with mixed flags then -- then mixed positionals",
+    run: () => {
+      const changes = getToolFileChanges("bash", { command: "rm -rf -v -- -a -b c.txt" })
+      const paths = changes.map((c) => (c.operation === "delete" ? c.path : ""))
+      const ok = paths.length === 3 && paths.includes("-a") && paths.includes("-b") && paths.includes("c.txt")
+      return ok ? { ok: true } : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "P1-17: git mv requires git prefix; bare mv without two args yields nothing",
+    run: () => {
+      const changes = getToolFileChanges("bash", { command: "mv only.txt" })
+      return changes.length === 0 ? { ok: true } : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "P1-16: multiedit args.edits[] with three edits returns three modifies",
+    run: () => {
+      const changes = getToolFileChanges("multiedit", {
+        file_path: "/repo/a.ts",
+        edits: [
+          { old_string: "x", new_string: "y" },
+          { old_string: "p", new_string: "q" },
+          { old_string: "u", new_string: "v" },
+        ],
+      })
+      if (changes.length !== 3) return { ok: false, detail: `len=${changes.length}` }
+      for (const c of changes) {
+        if (c.operation !== "modify" || c.path !== "/repo/a.ts") {
+          return { ok: false, detail: JSON.stringify(c) }
+        }
+      }
+      return { ok: true }
+    },
+  },
+  {
+    name: "P1-16: multiedit edits[] may override per-edit path",
+    run: () => {
+      const changes = getToolFileChanges("multiedit", {
+        edits: [
+          { path: "/repo/a.ts", old_string: "x", new_string: "y" },
+          { file_path: "/repo/b.ts", old_string: "p", new_string: "q" },
+        ],
+      })
+      const paths = changes.map((c) => (c.operation === "modify" ? c.path : ""))
+      return paths.length === 2 && paths.includes("/repo/a.ts") && paths.includes("/repo/b.ts")
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "P1-16: multiedit without edits[] still falls back to top-level path",
+    run: () => {
+      const changes = getToolFileChanges("multiedit", { file_path: "/repo/a.ts" })
+      return changes.length === 1 && changes[0].operation === "modify" && changes[0].path === "/repo/a.ts"
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "P1-17 + mkdir-kind: mkdir -p does not produce a FileChange (directories not reported)",
+    run: () => {
+      const changes = getToolFileChanges("bash", { command: "mkdir -p deep/nested/dir" })
+      return changes.length === 0 ? { ok: true } : { ok: false, detail: JSON.stringify(changes) }
+    },
+  },
+  {
+    name: "patch with Move-to after Add-File: add then rename are both reported",
+    run: () => {
+      const patchText = [
+        "*** Add File: created.txt",
+        "+content",
+        "*** Update File: from.txt",
+        "*** Move to: to.txt",
+      ].join("\n")
+      const changes = getToolFileChanges("apply_patch", { patchText })
+      const summary = changes.map((c) =>
+        c.operation === "rename" ? `rename:${c.fromPath}->${c.toPath}` : `${c.operation}:${c.path}`,
+      )
+      const expected = ["create:created.txt", "rename:from.txt->to.txt"]
+      return JSON.stringify(summary) === JSON.stringify(expected)
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(summary) }
+    },
+  },
+  {
     name: "getToolFileChanges splits compound bash commands by &&/||/;",
     run: () => {
       const changes = getToolFileChanges("bash", {
