@@ -141,7 +141,7 @@ Custom tool names can also match if the host emits them.
 | `file.changed` | After recognized file mutations | Synthesized by `pi-yaml-hooks`; see below for exact sources |
 | `session.created` | On PI startup or a genuinely new session | Does not fire on resume, reload, or fork re-entry |
 | `session.idle` | When the agent loop ends and there are no pending messages | Includes accumulated file changes since the last successful idle dispatch |
-| `session.deleted` | On shutdown and before session switches | Lossy by design; PI does not distinguish closed vs switched sessions such as `/new`, `/resume`, and `/fork` |
+| `session.deleted` | On shutdown and before session switches | Best-effort and lossy by design; PI may provide a `reason` such as `shutdown` or `switch`, which is forwarded in hook context when available |
 
 ### Exact `file.changed` behavior
 

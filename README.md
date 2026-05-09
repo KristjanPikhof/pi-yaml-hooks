@@ -116,7 +116,7 @@ When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configu
 | `file.changed` | Synthesized after recognized file mutations |
 | `session.created` | PI startup or a genuinely new session |
 | `session.idle` | Agent turn finished and no messages are pending |
-| `session.deleted` | Session shutdown or switch, intentionally lossy |
+| `session.deleted` | Best-effort cleanup on shutdown or session switch; includes PI's reason such as `shutdown` or `switch` when available |
 
 ### Actions
 
@@ -150,7 +150,7 @@ These are the PI-specific constraints that matter most:
 - `tool:` is prompt injection, not imperative tool execution
 - `action: stop` only has real effect on `tool.before.*`
 - `runIn: main` is unsupported for non-`bash` actions
-- `session.deleted` is intentionally lossy
+- `session.deleted` is best-effort and intentionally lossy: PI can fire it for shutdown and for session switches, and `pi-yaml-hooks` forwards PI's reason when the host provides one
 - `user_bash` interception is opt-in with `PI_YAML_HOOKS_ENABLE_USER_BASH=1`
 
 Keep those rules in mind when authoring hooks. They explain most surprising behavior.

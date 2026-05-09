@@ -37,7 +37,7 @@ These are the details that matter most when authoring hooks:
 - `command:` actions are rejected at load time on PI.
 - `tool:` does not imperatively invoke a tool; it sends a follow-up prompt to the current session.
 - `confirm:` blocks only on `tool.before.*` hooks.
-- `session.deleted` is intentionally lossy: PI fires it for shutdown and for session switches like `/new`, `/resume`, and `/fork`.
+- `session.deleted` is best-effort and intentionally lossy: PI fires it for shutdown and for session switches like `/new`, `/resume`, and `/fork`; `pi-yaml-hooks` forwards PI's reason (for example `shutdown` or `switch`) when available.
 - `file.changed` is synthesized from recognized mutation tools. On stock PI that means `write`, `edit`, and some `bash` commands such as `cp`, `mv`, `rm`, `touch`, and `mkdir`.
 
 ## Recommended reading order
