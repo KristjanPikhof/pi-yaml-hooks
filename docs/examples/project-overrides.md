@@ -1,6 +1,6 @@
 # Project overrides
 
-Use this pattern when you want a personal global default but a trusted project needs different behavior.
+Pair a global default with a per-project replacement: keep your usual hook, then have a trusted project file replace or disable it by `id`.
 
 ## Step 1: define the global hook with an id
 
