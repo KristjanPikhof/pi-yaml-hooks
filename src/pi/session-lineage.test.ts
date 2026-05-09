@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { execSync } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
 
-import { getRootSessionId } from "./session-lineage.js"
+import { getRootSessionId, resetSessionLineageCacheForTests } from "./session-lineage.js"
 
 interface Case {
   readonly name: string
