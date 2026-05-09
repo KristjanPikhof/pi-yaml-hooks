@@ -135,14 +135,8 @@ export function registerAdapter(pi: ExtensionAPI): void {
     const runtime = getRuntimeFor(ctx.cwd);
     callIdsToSessionIds.set(event.toolCallId, sessionId);
 
-    const input: ToolExecuteBeforeInput = {
-      tool: event.toolName,
-      sessionID: sessionId,
-      callID: event.toolCallId,
-    };
-    const output: ToolExecuteBeforeOutput = {
-      args: (event.input ?? {}) as Record<string, unknown>,
-    };
+    const input = mapToolCallToBeforeInput(event, sessionId);
+    const output = mapToolCallToBeforeOutput(event);
 
     try {
       await runtime["tool.execute.before"](input, output);
