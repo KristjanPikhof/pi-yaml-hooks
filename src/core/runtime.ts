@@ -105,59 +105,6 @@ interface AsyncQueueState {
   pending: Array<() => Promise<void>>
 }
 
-// P2-5 fix: memoize per-pattern glob matchers so condition evaluation does
-// not re-parse the same glob string on every dispatch. node:path.matchesGlob
-// has no compile step we can hold on to, but we can cache the (pattern,
-// path) result in a bounded LRU per pattern. Cache is rebuilt whenever the
-// runtime swaps the active hooks signature, so stale entries cannot
-// outlive a hooks reload.
-const GLOB_RESULT_LRU_PER_PATTERN = 256
-
-interface GlobMatcherCacheEntry {
-  match: (path: string) => boolean
-}
-
-interface GlobMatcherCache {
-  signature: string
-  matchers: Map<string, GlobMatcherCacheEntry>
-}
-
-function createGlobMatcherCache(signature: string): GlobMatcherCache {
-  return { signature, matchers: new Map() }
-}
-
-function getGlobMatcher(cache: GlobMatcherCache, pattern: string): (path: string) => boolean {
-  const existing = cache.matchers.get(pattern)
-  if (existing) {
-    return existing.match
-  }
-  // Insertion-ordered Map, used as a tiny LRU of recent path → boolean
-  // results for this pattern. Eviction drops the oldest entry once the cap
-  // is reached. Hot files (the ones that show up repeatedly during a
-  // dispatch chain) stay cached; one-shot paths fall out naturally.
-  const resultCache = new Map<string, boolean>()
-  const match = (filePath: string): boolean => {
-    const cached = resultCache.get(filePath)
-    if (cached !== undefined) {
-      // Touch on read so the entry becomes most-recently-used.
-      resultCache.delete(filePath)
-      resultCache.set(filePath, cached)
-      return cached
-    }
-    const result = matchesGlob(filePath, pattern)
-    resultCache.set(filePath, result)
-    if (resultCache.size > GLOB_RESULT_LRU_PER_PATTERN) {
-      const oldestKey = resultCache.keys().next().value
-      if (oldestKey !== undefined) {
-        resultCache.delete(oldestKey)
-      }
-    }
-    return result
-  }
-  cache.matchers.set(pattern, { match })
-  return match
-}
-
 type ExecuteBashHook = (request: BashExecutionRequest) => Promise<BashHookResult>
 
 export interface HooksRuntime {
