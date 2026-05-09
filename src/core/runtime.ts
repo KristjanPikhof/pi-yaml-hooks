@@ -9,6 +9,7 @@ import { getPiHooksLogger } from "./logger.js"
 import {
   buildPathMatchContext,
   createGlobMatcherCache,
+  defaultGlobMatcher,
   evaluatePathConditions,
   getGlobMatcher,
   type GlobMatcher,
