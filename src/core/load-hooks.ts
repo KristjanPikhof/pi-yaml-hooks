@@ -779,12 +779,50 @@ function expandHookImportPath(resolvedPath: string): string[] {
   return [resolvedPath]
 }
 
+// P2 #1 fix: bound recursion when the realpath fallback path canonicalises
+// a symlink-laden tree. `realpathSync` resolves symlink chains in one shot,
+// but it can throw on missing intermediates, in which case we used to return
+// `path.resolve(filePath)` unchanged — leaving cycle detection to compare
+// post-resolve names that might still differ across cycle steps. We now
+// hand-walk the chain ourselves, bounded at MAX_CANONICALIZE_DEPTH, so a
+// pathological symlink ring still terminates instead of blowing the stack.
+const MAX_CANONICALIZE_DEPTH = 32
+
 function canonicalizeHookPath(filePath: string): string {
   try {
     return realpathSync(filePath)
   } catch {
-    return path.resolve(filePath)
+    return canonicalizeHookPathFallback(path.resolve(filePath))
   }
+}
+
+function canonicalizeHookPathFallback(startPath: string): string {
+  let current = startPath
+  for (let depth = 0; depth < MAX_CANONICALIZE_DEPTH; depth += 1) {
+    try {
+      const resolved = realpathSync(current)
+      return resolved
+    } catch {
+      // Try walking up one component and retry. If that does not progress,
+      // bail out with the best-effort resolved path. This mirrors how the
+      // OS would surface ENOENT for the leaf while leaving the parent
+      // symlink chain intact.
+      const parent = path.dirname(current)
+      if (parent === current) {
+        return startPath
+      }
+      try {
+        const parentReal = realpathSync(parent)
+        return path.join(parentReal, path.basename(current))
+      } catch {
+        current = parent
+      }
+    }
+  }
+  // Reached the depth cap without resolving — return the original input so
+  // the caller still has a stable key. The cycle-detection set will still
+  // mark this path as visited so we cannot loop forever.
+  return startPath
 }
 
 function snapshotDiscoveredHookFiles(
@@ -800,8 +838,29 @@ function snapshotDiscoveredHookFiles(
   })
 }
 
-function loadSnapshotHooksFile(snapshot: DiscoveredHooksFileSnapshot): ParsedHooksFileResult {
+function loadSnapshotHooksFile(
+  snapshot: DiscoveredHooksFileSnapshot,
+  envelopeCache?: Map<string, ParsedHooksFileEnvelope>,
+): ParsedHooksFileResult {
   if ("content" in snapshot) {
+    // P2 #4 fix: reuse the parsed envelope from the imports walk so we do
+    // not re-run YAML.parseDocument for the same file body. If the cache
+    // miss happens (e.g. a top-level discovered file with no imports walk),
+    // we fall through to the regular parse path which still works.
+    if (envelopeCache) {
+      const cached = envelopeCache.get(canonicalizeHookPath(snapshot.filePath))
+      if (cached) {
+        if (cached.errors.length > 0 || !cached.body) {
+          return {
+            hooks: new Map(),
+            overrides: [],
+            errors: cached.errors,
+            files: [snapshot.filePath],
+          }
+        }
+        return parseHooksObject(snapshot.filePath, cached.body)
+      }
+    }
     return parseHooksFile(snapshot.filePath, snapshot.content)
   }
 
