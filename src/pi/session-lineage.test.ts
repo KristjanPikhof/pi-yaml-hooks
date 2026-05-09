@@ -49,6 +49,7 @@ const cases: Case[] = [
   {
     name: "returns input id when sessionId is empty",
     run: async () => {
+      resetSessionLineageCacheForTests()
       const manager: FakeManager = {
         getHeader: () => ({ type: "session", id: "x", timestamp: "", cwd: "" }),
         getSessionId: () => "x",
@@ -60,6 +61,7 @@ const cases: Case[] = [
   {
     name: "returns input id when getHeader throws",
     run: async () => {
+      resetSessionLineageCacheForTests()
       const manager: FakeManager = {
         getHeader: () => {
           throw new Error("boom")
@@ -73,6 +75,7 @@ const cases: Case[] = [
   {
     name: "returns input id when header.id does not match the request",
     run: async () => {
+      resetSessionLineageCacheForTests()
       const manager: FakeManager = {
         getHeader: () => ({ type: "session", id: "different-session", timestamp: "", cwd: "" }),
         getSessionId: () => "different-session",
@@ -84,6 +87,7 @@ const cases: Case[] = [
   {
     name: "returns current header id when no parentSession is present",
     run: async () => {
+      resetSessionLineageCacheForTests()
       const manager: FakeManager = {
         getHeader: () => ({ type: "session", id: "session-123", timestamp: "", cwd: "" }),
         getSessionId: () => "session-123",
