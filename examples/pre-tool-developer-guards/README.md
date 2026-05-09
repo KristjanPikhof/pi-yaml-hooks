@@ -27,6 +27,8 @@ For another project, copy `pre-tool-policy.mjs` into that project and point the 
 
 - Exit code `2` blocks the matching pre-tool call.
 - These hooks inspect the tool payload before execution; they do not run on `tool.after.*`.
+- The risky-bash regex matches commands following whitespace, start-of-string, or a shell separator (`;`, `&`, `|`, `` ` ``, `(`). It is a coarse heuristic, not a security boundary — quoting, env var indirection, `eval`, and aliasing can all defeat it. Use OS-level controls if you need real isolation.
+- `isProtectedPath` runs a path-segment check, so `config/.env`, `app/secrets/db.yml`, and `home/.ssh/id_rsa` are all protected.
 
 ## Quick test
 
