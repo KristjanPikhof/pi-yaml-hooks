@@ -7,10 +7,7 @@ import { discoverHookConfigEntries } from "./config-paths.js"
 import { loadDiscoveredHooksSnapshot } from "./load-hooks.js"
 import { getPiHooksLogger } from "./logger.js"
 import {
-  buildPathMatchContext,
   createGlobMatcherCache,
-  defaultGlobMatcher,
-  evaluatePathConditions,
   getGlobMatcher,
   type GlobMatcher,
   type GlobMatcherCache,
@@ -23,11 +20,8 @@ import {
   type DispatchState,
 } from "./runtime/dispatch.js"
 import { SessionStateStore } from "./session-state.js"
-import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
+import { getChangedPaths, getToolFileChanges } from "./tool-paths.js"
 import type {
-  FileChange,
-  HookConfig,
-  HookEvent,
   HookMap,
   HookValidationError,
   HostAdapter,
