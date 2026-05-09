@@ -326,43 +326,9 @@ export function registerAdapter(pi: ExtensionAPI): void {
 export const registerPhase1Adapter = registerAdapter;
 
 /**
- * Promote `cwd` to most-recent. If the key exists, it is re-inserted so that
- * Map iteration order places it last (the freshest entry). Used by both the
- * production runtime (via `touchCwd`) and unit tests (via `__testing__`),
- * so the LRU eviction policy has a single source of truth (P2-6).
- */
-function touchLruEntry<T>(map: Map<string, T>, cwd: string): void {
-  if (!map.has(cwd)) return;
-  const value = map.get(cwd) as T;
-  map.delete(cwd);
-  map.set(cwd, value);
-}
-
-/**
- * Drop oldest entries from `map` (and `companion`, if provided) until at
- * most `maxEntries` remain. Returns the keys that were evicted. Shared
- * between the production `evictIfNeeded` and the test surface (P2-6).
- */
-function evictLruEntries<T>(
-  map: Map<string, T>,
-  maxEntries: number,
-  companion?: Map<string, unknown>,
-): string[] {
-  const evicted: string[] = [];
-  while (map.size > maxEntries) {
-    const oldest = map.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-    companion?.delete(oldest);
-    evicted.push(oldest);
-  }
-  return evicted;
-}
-
-/**
  * Test-only re-export of the production LRU helpers. Tests verify the
  * eviction policy via these functions; production code uses the same
- * implementations inline (see `touchCwd` / `evictIfNeeded` above).
+ * implementations inline (see `runtime-registry.ts`).
  *
  * Also exposes `isStaleSessionBoundError` so unit tests can pin known
  * SDK-emitted error messages against the regex (P2-9).
