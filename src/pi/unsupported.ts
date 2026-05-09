@@ -119,8 +119,12 @@ export function diagnoseScopeChild(hook: HookConfig): string[] {
 }
 
 /**
- * tool.before.<name> / tool.after.<name> where <name> is an OpenCode-only
- * tool (multiedit, patch, apply_patch) → advisory; will never match on PI.
+ * tool.before.<name> / tool.after.<name> where <name> is anything outside the
+ * PI_BUILTIN_TOOLS allow-list (and not the "*" wildcard) → advisory; will
+ * never match on PI. P3-4 flipped this from a deny-list of three known
+ * OpenCode tools to a positive allow-list so users see the warning for any
+ * unknown tool name (typos like `tool.before.write_file`, OpenCode-only
+ * names, hypothetical PI extensions that have not landed).
  */
 export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
   const event: HookEvent = hook.event
@@ -135,10 +139,10 @@ export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
   if (toolName === "*") {
     return []
   }
-  if (UNSUPPORTED_TOOL_NAMES.has(toolName)) {
-    return [prefixWithSource(hook, TOOL_NAME_NEVER_MATCH_ADVISORY)]
+  if (PI_BUILTIN_TOOLS.has(toolName)) {
+    return []
   }
-  return []
+  return [prefixWithSource(hook, TOOL_NAME_NEVER_MATCH_ADVISORY)]
 }
 
 /**
