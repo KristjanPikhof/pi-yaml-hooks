@@ -28,10 +28,7 @@ import type {
 import path from "node:path";
 import { getPiHooksLogger } from "../core/logger.js";
 import {
-  buildSessionCreatedEvent,
-  buildSessionDeletedEvent,
   buildSessionIdleEvent,
-  extractReason,
   mapToolCallToBeforeInput,
   mapToolCallToBeforeOutput,
   mapToolResultToAfterInput,
@@ -46,6 +43,7 @@ import {
   evictLruEntries,
   touchLruEntry,
 } from "./runtime-registry.js";
+import { installSessionLifecycleHandlers } from "./session-lifecycle.js";
 import { registerUserBashInterception } from "./user-bash.js";
 
 export { createHostAdapter } from "./host-adapter.js";
