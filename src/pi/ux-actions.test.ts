@@ -409,6 +409,11 @@ const runtimeCases: RuntimeCase[] = [
     },
   },
   {
+    // P2-8: sendPrompt now skips sendUserMessage entirely when the live PI
+    // session doesn't match the requested target, so the only path that
+    // reaches a sendUserMessage failure is when sessions match. Pin that
+    // path: with matching sessions, a throw from PI bubbles out as a
+    // wrapped Error (non-stale messages re-throw; stale messages degrade).
     name: "adapter sendPrompt throws when sendUserMessage fails",
     run: async () => {
       const pi = {
@@ -416,7 +421,12 @@ const runtimeCases: RuntimeCase[] = [
           throw new Error("send failed")
         },
       } as unknown as Parameters<typeof createHostAdapter>[0]
-      const host = createHostAdapter(pi, "/tmp", () => undefined, () => undefined)
+      const host = createHostAdapter(
+        pi,
+        "/tmp",
+        () => ({ getSessionId: () => "s1" } as never),
+        () => undefined,
+      )
       try {
         host.sendPrompt("s1", "hello")
         return { ok: false, detail: "sendPrompt did not throw" }
