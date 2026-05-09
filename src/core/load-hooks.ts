@@ -163,7 +163,11 @@ function parseHooksFileEnvelope(filePath: string, content: string): ParsedHooksF
   return { imports: importsResult.imports, body: parsed, errors: [] }
 }
 
-function parseHooksObject(filePath: string, parsed: Record<string, unknown>): ParsedHooksFileResult {
+function parseHooksObject(
+  filePath: string,
+  parsed: Record<string, unknown>,
+  policy: HookPolicy = activeHookPolicy,
+): ParsedHooksFileResult {
   if (!Object.prototype.hasOwnProperty.call(parsed, "hooks")) {
     return {
       hooks: new Map(),
@@ -208,17 +212,17 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
 
   errors.push(...validateAsyncQueueConfigs(hooks))
 
-  const piDiagnostics = collectUnsupportedDiagnostics(hooks)
-  for (const message of piDiagnostics.errors) {
+  const policyDiagnostics = policy.diagnose(hooks)
+  for (const message of policyDiagnostics.errors) {
     errors.push({ code: "unsupported_on_pi", filePath, message })
   }
 
   // P1 #2 fix: drop hooks that produced unsupported_on_pi errors so the
   // runtime never executes them. The errors above remain so operators see
   // why their hook was skipped.
-  if (piDiagnostics.invalidHooks.size > 0) {
+  if (policyDiagnostics.invalidHooks.size > 0) {
     for (const [event, hookList] of hooks) {
-      const filtered = hookList.filter((hook) => !piDiagnostics.invalidHooks.has(hook))
+      const filtered = hookList.filter((hook) => !policyDiagnostics.invalidHooks.has(hook))
       if (filtered.length === 0) {
         hooks.delete(event)
       } else if (filtered.length !== hookList.length) {
@@ -227,12 +231,17 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
     }
   }
 
-  if (piDiagnostics.advisories.length > 0) {
-    for (const advisory of piDiagnostics.advisories) {
-      // Surface advisories so operators see them even without inspecting
-      // ParsedHooksFile.advisories directly.
-      // eslint-disable-next-line no-console
-      console.info(`[pi-yaml-hooks] ${advisory}`)
+  // P2 #20 fix: previously this branch dumped policy advisories to
+  // `console.info` from inside the parser. The surface used to receive a
+  // `[pi-yaml-hooks]` line on every parse, including from background
+  // dispatcher calls and per-file imports — noisy and a hidden side effect.
+  // Advisories are now surfaced exclusively via `ParsedHooksFile.advisories`
+  // and the structured logger; embedders that want a console mirror can
+  // subscribe to the logger or read the field directly.
+  if (policyDiagnostics.advisories.length > 0) {
+    const logger = getPiHooksLogger()
+    for (const advisory of policyDiagnostics.advisories) {
+      logger.debug("hook_policy_advisory", advisory, { details: { filePath } })
     }
   }
 
@@ -240,7 +249,7 @@ function parseHooksObject(filePath: string, parsed: Record<string, unknown>): Pa
     hooks,
     overrides,
     errors: dedupeValidationErrors(errors),
-    ...(piDiagnostics.advisories.length > 0 ? { advisories: piDiagnostics.advisories } : {}),
+    ...(policyDiagnostics.advisories.length > 0 ? { advisories: policyDiagnostics.advisories } : {}),
     files: [filePath],
   }
 }
