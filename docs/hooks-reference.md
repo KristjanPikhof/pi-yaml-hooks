@@ -74,7 +74,7 @@ Enabling this feature expands the trust surface: hooks in trusted projects can o
 
 ### Trust expansion
 
-Trust on PI is anchored at the project root, not at every imported file. Once a project root is trusted, all of its `imports:` are loaded transitively under that same trust decision. Three safety rails keep that expansion narrow:
+Trust on PI is anchored at the repo or worktree anchor, not at every imported file. Once that anchor is trusted, all of the project root's `imports:` are loaded transitively under that same trust decision. Three safety rails keep that expansion narrow:
 
 1. The global hooks file (which always loads) cannot pull in additional files unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set, so a global hook cannot silently extend its own footprint.
 2. Bare-specifier imports that resolve through `node_modules` are gated behind `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, so an arbitrary npm dependency cannot register hooks just by being installed.
