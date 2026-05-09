@@ -20,18 +20,22 @@ NODE
 
 # Pre-fill SDK versions from the local node_modules so testers don't have to
 # look them up by hand. Each lookup falls back to `unknown` when the package
-# is missing (e.g., a fresh checkout that has not run `npm install`).
+# is missing (e.g., a fresh checkout that has not run `npm install`). We read
+# package.json directly because some SDK packages do not export ./package.json.
 sdk_version() {
   local pkg="$1"
-  node --input-type=module --eval "
-    import { createRequire } from 'node:module';
-    const require = createRequire(process.cwd() + '/');
-    try {
-      console.log(require('${pkg}/package.json').version);
-    } catch {
-      console.log('unknown');
-    }
-  " 2>/dev/null || echo "unknown"
+  local pj="$ROOT_DIR/node_modules/$pkg/package.json"
+  if [[ -f "$pj" ]]; then
+    node --input-type=module --eval "
+      import fs from 'node:fs';
+      try {
+        const v = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')).version;
+        console.log(v ?? 'unknown');
+      } catch { console.log('unknown'); }
+    " -- "$pj" 2>/dev/null || echo "unknown"
+  else
+    echo "unknown"
+  fi
 }
 
 CURRENT_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
