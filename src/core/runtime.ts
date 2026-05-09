@@ -159,6 +159,57 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   const boundGlobMatcher: GlobMatcher = (filePath, pattern) =>
     getGlobMatcher(globMatcherCache, pattern)(filePath)
 
+  // Bind the per-runtime mutable state into invokers so the entry-point
+  // handlers below can call dispatch with just the per-event arguments.
+  // This is a pure refactor of the cascade-style call sites in the original
+  // factory — every call still flows through the same exported
+  // `dispatchHooks` / `dispatchToolHooks` functions in `runtime/dispatch.ts`.
+  const invokeDispatchHooks = (
+    activeHooks: HookMap,
+    event: HookEvent,
+    sessionID: string,
+    context: RuntimeActionContext,
+    options: { canBlock?: boolean } = {},
+  ): Promise<HookExecutionResult> =>
+    dispatchHooks(
+      activeHooks,
+      state,
+      host,
+      projectDir,
+      runBashHook,
+      event,
+      sessionID,
+      context,
+      options,
+      dispatchStates,
+      actionRecursionGuards,
+      asyncQueues,
+      boundGlobMatcher,
+    )
+
+  const invokeDispatchToolHooks = (
+    activeHooks: HookMap,
+    phase: "before" | "after",
+    toolName: string,
+    sessionID: string,
+    context: RuntimeActionContext,
+  ): Promise<HookExecutionResult> =>
+    dispatchToolHooks(
+      activeHooks,
+      state,
+      host,
+      projectDir,
+      runBashHook,
+      dispatchStates,
+      actionRecursionGuards,
+      asyncQueues,
+      phase,
+      toolName,
+      sessionID,
+      context,
+      boundGlobMatcher,
+    )
+
   function refreshHooks(): HookMap {
     if (options.hooks && !shouldReloadDiscoveredHooks) {
       return hooks
