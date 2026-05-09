@@ -18,7 +18,6 @@ import {
   type HookNotifyLevel,
   type HookOverrideEntry,
   type HookPolicy,
-  type HookPolicyDiagnostics,
   type HookRunIn,
   type HookScope,
   type HookMap,
