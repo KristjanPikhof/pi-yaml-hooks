@@ -63,6 +63,19 @@ if [[ "$INCLUDE_FUTURE" -eq 1 ]]; then
   SDK_SPECS+=("0.75.x")
 fi
 
+# Track every temp dir so a single cleanup_all wipes them on EXIT/INT/TERM.
+# This avoids leaking tmp dirs when the user SIGINTs mid-iteration.
+TMP_DIRS=()
+cleanup_all() {
+  local dir
+  for dir in "${TMP_DIRS[@]}"; do
+    if [[ -n "$dir" && -d "$dir" ]]; then
+      rm -rf "$dir"
+    fi
+  done
+}
+trap cleanup_all EXIT INT TERM
+
 copy_repo() {
   local target="$1"
   if command -v rsync >/dev/null 2>&1; then
