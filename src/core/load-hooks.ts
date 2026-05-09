@@ -985,19 +985,54 @@ function parseHookDefinition(
   }
 }
 
+// P2 #3 fix: build the id→index map once up front instead of rescanning all
+// hooks on every override. The previous quadratic loop also silently lost
+// information when two hooks shared the same `id:` across different files —
+// the second insertion clobbered the first, so an override could ambiguously
+// hit either hook depending on traversal order. We now detect that case and
+// emit `duplicate_hook_id`. Overrides keep their existing semantics: each
+// override mutates the ordered hook list in turn (splice/replace), and we
+// keep the index map current as we go.
 export function resolveOverrides(hooks: HookMap, overrides: HookOverrideEntry[]): { hooks: HookMap; errors: HookValidationError[] } {
   const orderedHooks = flattenHookMap(hooks)
   const errors: HookValidationError[] = []
 
-  for (const override of overrides) {
-    const hookIndexById = new Map<string, number>()
-    orderedHooks.forEach((hook, index) => {
-      if (hook.id) {
-        hookIndexById.set(hook.id, index)
-      }
-    })
+  const idIndex = new Map<string, number>()
+  const idSources = new Map<string, HookConfig[]>()
+  orderedHooks.forEach((hook, index) => {
+    if (!hook.id) return
+    const existing = idSources.get(hook.id)
+    if (existing) {
+      existing.push(hook)
+    } else {
+      idSources.set(hook.id, [hook])
+    }
+    // Last-wins for the actual lookup — preserves the prior behaviour while
+    // we surface the duplicate as a validation error below.
+    idIndex.set(hook.id, index)
+  })
 
-    const targetIndex = hookIndexById.get(override.targetId)
+  for (const [id, hooksWithId] of idSources) {
+    if (hooksWithId.length <= 1) continue
+    // Emit one error per *additional* source so operators see exactly which
+    // file pairs collide. Anchor the error on the duplicate file so the
+    // message points at the offending hook, not the surviving one.
+    const [first, ...rest] = hooksWithId
+    if (!first) continue
+    for (const dup of rest) {
+      errors.push(
+        createError(
+          dup.source.filePath,
+          "duplicate_hook_id",
+          `hooks[${dup.source.index}].id duplicates hook id \"${id}\" already defined at ${first.source.filePath}#hooks[${first.source.index}].`,
+          `hooks[${dup.source.index}].id`,
+        ),
+      )
+    }
+  }
+
+  for (const override of overrides) {
+    const targetIndex = idIndex.get(override.targetId)
     if (targetIndex === undefined) {
       errors.push(
         createError(
@@ -1012,11 +1047,24 @@ export function resolveOverrides(hooks: HookMap, overrides: HookOverrideEntry[])
 
     if (override.disable) {
       orderedHooks.splice(targetIndex, 1)
+      idIndex.delete(override.targetId)
+      // Reindex anything past the splice point so subsequent overrides hit
+      // the right slot.
+      for (const [id, idx] of idIndex) {
+        if (idx > targetIndex) {
+          idIndex.set(id, idx - 1)
+        }
+      }
       continue
     }
 
     if (override.replacement) {
       orderedHooks.splice(targetIndex, 1, override.replacement)
+      // Replacement keeps the same index; if the replacement carries an id
+      // it becomes the new owner of that slot.
+      if (override.replacement.id) {
+        idIndex.set(override.replacement.id, targetIndex)
+      }
     }
   }
 
