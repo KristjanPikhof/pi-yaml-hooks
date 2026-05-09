@@ -334,8 +334,9 @@ export function __snapshotCacheKeysForTests(): string[] {
 
 export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): HookLoadSnapshot {
   const entries = discoverHookConfigEntries(options)
+  const projectResolution = resolveProjectHookResolution(options)
   const snapshots = snapshotDiscoveredHookFiles(entries, options.readFile ?? defaultReadFile)
-  const result = loadDiscoveredHooksFromSnapshots(snapshots)
+  const result = loadDiscoveredHooksFromSnapshots(snapshots, projectResolution)
   // computeFingerprintSignature consumes `result.files`, which already
   // contains every imported file expanded by `expandSnapshotImports`. Editing
   // an imported file therefore changes the signature and busts the cache.
@@ -365,12 +366,19 @@ export function loadDiscoveredHooksSnapshot(options: HookLoadOptions = {}): Hook
   return { ...result, signature: fingerprintSignature }
 }
 
+// P2 #2 fix: include `ino` and `mode` in the fingerprint and stat-before-read
+// to harden against TOCTOU. mtime+size alone collide on:
+//   - rapid edits within the same filesystem mtime tick
+//   - replace-by-rename where the new inode happens to be the same byte count
+//   - chmod that changes execution semantics but not content
+// Stating up-front (rather than after a separate read pass) means a file
+// swapped underneath us still presents a consistent stat→content pair.
 function computeFingerprintSignature(files: readonly string[]): string {
   const parts: string[] = []
   for (const filePath of files) {
     try {
       const stat = statSync(filePath)
-      parts.push(`${filePath}|${stat.mtimeMs}|${stat.size}`)
+      parts.push(`${filePath}|${stat.mtimeMs}|${stat.size}|${stat.ino}|${stat.mode}`)
     } catch {
       parts.push(`${filePath}|missing`)
     }
@@ -378,27 +386,39 @@ function computeFingerprintSignature(files: readonly string[]): string {
   return parts.join("\n")
 }
 
-function loadDiscoveredHooksFromFiles(entries: DiscoveredHookConfigPath[], options: HookLoadOptions): HookDiscoveryResult {
+function loadDiscoveredHooksFromFiles(
+  entries: DiscoveredHookConfigPath[],
+  options: HookLoadOptions,
+  projectResolution: ProjectHookResolution | undefined,
+): HookDiscoveryResult {
   const readFile = options.readFile ?? defaultReadFile
   const snapshots = snapshotDiscoveredHookFiles(entries, readFile)
 
-  return loadDiscoveredHooksFromSnapshots(snapshots)
+  return loadDiscoveredHooksFromSnapshots(snapshots, projectResolution)
 }
 
-function loadDiscoveredHooksFromSnapshots(snapshots: readonly DiscoveredHooksFileSnapshot[]): HookDiscoveryResult {
+function loadDiscoveredHooksFromSnapshots(
+  snapshots: readonly DiscoveredHooksFileSnapshot[],
+  projectResolution: ProjectHookResolution | undefined,
+): HookDiscoveryResult {
   const hooks = new Map<HookConfig["event"], HookConfig[]>()
   const errors: HookValidationError[] = []
   const sources: HookSourceSummary[] = []
   const files: string[] = []
   const loadedFiles = new Set<string>()
+  // P2 #4 fix: cache the parsed envelope per file path so the imports tree
+  // walk does not re-parse the same YAML body when we later parse the same
+  // file's hooks. Keyed on the canonical file path so duplicate import paths
+  // referring to the same realpath share the parsed envelope.
+  const envelopeCache = new Map<string, ParsedHooksFileEnvelope>()
 
   for (const snapshot of snapshots) {
-    const expanded = expandSnapshotImports(snapshot, loadedFiles)
+    const expanded = expandSnapshotImports(snapshot, loadedFiles, envelopeCache, projectResolution)
     errors.push(...expanded.errors)
 
     for (const entry of expanded.snapshots) {
       files.push(entry.filePath)
-      const result = loadSnapshotHooksFile(entry)
+      const result = loadSnapshotHooksFile(entry, envelopeCache)
       const resolved = resolveOverrides(hooks, result.overrides)
       hooks.clear()
       mergeHookMapsInto(hooks, resolved.hooks)
