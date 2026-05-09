@@ -200,9 +200,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
 
     try {
       const runtime = getRuntimeFor(ctx.cwd);
-      await runtime.event({
-        event: { type: "session.idle", properties: { sessionID: sessionId } },
-      });
+      await runtime.event(buildSessionIdleEvent(sessionId));
     } catch (error) {
       reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.idle", sessionId }, error);
     }
