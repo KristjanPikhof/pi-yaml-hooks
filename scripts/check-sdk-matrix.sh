@@ -136,10 +136,7 @@ fi
 
 for spec in "${SDK_SPECS[@]}"; do
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/pi-yaml-hooks-sdk-${spec//[^A-Za-z0-9._-]/_}.XXXXXX")"
-  cleanup() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup EXIT
+  TMP_DIRS+=("$tmp_dir")
 
   echo
   echo "==> Checking Pi SDK $spec in $tmp_dir"
@@ -155,8 +152,10 @@ for spec in "${SDK_SPECS[@]}"; do
     npm test
   )
 
-  cleanup
-  trap - EXIT
+  # Drop the just-finished dir so the array does not grow without bound across
+  # long matrices. cleanup_all still runs on EXIT/INT/TERM and handles the rest.
+  rm -rf "$tmp_dir"
+  TMP_DIRS=("${TMP_DIRS[@]/$tmp_dir}")
   echo "==> Pi SDK $spec passed"
 done
 
