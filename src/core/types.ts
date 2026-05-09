@@ -169,6 +169,32 @@ export interface ParsedHooksFile {
   readonly advisories?: string[]
 }
 
+/**
+ * Host-supplied policy that flags hooks the host runtime cannot execute.
+ *
+ * The core loader is host-agnostic: it parses YAML, validates structure, and
+ * caches results. Anything that depends on which host runtime will *execute*
+ * the hook (e.g. PI lacks a slash-command API, so `command:` actions are
+ * rejected on PI but might be valid on another host) lives behind this
+ * interface. PI registers an implementation in `src/pi/unsupported.ts`; cores
+ * loaded standalone simply receive an empty policy and skip those checks.
+ *
+ * `errors` are appended to `ParsedHooksFile.errors` and produced hooks are
+ * dropped from the active hook map.
+ * `advisories` are surfaced via `ParsedHooksFile.advisories` (load succeeds).
+ * `invalidHooks` lists the hooks that produced load-blocking errors so the
+ * loader can remove exactly those entries from the active hook map.
+ */
+export interface HookPolicyDiagnostics {
+  readonly errors: string[]
+  readonly advisories: string[]
+  readonly invalidHooks: ReadonlySet<HookConfig>
+}
+
+export interface HookPolicy {
+  readonly diagnose: (hookMap: HookMap) => HookPolicyDiagnostics
+}
+
 export function isHookEvent(value: unknown): value is HookEvent {
   return typeof value === "string" && (SESSION_HOOK_EVENTS.includes(value as SessionHookEvent) || /^tool\.(before|after)\.(\*|.+)$/.test(value))
 }
