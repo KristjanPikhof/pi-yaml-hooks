@@ -360,44 +360,27 @@ export function registerAdapter(pi: ExtensionAPI): void {
   });
 
   // ---- session_shutdown ----
-  // Fire session.deleted (lossy compat shim: PI does not distinguish graceful
-  // shutdown from /new|/resume|/fork and session_shutdown also fires on
-  // terminal exit; the runtime re-entry after the process dies is harmless).
-  pi.on("session_shutdown", async (_event, ctx: ExtensionContext): Promise<void> => {
+  // P1-4 fix: forward the SDK's `reason` field on the envelope so hook
+  // authors can distinguish a graceful shutdown ("quit") from PI internally
+  // tearing down for /new, /resume, /fork, or /reload. session_shutdown
+  // also fires on terminal exit; the runtime re-entry after the process
+  // dies is harmless.
+  pi.on("session_shutdown", async (event: SessionShutdownEvent, ctx: ExtensionContext): Promise<void> => {
     rememberContext(ctx.cwd, ctx);
     const sessionId = safeGetSessionId(ctx.sessionManager);
     if (!sessionId) return;
     if (!markSessionDeleted(sessionId)) return; // already fired via before_switch
 
+    const reason = typeof event?.reason === "string" ? event.reason : undefined;
     try {
       const runtime = getRuntimeFor(ctx.cwd);
       await runtime.event({
         event: {
           type: "session.deleted",
-          properties: { info: { id: sessionId } },
-        },
-      });
-    } catch (error) {
-      reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.deleted", sessionId }, error);
-    }
-  });
-
-  // ---- session_before_switch ----
-  // Same lossy compat shim as session_shutdown: fires on /new, /resume,
-  // /fork with no clean way to distinguish. Fire session.deleted so per-session
-  // cleanup hooks run before the switch.
-  pi.on("session_before_switch", async (_event, ctx: ExtensionContext): Promise<void> => {
-    rememberContext(ctx.cwd, ctx);
-    const sessionId = safeGetSessionId(ctx.sessionManager);
-    if (!sessionId) return;
-    if (!markSessionDeleted(sessionId)) return; // session_shutdown already fired
-
-    try {
-      const runtime = getRuntimeFor(ctx.cwd);
-      await runtime.event({
-        event: {
-          type: "session.deleted",
-          properties: { info: { id: sessionId } },
+          properties: {
+            info: { id: sessionId },
+            ...(reason ? { reason } : {}),
+          },
         },
       });
     } catch (error) {
@@ -407,7 +390,44 @@ export function registerAdapter(pi: ExtensionAPI): void {
           cwd: ctx.cwd,
           event: "session.deleted",
           sessionId,
-          details: { trigger: "session_before_switch" },
+          ...(reason ? { details: { reason } } : {}),
+        },
+        error,
+      );
+    }
+  });
+
+  // ---- session_before_switch ----
+  // P1-4 fix: forward the SDK's `reason` ("new" | "resume") on the envelope.
+  // session_shutdown also fires for the same logical transition; whichever
+  // arrives first wins (markSessionDeleted dedupes), so the reason actually
+  // delivered to hooks may be either of the two.
+  pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent, ctx: ExtensionContext): Promise<void> => {
+    rememberContext(ctx.cwd, ctx);
+    const sessionId = safeGetSessionId(ctx.sessionManager);
+    if (!sessionId) return;
+    if (!markSessionDeleted(sessionId)) return; // session_shutdown already fired
+
+    const reason = typeof event?.reason === "string" ? event.reason : undefined;
+    try {
+      const runtime = getRuntimeFor(ctx.cwd);
+      await runtime.event({
+        event: {
+          type: "session.deleted",
+          properties: {
+            info: { id: sessionId },
+            ...(reason ? { reason } : {}),
+          },
+        },
+      });
+    } catch (error) {
+      reportDispatchFailure(
+        logger,
+        {
+          cwd: ctx.cwd,
+          event: "session.deleted",
+          sessionId,
+          details: { trigger: "session_before_switch", ...(reason ? { reason } : {}) },
         },
         error,
       );
