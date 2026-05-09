@@ -135,7 +135,7 @@ Avoid building important workflows around these assumptions:
 
 - `command:` actions working on PI
 - `tool:` calling a tool directly
-- `session.deleted` meaning “the session was definitely closed”
+- `session.deleted` meaning "the session was definitely closed"
 - `runIn: main` switching the actual bash execution context
 - untrusted project hooks loading automatically
 

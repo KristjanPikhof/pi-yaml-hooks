@@ -212,7 +212,7 @@ This passes when every changed path matches at least one glob in the list.
 
 Important detail: this is an allowlist over paths, not a per-path intersection of all patterns.
 
-If you want an intersection such as “all changed paths are under `src/` and all are `*.ts`”, write two separate conditions:
+If you want an intersection such as "all changed paths are under `src/` and all are `*.ts`", write two separate conditions:
 
 ```yaml
 conditions:
