@@ -188,81 +188,12 @@ export function registerAdapter(pi: ExtensionAPI): void {
     }
   });
 
-  // ---- session_start ----
-  // Filter to genuine session creation (new/startup). resume/reload/fork are
-  // existing sessions being re-entered; firing session.created there would
-  // overfire hooks that are meant to run once per fresh session.
-  pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
-    rememberContext(ctx.cwd, ctx);
-    if (event.reason !== "new" && event.reason !== "startup") return;
-    const sessionId = safeGetSessionId(ctx.sessionManager);
-    if (!sessionId) return;
-
-    try {
-      const runtime = getRuntimeFor(ctx.cwd);
-      await runtime.event(buildSessionCreatedEvent(sessionId));
-    } catch (error) {
-      reportDispatchFailure(logger, { cwd: ctx.cwd, event: "session.created", sessionId }, error);
-    }
-  });
-
-  // ---- session_shutdown ----
-  // P1-4 fix: forward the SDK's `reason` field on the envelope so hook
-  // authors can distinguish a graceful shutdown ("quit") from PI internally
-  // tearing down for /new, /resume, /fork, or /reload. session_shutdown
-  // also fires on terminal exit; the runtime re-entry after the process
-  // dies is harmless.
-  pi.on("session_shutdown", async (event: SessionShutdownEvent, ctx: ExtensionContext): Promise<void> => {
-    rememberContext(ctx.cwd, ctx);
-    const sessionId = safeGetSessionId(ctx.sessionManager);
-    if (!sessionId) return;
-    if (!markSessionDeleted(sessionId)) return; // already fired via before_switch
-
-    const reason = extractReason(event);
-    try {
-      const runtime = getRuntimeFor(ctx.cwd);
-      await runtime.event(buildSessionDeletedEvent(sessionId, reason));
-    } catch (error) {
-      reportDispatchFailure(
-        logger,
-        {
-          cwd: ctx.cwd,
-          event: "session.deleted",
-          sessionId,
-          ...(reason ? { details: { reason } } : {}),
-        },
-        error,
-      );
-    }
-  });
-
-  // ---- session_before_switch ----
-  // P1-4 fix: forward the SDK's `reason` ("new" | "resume") on the envelope.
-  // session_shutdown also fires for the same logical transition; whichever
-  // arrives first wins (markSessionDeleted dedupes), so the reason actually
-  // delivered to hooks may be either of the two.
-  pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent, ctx: ExtensionContext): Promise<void> => {
-    rememberContext(ctx.cwd, ctx);
-    const sessionId = safeGetSessionId(ctx.sessionManager);
-    if (!sessionId) return;
-    if (!markSessionDeleted(sessionId)) return; // session_shutdown already fired
-
-    const reason = extractReason(event);
-    try {
-      const runtime = getRuntimeFor(ctx.cwd);
-      await runtime.event(buildSessionDeletedEvent(sessionId, reason));
-    } catch (error) {
-      reportDispatchFailure(
-        logger,
-        {
-          cwd: ctx.cwd,
-          event: "session.deleted",
-          sessionId,
-          details: { trigger: "session_before_switch", ...(reason ? { reason } : {}) },
-        },
-        error,
-      );
-    }
+  // ---- session_start / session_shutdown / session_before_switch ----
+  installSessionLifecycleHandlers(pi, {
+    getRuntimeFor,
+    rememberContext,
+    logger,
+    reportDispatchFailure,
   });
 }
 
