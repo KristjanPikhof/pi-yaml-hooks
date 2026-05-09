@@ -54,7 +54,7 @@ export interface RuntimeEventEnvelope {
   }
 }
 
-interface RuntimeActionContext {
+export interface RuntimeActionContext {
   readonly files?: readonly string[]
   readonly changes?: readonly FileChange[]
   readonly toolName?: string
@@ -69,13 +69,13 @@ export interface PathMatchContext {
   readonly hasCodeFiles: boolean
 }
 
-interface HookExecutionResult {
+export interface HookExecutionResult {
   readonly blocked: boolean
   readonly blockReason?: string
   readonly stopSession?: boolean
 }
 
-interface HookMatchDecision {
+export interface HookMatchDecision {
   readonly matched: boolean
   readonly reason: string
   readonly changedPaths: readonly string[]
