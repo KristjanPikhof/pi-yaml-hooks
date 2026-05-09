@@ -576,64 +576,6 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
 
 
-// P2-10 helper: classify a thrown idle-dispatch error as transient
-// (host-died-style) vs. terminal (hook-no). Host-died errors are kept for
-// replay; everything else is consumed so a poisonous hook does not pin the
-// session in an infinite re-dispatch loop. We match a small set of
-// well-known IPC/socket failure shapes plus errors that explicitly tag
-// themselves with `code` strings the PI host emits when it goes down.
-function isHostDiedError(error: unknown): boolean {
-  if (error === null || typeof error !== "object") {
-    return false
-  }
-  const code = (error as { code?: unknown }).code
-  if (typeof code === "string") {
-    if (
-      code === "ECONNREFUSED" ||
-      code === "ECONNRESET" ||
-      code === "EPIPE" ||
-      code === "ENOTCONN" ||
-      code === "EHOSTDOWN" ||
-      code === "ESHUTDOWN" ||
-      code === "HOST_DIED" ||
-      code === "HOST_DISCONNECTED"
-    ) {
-      return true
-    }
-  }
-  const message = error instanceof Error ? error.message : String((error as { message?: unknown }).message ?? "")
-  if (typeof message === "string" && message.length > 0) {
-    const lowered = message.toLowerCase()
-    return (
-      lowered.includes("host died") ||
-      lowered.includes("host disconnected") ||
-      lowered.includes("connection refused") ||
-      lowered.includes("connection reset") ||
-      lowered.includes("broken pipe") ||
-      lowered.includes("socket hang up") ||
-      lowered.includes("not connected")
-    )
-  }
-  return false
-}
-
-async function abortSession(host: HostAdapter, sessionID: string): Promise<void> {
-  try {
-    await host.abort(sessionID)
-  } catch (error) {
-    // P2-11 fix: route abort failures through the structured logger so
-    // operators tailing ~/.pi/agent/log/hooks.log see the failure with
-    // sessionID and error context. Previously the raw console.error
-    // bypassed the logger entirely, which made tail-hook-log workflows
-    // miss aborted-session signals.
-    const message = error instanceof Error ? error.message : String(error)
-    getPiHooksLogger().error("session_abort_failed", "Failed to abort session.", {
-      sessionId: sessionID,
-      details: { error: message },
-    })
-  }
-}
-
 // P1-1 helper: cheap stat-based fingerprint shared by the runtime-side
 // refreshHooks short-circuit. Returns a stable string that changes whenever
 // any of the listed files' mtime/size changes, or whenever a file appears
