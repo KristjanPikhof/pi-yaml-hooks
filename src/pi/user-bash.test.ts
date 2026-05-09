@@ -198,7 +198,7 @@ const cases: Case[] = [
         _resetUserBashWarningForTests()
       }
 
-      const requiredPhrases = ["observe", "block", "exfiltrat", "PI_TOOL_ARGS"]
+      const requiredPhrases = ["observe", "block", "exfiltrat", "tool_args"]
       const missing = requiredPhrases.filter((p) => !captured.includes(p))
       return missing.length === 0
         ? { ok: true }
