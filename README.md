@@ -116,7 +116,7 @@ When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configu
 | `file.changed` | Synthesized after recognized file mutations |
 | `session.created` | PI startup or a genuinely new session |
 | `session.idle` | Agent turn finished and no messages are pending |
-| `session.deleted` | Best-effort cleanup on shutdown or session switch; includes PI's reason such as `shutdown` or `switch` when available |
+| `session.deleted` | Best-effort cleanup on shutdown or session switch; includes PI's reason (`quit`, `reload`, `new`, `resume`, or `fork`) when available |
 
 ### Actions
 
