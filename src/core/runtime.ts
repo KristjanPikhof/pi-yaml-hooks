@@ -188,6 +188,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       dispatchStates,
       actionRecursionGuards,
       asyncQueues,
+      warnedAsyncStopSources,
       boundGlobMatcher,
     )
 
@@ -207,6 +208,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       dispatchStates,
       actionRecursionGuards,
       asyncQueues,
+      warnedAsyncStopSources,
       phase,
       toolName,
       sessionID,
