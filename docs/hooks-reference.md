@@ -158,7 +158,7 @@ On stock PI, `pi-yaml-hooks` can synthesize it from:
   - `touch`
   - `mkdir`
 
-For direct `write` and `edit` tool calls, `pi-yaml-hooks` reports the target path as a `modify` change.
+For direct `write` and `edit` tool calls, `pi-yaml-hooks` reports the target path as a `modify` change. Recognized `touch`, `cp`, and `mkdir` shell commands are reported as `create` changes for their target paths.
 
 If you install custom tools named `multiedit`, `patch`, or `apply_patch`, the runtime can also synthesize `file.changed` from them.
 
