@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { readFileSync, statSync } from "node:fs"
+import { readFileSync, statSync, type Stats } from "node:fs"
 
 import {
   type HookConfig,
@@ -162,7 +162,7 @@ function computeConsistentFileFingerprint(filePath: string): string {
   }
 }
 
-function sameStatFingerprint(a: ReturnType<typeof statSync>, b: ReturnType<typeof statSync>): boolean {
+function sameStatFingerprint(a: Stats, b: Stats): boolean {
   return a.mtimeMs === b.mtimeMs && a.size === b.size && a.ino === b.ino && a.mode === b.mode
 }
 
