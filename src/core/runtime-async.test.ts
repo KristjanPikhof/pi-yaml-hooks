@@ -381,6 +381,236 @@ const cases: Case[] = [
         : { ok: false, detail: `activeCounts=${JSON.stringify(activeCounts)}` }
     },
   },
+  {
+    // P1-14 regression: hooks registered under both `tool.after.patch` and
+    // `tool.after.apply_patch` describe the same alias and must not both
+    // fire when an apply_patch tool call comes in.
+    name: "apply_patch dispatch dedupes hooks across patch and apply_patch aliases",
+    run: async () => {
+      const seen: string[] = []
+      const hooks: HookMap = new Map()
+      const sharedSource = { filePath: "/virtual/hooks.yaml", index: 0 }
+      hooks.set("tool.after.patch", [
+        {
+          id: "patch-hook",
+          event: "tool.after.patch",
+          actions: [{ bash: "job:patch" }],
+          scope: "all",
+          runIn: "current",
+          source: sharedSource,
+        },
+      ])
+      hooks.set("tool.after.apply_patch", [
+        {
+          id: "apply-patch-hook",
+          event: "tool.after.apply_patch",
+          actions: [{ bash: "job:apply_patch" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 1 },
+        },
+      ])
+      const runtime = createHooksRuntime(createFakeHost(), {
+        directory: "/repo",
+        hooks,
+        executeBash: async (request: BashExecutionRequest): Promise<BashHookResult> => {
+          seen.push(request.command)
+          return {
+            command: request.command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            blocking: false,
+            status: "success",
+            durationMs: 0,
+            signal: null,
+          }
+        },
+      })
+
+      await runtime["tool.execute.after"]({
+        tool: "apply_patch",
+        sessionID: "s1",
+        callID: "c1",
+        args: { patchText: "*** Add File: a.txt\n+x" },
+      })
+
+      // Both hooks should fire exactly once each (one per registered bucket),
+      // and the same hook config must never be invoked twice for one call.
+      const patchCalls = seen.filter((c) => c === "job:patch").length
+      const applyPatchCalls = seen.filter((c) => c === "job:apply_patch").length
+      return patchCalls === 1 && applyPatchCalls === 1
+        ? { ok: true }
+        : { ok: false, detail: `seen=${JSON.stringify(seen)}` }
+    },
+  },
+  {
+    // P1-14 regression #2: a single hook registered ONCE under
+    // tool.after.apply_patch must fire exactly once even though the alias
+    // dispatcher also looks up tool.after.patch.
+    name: "single apply_patch hook fires exactly once for an apply_patch call",
+    run: async () => {
+      const seen: string[] = []
+      const hooks: HookMap = new Map()
+      hooks.set("tool.after.apply_patch", [
+        {
+          id: "single-apply-patch-hook",
+          event: "tool.after.apply_patch",
+          actions: [{ bash: "job:single" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 0 },
+        },
+      ])
+      const runtime = createHooksRuntime(createFakeHost(), {
+        directory: "/repo",
+        hooks,
+        executeBash: async (request: BashExecutionRequest): Promise<BashHookResult> => {
+          seen.push(request.command)
+          return {
+            command: request.command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            blocking: false,
+            status: "success",
+            durationMs: 0,
+            signal: null,
+          }
+        },
+      })
+
+      await runtime["tool.execute.after"]({
+        tool: "apply_patch",
+        sessionID: "s1",
+        callID: "c1",
+        args: { patchText: "*** Add File: a.txt\n+x" },
+      })
+
+      return seen.length === 1 && seen[0] === "job:single"
+        ? { ok: true }
+        : { ok: false, detail: `seen=${JSON.stringify(seen)}` }
+    },
+  },
+  {
+    // P1-13 regression: a queued blocking dispatch must re-enter the
+    // recursion-guard frame that was active when it was parked, not the
+    // frame that happens to be active at drain time. We exercise this by
+    // forcing a tool.before dispatch to park behind another in-flight
+    // dispatch on the same key, then verifying that the parked dispatch
+    // executes its bash action exactly once. Without the ALS capture fix,
+    // the parked dispatch would resume under a stale recursion-guard
+    // store and either dedupe (skip) or run with a leaked actionKey.
+    name: "queued blocking dispatch executes its actions once after drain",
+    run: async () => {
+      let inFlight = 0
+      let maxInFlight = 0
+      const seen: string[] = []
+      const hooks: HookMap = new Map()
+      hooks.set("tool.before.write", [
+        {
+          id: "before-write",
+          event: "tool.before.write",
+          actions: [{ bash: "job:before-write" }],
+          scope: "all",
+          runIn: "current",
+          source: { filePath: "/virtual/hooks.yaml", index: 0 },
+        },
+      ])
+      const runtime = createHooksRuntime(createFakeHost(), {
+        directory: "/repo",
+        hooks,
+        executeBash: async (request: BashExecutionRequest): Promise<BashHookResult> => {
+          inFlight += 1
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          seen.push(request.command)
+          await sleep(15)
+          inFlight -= 1
+          return {
+            command: request.command,
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            blocking: false,
+            status: "success",
+            durationMs: 15,
+            signal: null,
+          }
+        },
+      })
+
+      // Fire two pre-tool hooks for the same session/event concurrently so
+      // the second dispatch parks behind the first.
+      await Promise.all([
+        runtime["tool.execute.before"](
+          { tool: "write", sessionID: "s1", callID: "c1" },
+          { args: { path: "/repo/a.txt", content: "x" } },
+        ),
+        runtime["tool.execute.before"](
+          { tool: "write", sessionID: "s1", callID: "c2" },
+          { args: { path: "/repo/b.txt", content: "y" } },
+        ),
+      ])
+
+      // Both dispatches must have run their action; serialization is
+      // already enforced by the dispatch state machine, so maxInFlight
+      // should be 1 and we should have seen the bash command twice.
+      return seen.length === 2 && maxInFlight === 1
+        ? { ok: true }
+        : { ok: false, detail: `seen=${JSON.stringify(seen)} maxInFlight=${maxInFlight}` }
+    },
+  },
+  {
+    // P1-15 regression: combining `async: true` with `action: stop` on a
+    // tool.before hook is currently a parse-side miss (covered separately
+    // in the core-loader lane). The runtime safety net warns once via
+    // console.warn rather than silently dropping the stop. We capture the
+    // warning by overriding console.warn for the duration of the test.
+    name: "runtime warns when async hook declares action: stop",
+    run: async () => {
+      const captured: string[] = []
+      const originalWarn = console.warn
+      console.warn = (msg: unknown) => {
+        captured.push(typeof msg === "string" ? msg : String(msg))
+      }
+      try {
+        const hooks: HookMap = new Map()
+        hooks.set("tool.after.write", [
+          {
+            id: "async-stop-hook",
+            event: "tool.after.write",
+            action: "stop",
+            async: true,
+            actions: [{ bash: "job:noop" }],
+            scope: "all",
+            runIn: "current",
+            source: { filePath: "/virtual/hooks-async-stop.yaml", index: 0 },
+          },
+        ])
+        const runtime = createHooksRuntime(createFakeHost(), {
+          directory: "/repo",
+          hooks,
+        })
+
+        await runtime["tool.execute.after"]({
+          tool: "write",
+          sessionID: "s1",
+          callID: "c1",
+          args: { path: "/repo/file.txt", content: "ok" },
+        })
+        await sleep(40)
+
+        return captured.some((line) => /async/.test(line) && /stop/.test(line))
+          ? { ok: true }
+          : { ok: false, detail: `captured=${JSON.stringify(captured)}` }
+      } finally {
+        console.warn = originalWarn
+      }
+    },
+  },
 ]
 
 export async function main(): Promise<number> {

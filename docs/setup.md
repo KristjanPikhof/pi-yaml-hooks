@@ -11,7 +11,7 @@ This guide gets `pi-yaml-hooks` installed and gives you a safe place to put `hoo
 
 Windows is unsupported because the hook runner expects a POSIX `bash`.
 
-This repository documents the peer support range exactly as `^0.74.0` against the new `@earendil-works` scope (PI moved from `@mariozechner/*` to `@earendil-works/*` in 0.74.0). Older 0.67–0.73 installs on the legacy scope are no longer part of the documented contract, even if some behavior still happens to work.
+The peer support range is `^0.74.0` against the `@earendil-works` scope. Older 0.67 to 0.73 installs are no longer part of the documented contract, even if some behavior still happens to work.
 
 ## Install the extension
 
@@ -59,7 +59,7 @@ If you prefer to edit settings directly, add the npm source to the `packages` ar
 }
 ```
 
-Project settings override global ones, and PI installs missing project packages automatically on startup.
+Project settings override global ones. PI auto-installs missing project packages on startup; global packages still need an explicit `pi install`.
 
 ### Other install options
 
@@ -69,6 +69,25 @@ Project settings override global ones, and PI installs missing project packages 
 | `pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks` | You need unreleased changes from `main` |
 | `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-yaml-hooks.ts` | You are editing a local checkout and want PI to load that working tree |
 | `<project>/.pi/extensions/pi-yaml-hooks.ts` | You want a project-local local-dev install from a checkout |
+| `pi -e /path/to/pi-yaml-hooks/extensions/index.ts` | One-off local testing from a checkout |
+
+### npm-library import
+
+`pi-yaml-hooks` is also published to npm and can be imported directly when you embed it in another tool rather than letting PI manage the install:
+
+```ts
+import PiHooks from 'pi-yaml-hooks';
+import { extensions } from 'pi-yaml-hooks/extensions';
+import type { HookConfig, BashHookContext } from 'pi-yaml-hooks/types';
+```
+
+The package exposes:
+
+- `.` to `./dist/index.js` (default export: the PI extension, plus public type re-exports)
+- `./types` to the public type surface for type-only imports such as `HookConfig`, `HookEvent`, `SessionDeletedReason`, and `BashHookContext`
+- `./extensions` to `./dist/extensions/index.js` (named re-export for the extensions entry-point)
+
+`npm install pi-yaml-hooks` requires Node.js `>= 22.0.0` and the PI SDK peer dependencies in the consuming project.
 
 ## Create your first hook file
 
@@ -161,7 +180,7 @@ PI_YAML_HOOKS_TRUST_PROJECT=1 pi
 
 ### Persistent trust
 
-Add the absolute repo/worktree trust anchor path to:
+Add the absolute repo or worktree trust anchor path to:
 
 ```text
 ~/.pi/agent/trusted-projects.json
@@ -175,9 +194,9 @@ Example:
 ]
 ```
 
-If a project hook file exists but the repo/worktree is not trusted, `pi-yaml-hooks` prints a warning once and skips that file.
+If a project hook file exists but the repo or worktree is not trusted, `pi-yaml-hooks` prints a warning once and skips that file.
 
-For nested packages, monorepos, and linked worktrees, `pi-yaml-hooks` resolves the nearest project hook root up to the current git worktree root and evaluates trust against that repo/worktree anchor, not just the current cwd string.
+For nested packages, monorepos, and linked worktrees, `pi-yaml-hooks` resolves the nearest project hook root up to the current git worktree root and evaluates trust against that repo or worktree anchor, not just the current cwd string.
 
 ## How loading works
 
@@ -210,22 +229,33 @@ If reload fails, PI keeps the last known good hook set and logs the parse errors
 
 Once the extension is loaded, PI exposes these helper commands:
 
-- `/hooks-status` — inspect the active hook summary, paths, trust state, and log file
-- `/hooks-validate` — validate active hooks and explain whether the project file is valid but untrusted
-- `/hooks-trust` — trust the current project without manually editing `trusted-projects.json`
-- `/hooks-reload` — reload extensions and command surfaces on demand
-- `/hooks-tail-log` — show the log file path and a ready-made tail command
+- `/hooks-status`: inspect the active hook summary, paths, trust state, and log file
+- `/hooks-validate`: validate active hooks and explain whether the project file is valid but untrusted
+- `/hooks-trust`: trust the current project without manually editing `trusted-projects.json`
+- `/hooks-reload`: reload extensions and command surfaces on demand
+- `/hooks-tail-log`: show the log file path and a ready-made tail command; pass `--follow` to spawn the bundled tail script as a detached live tail, or `--path` to print only the log file path
 
-## Useful environment variables
+## Environment variables
 
-| Variable | What it does |
+This is the canonical environment-variable reference for `pi-yaml-hooks`. Other docs link here.
+
+| Variable | Effect |
 |---|---|
-| `PI_YAML_HOOKS_TRUST_PROJECT=1` | Temporarily trust the current project |
-| `PI_YAML_HOOKS_BASH_EXECUTABLE=/path/to/bash` | Use a different bash executable |
-| `PI_YAML_HOOKS_MAX_OUTPUT_BYTES=<bytes>` | Override the per-hook stdout/stderr capture cap. Default is `1048576` (1 MiB) per stream. Example: `PI_YAML_HOOKS_MAX_OUTPUT_BYTES=4194304` raises the cap to 4 MiB. |
-| `PI_YAML_HOOKS_DEBUG=1` | Print extra debug logging |
-| `PI_YAML_HOOKS_CONFIRM_AUTO_APPROVE=1` | In headless mode, auto-approve `confirm:` instead of denying |
-| `PI_YAML_HOOKS_ENABLE_USER_BASH=1` | Route human `!` / `!!` shell commands through `tool.before.bash` hooks |
+| `PI_YAML_HOOKS_ENABLE_USER_BASH` | `=1` routes human `!` / `!!` shell commands through `tool.before.bash` hooks |
+| `PI_YAML_HOOKS_TRUST_PROJECT` | `=1` temporarily trusts the current project for the session |
+| `PI_YAML_HOOKS_PROMPT_AWARENESS` | `=0` disables the hook-awareness note appended to the system prompt |
+| `PI_YAML_HOOKS_BASH_EXECUTABLE` | Override the bash executable path |
+| `PI_YAML_HOOKS_MAX_OUTPUT_BYTES` | Per-stream stdout/stderr capture cap. Default `1048576` (1 MiB). |
+| `PI_YAML_HOOKS_MAX_STDIN_BYTES` | Stdin payload cap to bash hooks. Default `262144` (256 KiB). |
+| `PI_YAML_HOOKS_CONFIRM_AUTO_APPROVE` | `=1` auto-accepts `confirm:` instead of denying in headless mode (testing only) |
+| `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS` | `=1` allows top-level `imports:` in the global root config |
+| `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS` | `=1` allows bare-specifier imports resolved through `node_modules` |
+| `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR` | `=1` allows project imports whose target falls outside the project's trust anchor |
+| `PI_YAML_HOOKS_DEBUG` | `=1` enables verbose, persistent NDJSON logging |
+| `PI_YAML_HOOKS_LOG_LEVEL` | Set the log level explicitly: `debug`, `info`, `warn`, or `error` |
+| `PI_YAML_HOOKS_LOG_FILE` | Override the log file location (default `~/.pi/agent/logs/pi-yaml-hooks.ndjson`) |
+| `PI_YAML_HOOKS_LOG_MAX_BYTES` | Rotate the structured log file once it exceeds this many bytes (positive integer). Default `10485760` (10 MiB). On rotation the live file is renamed to `<path>.1`, replacing any prior `.1`. |
+| `PI_YAML_HOOKS_LOG_STDERR` | `=1` mirrors structured log entries to stderr |
 
 ## First troubleshooting steps
 
@@ -235,69 +265,9 @@ Once the extension is loaded, PI exposes these helper commands:
 4. If using project hooks, confirm trust is enabled
 5. If using UI actions, make sure PI is running with a UI surface
 
-## Runtime PI smoke checklist
+## Maintainer-only checks
 
-Run this checklist before widening PI SDK support or merging changes that touch session lifecycle, slash commands, UI actions, prompt injection, or tool-event routing. Unit tests cover the adapter contracts, but these checks use a real PI process for behavior the SDK does not expose cleanly in tests.
-
-### Prepare the smoke project
-
-From the `pi-yaml-hooks` checkout:
-
-```bash
-scripts/smoke/pi-runtime-smoke.sh
-```
-
-The script creates a temporary project, copies [`scripts/smoke/pi-runtime-smoke-hooks.yaml`](../scripts/smoke/pi-runtime-smoke-hooks.yaml) to `.pi/hook/hooks.yaml`, parses the valid and intentionally invalid smoke fixtures, and writes `.pi/hooks-smoke/evidence.md` for release notes.
-
-Start PI with the command printed by the script. It uses:
-
-- `PI_YAML_HOOKS_TRUST_PROJECT=1` so project hooks load without editing trust files
-- `PI_YAML_HOOKS_DEBUG=1` and `PI_YAML_HOOKS_LOG_FILE=<smoke-project>/.pi/hooks-smoke/pi-yaml-hooks.ndjson` for persistent evidence
-- `PI_YAML_HOOKS_ENABLE_USER_BASH=1` so human `!` / `!!` shell commands are routed through `tool.before.bash`
-- `pi -e <checkout>/extensions/index.ts` so the local checkout is tested
-
-### Run the checks
-
-| Area | Action | Expected observation | Evidence to keep |
-|---|---|---|---|
-| Startup and `session.created` | Start PI in the smoke project. | Startup prints a `[pi-yaml-hooks] Loaded ...` summary. The status bar or UI status surface shows `pi-yaml-hooks smoke: session created` when available. `.pi/hooks-smoke/events.ndjson` contains `session.created`. | Startup transcript, events file, and `pi-yaml-hooks.ndjson` excerpt. |
-| `/hooks-status` | Run `/hooks-status`. | Command reports active smoke hooks, project config path, trusted project state, and log path. On PI versions with custom messages, the response is structured in-session diagnostics rather than only plain text. | Command transcript or screenshot. |
-| `/hooks-validate` success | Run `/hooks-validate` with the valid smoke config. | Validation succeeds and includes the active project config. | Command transcript. |
-| Custom diagnostic failure path | Replace `.pi/hook/hooks.yaml` with `scripts/smoke/pi-runtime-smoke-invalid-hooks.yaml`, then run `/hooks-reload` and `/hooks-validate`. Restore the valid file afterward. | The unsupported `command:` action is rejected as a PI load error, and PI shows the validation details. Existing last-known-good hooks are not silently replaced by the invalid config. | Diagnostic message, log excerpt, and note that the valid file was restored. |
-| `/hooks-reload` | Restore the valid fixture and run `/hooks-reload`, then `/hooks-status`. | Reload succeeds, active smoke hooks return, and command/autocomplete surfaces remain available. | Reload transcript. |
-| `tool.before.bash` and confirm | Ask PI to run a harmless shell command, for example `echo smoke-before-bash`. | A confirmation prompt appears before the bash tool runs. Approving lets the command continue, and `events.ndjson` records `tool.before.bash`. Rejecting in a separate pass blocks the tool call. | Prompt screenshot/transcript and events file. |
-| `tool.after.read` and follow-up prompt | Ask PI to read `README.md`. | `events.ndjson` records `tool.after.read`. The `tool:` action sends a follow-up prompt asking PI to read `.pi/hooks-smoke/events.ndjson`; PI may ask for or perform that read in the current session. | Conversation transcript and events file. |
-| `tool.after.write` and `file.changed` | Ask PI to write `.pi/hooks-smoke/write-check.txt`. | `events.ndjson` records `tool.after.write` with changed file data, then `file.changed` for the smoke path. | Events file. |
-| `user_bash` opt-in | In interactive PI, run a human shell command with `! echo smoke-user-bash`. | Because `PI_YAML_HOOKS_ENABLE_USER_BASH=1` is set, the same `tool.before.bash` confirm path runs before the user command. No `tool.after.*` or `file.changed` event is expected for `user_bash`. | Prompt transcript and note that no after event was expected. |
-| Idle | Let the agent finish a turn. | `.pi/hooks-smoke/events.ndjson` records `session.idle`, and status updates to `pi-yaml-hooks smoke: idle observed` when UI status is available. | Events file. |
-| Session switch | Run `/new`. Optionally check `/resume` and `/fork` when available. | `/new` causes lossy `session.deleted` cleanup for the previous session and a fresh `session.created`. `/resume` and `/fork` should not double-run cleanup when PI emits both switch and shutdown lifecycle hooks. Existing-session re-entry should not re-fire `session.created`. | Events file with ordering notes. |
-| `/quit` | Run `/quit`. | PI exits cleanly. If PI emits shutdown lifecycle hooks, the smoke event log may include lossy `session.deleted` cleanup for the active session. | Terminal transcript and final events file. |
-| Future SDK gate | In a separate checkout or temporary matrix run, execute `npm run compat:sdk-matrix:future`, then run this same smoke procedure against the next minor (e.g. `0.75.x`) before changing `peerDependencies`. | Treat failure to expose built-in tools, slash commands, custom messages, autocomplete, or lifecycle hooks as a release blocker. Passing the future matrix alone is advisory and does not widen support. | Matrix output plus full smoke evidence. |
-
-### Evidence template
-
-Use the generated `.pi/hooks-smoke/evidence.md` as the release artifact. Fill in PI version, SDK package versions, OS, command transcripts, `events.ndjson`, and relevant `pi-yaml-hooks.ndjson` excerpts. Mark each row pass or fail. If a row is not runnable in the current PI surface, record the exact reason and whether the expected behavior remains covered by unit tests.
-
-## SDK compatibility checks for maintainers
-
-The supported PI SDK peer range is `^0.74.0` (under the new `@earendil-works` scope). Keep that range honest by running the compatibility matrix before merging SDK-sensitive changes:
-
-```bash
-npm run compat:sdk-matrix
-```
-
-This command is safe for normal development state. It copies the repository to a temporary directory, installs the matching `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` pair for each SDK spec, then runs the normal verification commands in the temporary copy:
-
-1. `npm run typecheck`
-2. `npm test`
-
-The default matrix covers:
-
-- `0.74.0` — minimum supported SDK on the `@earendil-works` scope
-
-Use `npm run compat:sdk-matrix:dry-run` to print the exact workflow without installing temporary dependencies.
-
-Future SDK lines (`0.75.x` and later) can be probed via `npm run compat:sdk-matrix:future` as an advisory gate, but passing that command alone does not widen package support.
+The runtime PI smoke checklist and SDK compatibility matrix details live in [`maintaining.md`](./maintaining.md). Skip that file unless you are releasing or widening SDK support.
 
 ## Next step
 

@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+#
+# Dependencies:
+#   - jq (required for filtered or pretty-printed output; optional for --raw with no filters)
+#   - tail (BSD or GNU; uses tail -F to follow log rotation)
+#
+# Behavior:
+#   By default the script polls until the log file exists, then follows it.
+#   Pass --no-wait to fail fast if the log is missing (legacy behavior).
+#
 set -euo pipefail
 
 LOG_FILE="${PI_YAML_HOOKS_LOG_FILE:-$HOME/.pi/agent/logs/pi-yaml-hooks.ndjson}"
@@ -8,12 +17,19 @@ SESSION_FILTER=""
 KIND_FILTER=""
 LEVEL_FILTER=""
 RAW_OUTPUT=0
+WAIT_FOR_CREATION=1
+WAIT_TIMEOUT_SECONDS=0  # 0 means wait forever
+WAIT_POLL_SECONDS=1
 
 usage() {
   cat <<'EOF'
 Usage: tail-hook-log.sh [options]
 
 Tail the persistent pi-yaml-hooks NDJSON log and pretty-print entries.
+
+Dependencies:
+  jq (required for filters and pretty output; --raw without filters works without jq)
+  tail (uses -F to follow log rotation)
 
 Options:
   --file PATH        Read a specific log file instead of PI_YAML_HOOKS_LOG_FILE/default
@@ -23,6 +39,8 @@ Options:
   --kind KIND        Show only entries for a specific log kind
   --level LEVEL      Show only entries for a specific level (error|warn|info|debug)
   --raw              Output raw NDJSON lines (still filtered when jq is available)
+  --no-wait          Fail fast if the log file does not exist (legacy behavior)
+  --wait-timeout N   When waiting, give up after N seconds (default 0 = forever)
   -h, --help         Show this help
 
 Examples:
@@ -30,6 +48,8 @@ Examples:
   ./scripts/tail-hook-log.sh --hook load-writer-skill-when-markdown-changes
   ./scripts/tail-hook-log.sh --event session.idle --session abc123
   ./scripts/tail-hook-log.sh --kind action_result --level info
+  ./scripts/tail-hook-log.sh --no-wait                 # fail fast if log missing
+  ./scripts/tail-hook-log.sh --wait-timeout 30         # wait up to 30s for the log
 EOF
 }
 
@@ -63,6 +83,14 @@ while [[ $# -gt 0 ]]; do
       RAW_OUTPUT=1
       shift
       ;;
+    --no-wait)
+      WAIT_FOR_CREATION=0
+      shift
+      ;;
+    --wait-timeout)
+      WAIT_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -76,9 +104,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! -f "$LOG_FILE" ]]; then
-  echo "pi-yaml-hooks log file not found yet: $LOG_FILE" >&2
-  echo "Start PI with PI_YAML_HOOKS_DEBUG=1 and trigger a hook first." >&2
-  exit 1
+  if [[ "$WAIT_FOR_CREATION" -eq 0 ]]; then
+    echo "pi-yaml-hooks log file not found yet: $LOG_FILE" >&2
+    echo "Start PI with PI_YAML_HOOKS_DEBUG=1 and trigger a hook first." >&2
+    exit 1
+  fi
+  echo "Waiting for log file to be created: $LOG_FILE" >&2
+  if [[ "$WAIT_TIMEOUT_SECONDS" -gt 0 ]]; then
+    echo "(timeout: ${WAIT_TIMEOUT_SECONDS}s; pass --no-wait to fail fast instead)" >&2
+  else
+    echo "(no timeout; pass --wait-timeout N or --no-wait to bound the wait)" >&2
+  fi
+  waited=0
+  while [[ ! -f "$LOG_FILE" ]]; do
+    sleep "$WAIT_POLL_SECONDS"
+    if [[ "$WAIT_TIMEOUT_SECONDS" -gt 0 ]]; then
+      waited=$((waited + WAIT_POLL_SECONDS))
+      if [[ "$waited" -ge "$WAIT_TIMEOUT_SECONDS" ]]; then
+        echo "Timed out waiting for log file: $LOG_FILE" >&2
+        exit 1
+      fi
+    fi
+  done
+  echo "Log file appeared; tailing." >&2
 fi
 
 if ! command -v jq >/dev/null 2>&1; then

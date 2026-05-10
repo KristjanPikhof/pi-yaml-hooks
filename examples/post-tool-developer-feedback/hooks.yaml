@@ -19,7 +19,7 @@ hooks:
     actions:
       - bash: 'node ./examples/post-tool-developer-feedback/post-tool-log.mjs'
 
-  - id: mark-package-change
+  - id: mark-package-change-write
     event: tool.after.write
     conditions:
       - matchesAnyPath:
@@ -31,8 +31,35 @@ hooks:
     actions:
       - setStatus: "Dependency metadata changed"
 
-  - id: suggest-package-check
+  - id: mark-package-change-edit
+    event: tool.after.edit
+    conditions:
+      - matchesAnyPath:
+          - "package.json"
+          - "package-lock.json"
+          - "pnpm-lock.yaml"
+          - "yarn.lock"
+          - "bun.lock"
+    actions:
+      - setStatus: "Dependency metadata changed"
+
+  - id: suggest-package-check-write
     event: tool.after.write
+    conditions:
+      - matchesAnyPath:
+          - "package.json"
+          - "package-lock.json"
+          - "pnpm-lock.yaml"
+          - "yarn.lock"
+          - "bun.lock"
+    actions:
+      - tool:
+          name: bash
+          args:
+            command: "npm test"
+
+  - id: suggest-package-check-edit
+    event: tool.after.edit
     conditions:
       - matchesAnyPath:
           - "package.json"

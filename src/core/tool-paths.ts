@@ -62,6 +62,17 @@ export function getToolFileChanges(toolName: string, args: Record<string, unknow
     return command ? parseBashChanges(command) : []
   }
 
+  // P1-16: MultiEdit (and some Edit variants) ship an `edits` array, where
+  // each item is a single-edit shape. The previous code only inspected the
+  // top-level path keys, silently losing every change beyond the first one.
+  // Walk the array first; fall back to single-shape extraction otherwise.
+  if (normalized === "multiedit") {
+    const fromArray = extractEditsArrayChanges(args)
+    if (fromArray.length > 0) {
+      return fromArray
+    }
+  }
+
   const filePath = pickString(args.filePath, args.file_path, args.path, args.file)
   if (!filePath) {
     return []
@@ -95,6 +106,34 @@ export function getChangedPaths(changes: readonly FileChange[]): string[] {
 function pickString(...values: unknown[]): string | undefined {
   const value = values.find((candidate) => typeof candidate === "string" && candidate.trim().length > 0)
   return typeof value === "string" ? value : undefined
+}
+
+function extractEditsArrayChanges(args: Record<string, unknown>): FileChange[] {
+  const editsRaw = args.edits
+  if (!Array.isArray(editsRaw) || editsRaw.length === 0) {
+    return []
+  }
+
+  // Top-level path is the canonical target for MultiEdit. Each edit may
+  // override it (rare, but supported for forward-compat with hosts that nest
+  // the path under each edit).
+  const topLevelPath = pickString(args.filePath, args.file_path, args.path, args.file)
+
+  const changes: FileChange[] = []
+  for (const edit of editsRaw) {
+    if (!edit || typeof edit !== "object") {
+      continue
+    }
+    const editRecord = edit as Record<string, unknown>
+    const editPath =
+      pickString(editRecord.filePath, editRecord.file_path, editRecord.path, editRecord.file) ?? topLevelPath
+    if (!editPath) {
+      continue
+    }
+    changes.push({ operation: "modify", path: editPath })
+  }
+
+  return changes
 }
 
 function parsePatchChanges(patchText: string): FileChange[] {
@@ -154,7 +193,13 @@ function parseBashChanges(command: string): FileChange[] {
 
     const cmd = tokens[0]
 
-    if (cmd === "rm" || cmd === "git" && tokens[1] === "rm") {
+    // P1-17: parenthesise the `&&` / `||` properly. The previous code read
+    // `cmd === "rm" || cmd === "git" && tokens[1] === "rm"`, which JS
+    // evaluates as `cmd === "rm" || (cmd === "git" && tokens[1] === "rm")`
+    // — coincidentally correct for `rm`, but the same shape was applied to
+    // `mv`/`cp`, where the right-side test must also disqualify a bare `mv`
+    // when a `git`-prefix is expected. Make the grouping explicit.
+    if (cmd === "rm" || (cmd === "git" && tokens[1] === "rm")) {
       const paths = extractPathArgs(tokens, cmd === "git" ? 2 : 1)
       for (const p of paths) {
         changes.push({ operation: "delete", path: p })
@@ -162,7 +207,7 @@ function parseBashChanges(command: string): FileChange[] {
       continue
     }
 
-    if (cmd === "mv" || cmd === "git" && tokens[1] === "mv") {
+    if (cmd === "mv" || (cmd === "git" && tokens[1] === "mv")) {
       const paths = extractPathArgs(tokens, cmd === "git" ? 2 : 1)
       if (paths.length >= 2) {
         const dest = paths[paths.length - 1]
@@ -173,7 +218,7 @@ function parseBashChanges(command: string): FileChange[] {
       continue
     }
 
-    if (cmd === "cp" || cmd === "git" && tokens[1] === "cp") {
+    if (cmd === "cp" || (cmd === "git" && tokens[1] === "cp")) {
       const paths = extractPathArgs(tokens, cmd === "git" ? 2 : 1)
       if (paths.length >= 2) {
         changes.push({ operation: "create", path: paths[paths.length - 1] })
@@ -181,11 +226,20 @@ function parseBashChanges(command: string): FileChange[] {
       continue
     }
 
-    if (cmd === "touch" || cmd === "mkdir") {
+    if (cmd === "touch") {
       const paths = extractPathArgs(tokens, 1)
       for (const p of paths) {
         changes.push({ operation: "create", path: p })
       }
+      continue
+    }
+
+    if (cmd === "mkdir") {
+      const paths = extractPathArgs(tokens, 1)
+      for (const p of paths) {
+        changes.push({ operation: "create", path: p })
+      }
+      continue
     }
   }
 
@@ -243,15 +297,32 @@ function shellTokenize(segment: string): string[] {
   return tokens
 }
 
+/**
+ * Extract positional path arguments from a tokenised shell segment, skipping
+ * flags. POSIX `--` is honoured: every token after `--` is treated as a
+ * positional argument even if it begins with `-` (so `rm -- --bad-name`
+ * extracts `--bad-name` as a path).
+ */
 function extractPathArgs(tokens: string[], startIndex: number): string[] {
   const paths: string[] = []
+  let positionalOnly = false
   for (let i = startIndex; i < tokens.length; i++) {
     const token = tokens[i]
+    if (positionalOnly) {
+      paths.push(token)
+      continue
+    }
+    if (token === "--") {
+      // P1-17: a bare `--` flips the parser into positional-only mode for
+      // the remainder of the segment. The previous loop tried to do the
+      // same via `startIndex = i + 1` + `continue`, but the outer `for`
+      // header keeps using its captured `startIndex`, so the reassignment
+      // had no effect and the next `-`-prefixed token was still treated as
+      // a flag.
+      positionalOnly = true
+      continue
+    }
     if (token.startsWith("-")) {
-      if (token === "--") {
-        startIndex = i + 1
-        continue
-      }
       continue
     }
     paths.push(token)

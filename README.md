@@ -1,8 +1,8 @@
 # pi-yaml-hooks
 
-`pi-yaml-hooks` adds YAML-driven hooks to the [PI coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). You can run `bash` around tool calls and session events, block risky actions before they run, and surface PI-native notifications, confirmations, and status entries from `hooks.yaml`.
+Run `bash` around PI tool calls, block risky commands, and post UI notifications, confirmations, and status entries from one `hooks.yaml` file. `pi-yaml-hooks` plugs into the [PI coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) as a package; nothing else to wire up.
 
-This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/OpenCode-Hooks). The hook model is familiar, but the runtime is PI-native and the limits are explicit.
+This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/OpenCode-Hooks). The hook model is familiar; the runtime is PI-native and the limits are explicit.
 
 ## What it does
 
@@ -14,135 +14,13 @@ This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/O
 - Emit structured in-session diagnostics when PI supports custom messages
 - Inject a short hook-awareness note before agent start (disable with `PI_YAML_HOOKS_PROMPT_AWARENESS=0`)
 
-## Requirements
-
-- macOS or Linux
-- Node.js `>=22.0.0`
-- `bash` on `$PATH` (override with `PI_YAML_HOOKS_BASH_EXECUTABLE`)
-- `@earendil-works/pi-coding-agent ^0.74.0`
-
-Windows is unsupported.
-
-## Install
-
-`pi-yaml-hooks` is installable as a PI package from npm or directly from git. PI fetches the package, installs dependencies, and loads the extension declared in `package.json`.
-
-### Option 1: `pi install` from npm (recommended)
-
-```bash
-pi install npm:pi-yaml-hooks
-```
-
-This pulls the latest published `pi-yaml-hooks` from npm and writes to global settings at `~/.pi/agent/settings.json`. Add `-l` to write to project settings at `.pi/settings.json` instead.
-
-### Option 2: `pi install` from git (latest unreleased changes)
-
-```bash
-# SSH
-pi install git:git@github.com:KristjanPikhof/pi-yaml-hooks
-
-# HTTPS
-pi install https://github.com/KristjanPikhof/pi-yaml-hooks
-```
-
-### Option 3: edit `settings.json` by hand
-
-Add the package source to the `packages` array. PI auto-installs missing project packages on startup.
-
-**Global**, in `~/.pi/agent/settings.json`:
-
-```json
-{
-  "packages": [
-    "npm:pi-yaml-hooks"
-  ]
-}
-```
-
-**Project-local**, in `.pi/settings.json`:
-
-```json
-{
-  "packages": [
-    "npm:pi-yaml-hooks"
-  ]
-}
-```
-
-### Option 4: one-off trial
-
-```bash
-pi -e npm:pi-yaml-hooks
-```
-
-This loads `pi-yaml-hooks` for the current run only. Nothing is written to settings.
-
-### Local development from a checkout
-
-If you are editing this repo locally, the symlink workflow is still useful:
-
-| Method | When to use |
-|---|---|
-| `ln -s "$PWD/extensions/index.ts" ~/.pi/agent/extensions/pi-yaml-hooks.ts` | Local development with a checked-out repo. |
-| `pi -e /path/to/pi-yaml-hooks/extensions/index.ts` | One-off local testing from a checkout. |
-| `<project>/.pi/extensions/pi-yaml-hooks.ts` | Project-local local-dev install from a checkout. |
-
-### SDK compatibility matrix
-
-Before widening PI peer support or merging SDK-sensitive changes, run the repeatable SDK matrix:
-
-```bash
-npm run compat:sdk-matrix
-```
-
-The matrix checks the supported SDK (`@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` `0.74.0`). It creates a temporary copy of the repository, installs each SDK pair in that copy only, then runs `npm run typecheck` and `npm test`. The working checkout's `package.json`, `package-lock.json`, and normal `node_modules` are not mutated.
-
-To preview the workflow without installing anything:
-
-```bash
-npm run compat:sdk-matrix:dry-run
-```
-
-Runtime PI behavior also has a smoke checklist for surfaces unit tests cannot fully emulate, including slash commands, custom diagnostics, UI actions, follow-up prompts, `user_bash`, session switching, and `/quit`:
-
-```bash
-scripts/smoke/pi-runtime-smoke.sh
-```
-
-Follow [`docs/setup.md#runtime-pi-smoke-checklist`](./docs/setup.md#runtime-pi-smoke-checklist) and keep the generated evidence file with release notes or SDK-widening PRs.
-
-Future SDK lines (`0.75.x` and later) are gated, not part of the current peer range. Try them explicitly with:
-
-```bash
-npm run compat:sdk-matrix:future
-```
-
-Do not widen support until both the future matrix and the runtime smoke pass, including the no-builtin-tools gate.
-
-## Consumption
-
-Two install paths are supported:
-
-**PI package (recommended)** — use `pi install npm:pi-yaml-hooks` (or the git source) or add the entry to your `settings.json` as shown in the [Install](#install) section above. PI manages the install and loads the extension automatically. This is the primary and fully-supported path.
-
-**npm library** — `pi-yaml-hooks` is also published to npm and can be imported directly:
-
-```ts
-import PiHooks from 'pi-yaml-hooks';
-import { extensions } from 'pi-yaml-hooks/extensions';
-```
-
-The package exposes:
-- `.` → `./dist/index.js` (default export: the PI extension)
-- `./extensions` → `./dist/extensions/index.js` (named re-export for the extensions entry-point)
-
-`npm install pi-yaml-hooks` requires Node.js `>=22.0.0` and the PI SDK peer dependencies to be present in the consuming project.
-
 ## Quick start
 
 Create a minimal global hook file so you can see the extension working right away.
 
 ```bash
+pi install npm:pi-yaml-hooks
+
 mkdir -p ~/.pi/agent/hook
 cat > ~/.pi/agent/hook/hooks.yaml <<'YAML'
 hooks:
@@ -160,11 +38,66 @@ Expected startup output:
 [pi-yaml-hooks] Loaded 1 hook (global: 1, project: 0).
 ```
 
-If a trusted project also has project hooks, the summary includes both scopes.
+If a trusted project also has project hooks, the summary includes both scopes:
 
 ```text
 [pi-yaml-hooks] Loaded 3 hooks (global: 1, project: 2).
 ```
+
+## Requirements
+
+- macOS or Linux
+- Node.js `>=22.0.0`
+- `bash` on `$PATH` (override with `PI_YAML_HOOKS_BASH_EXECUTABLE`)
+- `@earendil-works/pi-coding-agent ^0.74.0`
+
+Windows is unsupported.
+
+## Install
+
+The full install reference, including settings.json edits, project-local installs, npm-library import paths, and local-checkout symlinks, lives in [`docs/setup.md`](./docs/setup.md). The short version:
+
+```bash
+pi install npm:pi-yaml-hooks         # recommended
+pi install https://github.com/KristjanPikhof/pi-yaml-hooks   # latest unreleased
+pi -e npm:pi-yaml-hooks               # one-off run, nothing written to settings
+```
+
+Add `-l` to `pi install` to write to project settings (`.pi/settings.json`) instead of global (`~/.pi/agent/settings.json`).
+
+### SDK compatibility matrix
+
+Before widening PI peer support or merging SDK-sensitive changes, run the repeatable SDK matrix:
+
+```bash
+npm run compat:sdk-matrix
+```
+
+The matrix checks the supported SDK pair (`@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` `0.74.0`). It creates a temporary copy of the repository, installs each SDK pair in that copy only, then runs `npm run typecheck` and the consumer-facing `npm test` script (which is the documented public-surface check; it does not exercise the internal dev suite). The working checkout's `package.json`, `package-lock.json`, and normal `node_modules` are not mutated.
+
+For the full internal test suite, run `npm run test:internal` directly in the working checkout.
+
+To preview the matrix workflow without installing anything:
+
+```bash
+npm run compat:sdk-matrix:dry-run
+```
+
+Runtime PI behavior also has a smoke checklist for surfaces unit tests cannot fully emulate, including slash commands, custom diagnostics, UI actions, follow-up prompts, `user_bash`, session switching, and `/quit`:
+
+```bash
+scripts/smoke/pi-runtime-smoke.sh
+```
+
+Maintainer-facing details, including the smoke checklist, evidence template, and gating rules, live in [`docs/maintaining.md`](./docs/maintaining.md). Keep the generated evidence file with release notes or SDK-widening PRs.
+
+Future SDK lines (`0.75.x` and later) are gated, not part of the current peer range. Try them explicitly with:
+
+```bash
+npm run compat:sdk-matrix:future
+```
+
+Do not widen support until both the future matrix and the runtime smoke pass, including the no-builtin-tools gate.
 
 ## How it works
 
@@ -183,7 +116,7 @@ When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configu
 | `file.changed` | Synthesized after recognized file mutations |
 | `session.created` | PI startup or a genuinely new session |
 | `session.idle` | Agent turn finished and no messages are pending |
-| `session.deleted` | Session shutdown or switch, intentionally lossy |
+| `session.deleted` | Best-effort cleanup on shutdown or session switch; includes PI's reason (`quit`, `reload`, `new`, `resume`, or `fork`) when available |
 
 ### Actions
 
@@ -203,11 +136,11 @@ When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configu
 | `/hooks-validate` | Validation results for active hooks and skipped untrusted project hooks |
 | `/hooks-trust` | Adds the current repo/worktree anchor to `~/.pi/agent/trusted-projects.json` |
 | `/hooks-reload` | Reloads the extension and command surface |
-| `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command |
+| `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command; `--follow` spawns the bundled tail script detached, and `--path` prints only the path |
 
 `/hooks-status`, `/hooks-validate`, and hook-load validation errors also emit structured in-session diagnostics when PI supports custom messages.
 
-PI exposes `ctx.ui.addAutocompleteProvider` on the supported `^0.74.0` line, so `pi-yaml-hooks` layers guarded `/hooks` autocomplete into the editor. Suggestions include the command names plus contextual hook IDs, event names, config paths, and log-tail options where useful.
+PI exposes `ctx.ui.addAutocompleteProvider` on the supported `^0.74.0` line, so `pi-yaml-hooks` layers guarded `/hooks` autocomplete into the editor. Suggestions include the command names plus contextual hook IDs, event names, config paths, and log-tail options where useful. Hook IDs are loaded lazily and memoized by hook-snapshot signature, not fixed at extension registration time.
 
 ## Important limitations
 
@@ -217,18 +150,18 @@ These are the PI-specific constraints that matter most:
 - `tool:` is prompt injection, not imperative tool execution
 - `action: stop` only has real effect on `tool.before.*`
 - `runIn: main` is unsupported for non-`bash` actions
-- `session.deleted` is intentionally lossy
+- `session.deleted` is best-effort and intentionally lossy: PI fires it for shutdown and for session switches like `/new`, `/resume`, and `/fork`, and `pi-yaml-hooks` forwards PI's `reason` (`quit`, `reload`, `new`, `resume`, or `fork`) on the envelope so hooks can disambiguate
 - `user_bash` interception is opt-in with `PI_YAML_HOOKS_ENABLE_USER_BASH=1`
 
-If you are authoring hooks, keep those rules in mind first. They explain most surprising behavior.
+Keep those rules in mind when authoring hooks. They explain most surprising behavior.
 
 ### What trust grants when user_bash is enabled
 
 When `PI_YAML_HOOKS_ENABLE_USER_BASH=1` is set, every human `!` / `!!` shell command typed in PI is routed through `tool.before.bash` hooks before PI executes it. This expands the trust surface significantly:
 
-- **Observation** — hooks can read the full command text via `PI_TOOL_ARGS` in the bash environment. Any trusted-project hook runs against every command you type.
-- **Blocking** — a `tool.before.bash` hook that exits with code `2` will prevent the command from running. A misconfigured or malicious hook can silently block commands.
-- **Exfiltration risk** — a bash action hook can read `PI_TOOL_ARGS` (which contains the typed command) and forward it to an external service. Only enable `PI_YAML_HOOKS_ENABLE_USER_BASH=1` if you trust every hook in every trusted project.
+- **Observation**: hooks receive the typed command in stdin JSON as `tool_args.command`, so a trusted-project bash hook can read the full text of every command you type.
+- **Blocking**: a `tool.before.bash` hook that exits with code `2` will prevent the command from running. A misconfigured or malicious hook can silently block commands.
+- **Exfiltration risk**: the same bash hook can forward `tool_args.command` to an external service. Only enable `PI_YAML_HOOKS_ENABLE_USER_BASH=1` if you trust every hook in every trusted project.
 
 `pi-yaml-hooks` emits a one-time stderr warning on startup listing which trusted projects will have access when this env var is set. The warning fires once per process and names the projects currently in `~/.pi/agent/trusted-projects.json`.
 
@@ -246,7 +179,7 @@ Project root config paths:
 1. `<project>/.pi/hook/hooks.yaml`
 2. `<project>/.pi/hooks.yaml`
 
-Project hooks are gated by trust because they can run arbitrary `bash` with your user permissions. Trust is evaluated against the repo/worktree anchor, not an arbitrary nested directory string.
+Project hooks are gated by trust because they can run arbitrary `bash` with your user permissions. Trust is evaluated against the repo or worktree anchor, not an arbitrary nested directory string.
 
 Two ways to trust a project:
 
@@ -268,14 +201,7 @@ These packs are opt-in examples, not built-in PI features.
 
 ## Docs
 
-If you want the full reference, start here:
-
-- [`docs/README.md`](./docs/README.md) for the docs entry point and reading order
-- [`docs/setup.md`](./docs/setup.md) for install, config paths, trust, reloads, and environment variables
-- [`docs/hooks-reference.md`](./docs/hooks-reference.md) for the hook schema, events, conditions, actions, and PI behavior
-- [`docs/agent-authoring-guide.md`](./docs/agent-authoring-guide.md) for practical authoring rules
-- [`docs/debugging-hooks.md`](./docs/debugging-hooks.md) for logs and troubleshooting
-- [`docs/examples/README.md`](./docs/examples/README.md) for copy-paste example patterns
+Full reference and reading order live in [`docs/README.md`](./docs/README.md).
 
 ## License
 

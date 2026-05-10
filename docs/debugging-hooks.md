@@ -32,6 +32,8 @@ Override it with:
 PI_YAML_HOOKS_LOG_FILE=/tmp/pi-yaml-hooks.ndjson PI_YAML_HOOKS_DEBUG=1 pi
 ```
 
+The log file rotates automatically once it exceeds `PI_YAML_HOOKS_LOG_MAX_BYTES` (default 10 MiB). On rotation the live file is renamed to `<path>.1`, replacing any prior `.1`. Only one rotated copy is kept, so plumb the file into your own log shipper if you need more history.
+
 ## Tail the log
 
 Raw tail:
@@ -136,9 +138,9 @@ You should be able to see:
 
 ## Useful environment variables
 
-| Variable | Meaning |
-|---|---|
-| `PI_YAML_HOOKS_DEBUG=1` | enable debug-level persistent logging |
-| `PI_YAML_HOOKS_LOG_FILE=/path/file.ndjson` | change the log file location |
-| `PI_YAML_HOOKS_LOG_LEVEL=debug` | explicitly set the log level |
-| `PI_YAML_HOOKS_LOG_STDERR=1` | mirror structured log entries to stderr as well |
+The full environment-variable reference lives in [`setup.md`](./setup.md#environment-variables). The variables most relevant to debugging are:
+
+- `PI_YAML_HOOKS_DEBUG=1`: enables debug-level persistent logging
+- `PI_YAML_HOOKS_LOG_FILE=/path/file.ndjson`: changes the log file location
+- `PI_YAML_HOOKS_LOG_LEVEL=debug|info|warn|error`: sets the log level explicitly
+- `PI_YAML_HOOKS_LOG_STDERR=1`: mirrors structured log entries to stderr

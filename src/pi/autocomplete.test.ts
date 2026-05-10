@@ -169,7 +169,7 @@ const cases: Case[] = [
       }),
   },
   {
-    name: "filters slash command completions to substring matches on label",
+    name: "filters slash command completions by prefix on label/value",
     run: async () =>
       await withSandbox(async (projectDir) => {
         const ctx = makeContext({ projectDir, hasUI: true, expose: true })
@@ -179,6 +179,70 @@ const cases: Case[] = [
         const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() })
         const values = suggestions?.items.map((i) => i.value) ?? []
         return values.includes("hooks-status") && !values.includes("hooks-reload")
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify(values) }
+      }),
+  },
+  {
+    // P3-5: substring-of-the-name like "us" used to wrongly surface
+    // "hooks-status" because the substring sat inside "status". With prefix
+    // matching the user must start typing the actual command name.
+    name: "prefix-matches command names so unrelated substrings do not match",
+    run: async () =>
+      await withSandbox(async (projectDir) => {
+        const ctx = makeContext({ projectDir, hasUI: true, expose: true })
+        registerHookAutocomplete(ctx as never)
+        const provider = ctx.factories[0](createNoopProvider())
+        const input = "/us"
+        const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() })
+        // Outside the /hooks- token the provider returns null, so any
+        // suggestions should not include hooks-status via false-positive
+        // substring match.
+        const values = suggestions?.items.map((i) => i.value) ?? []
+        return !values.includes("hooks-status")
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify(values) }
+      }),
+  },
+  {
+    // P1-11: state captured at registration must not freeze; a hook id
+    // added to hooks.yaml after registration should appear on the next
+    // suggestion call.
+    name: "picks up newly added hook ids without re-registering",
+    run: async () =>
+      await withSandbox(async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - id: original-hook
+    event: tool.after.write
+    actions:
+      - notify: ok
+`,
+        )
+        const ctx = makeContext({ projectDir, hasUI: true, expose: true })
+        registerHookAutocomplete(ctx as never)
+        const provider = ctx.factories[0](createNoopProvider())
+
+        // Add a new hook id after the provider has been registered.
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - id: original-hook
+    event: tool.after.write
+    actions:
+      - notify: ok
+  - id: brand-new-hook
+    event: tool.after.read
+    actions:
+      - notify: ok
+`,
+        )
+
+        const input = "/hooks-status brand-"
+        const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() })
+        const values = suggestions?.items.map((i) => i.value) ?? []
+        return values.includes("brand-new-hook")
           ? { ok: true }
           : { ok: false, detail: JSON.stringify(values) }
       }),

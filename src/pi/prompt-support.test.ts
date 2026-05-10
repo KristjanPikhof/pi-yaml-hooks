@@ -239,13 +239,57 @@ const cases: Case[] = [
       }),
   },
   {
-    name: "remains enabled for any non-'0' value of PI_YAML_HOOKS_PROMPT_AWARENESS",
+    // P3-3: accept additional "off" spellings beyond literal "0".
+    name: "is disabled for false / off / no / FALSE / 0 (case-insensitive)",
+    run: async () => {
+      const offValues = ["false", "off", "no", "FALSE", "Off", "  0  "]
+      for (const value of offValues) {
+        const ok = await withSandbox({ trusted: true, awareness: value }, async (projectDir) => {
+          const pi = createFakePi()
+          registerPromptSupport(pi as never)
+          const result = await invokeBeforeAgentStart(pi, projectDir)
+          return result === undefined
+        })
+        if (!ok) {
+          return { ok: false, detail: `expected awareness='${value}' to disable but got a system prompt` }
+        }
+      }
+      return { ok: true }
+    },
+  },
+  {
+    name: "remains enabled for any non-disable value of PI_YAML_HOOKS_PROMPT_AWARENESS",
     run: async () =>
       await withSandbox({ trusted: true, awareness: "1" }, async (projectDir) => {
         const pi = createFakePi()
         registerPromptSupport(pi as never)
         const result = await invokeBeforeAgentStart(pi, projectDir)
         return result !== undefined ? { ok: true } : { ok: false, detail: "expected systemPrompt result" }
+      }),
+  },
+  {
+    // P2-16: tool-action wording must explicitly state cross-session is
+    // impossible (not merely "limited" or "still targets current").
+    name: "uses unambiguous tool-action wording in the awareness block",
+    run: async () =>
+      await withSandbox({ trusted: true }, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.idle
+    actions:
+      - notify: hi
+`,
+        )
+        const pi = createFakePi()
+        registerPromptSupport(pi as never)
+        const result = await invokeBeforeAgentStart(pi, projectDir)
+        const sp = (result as { systemPrompt?: string } | undefined)?.systemPrompt
+        if (typeof sp !== "string") return { ok: false, detail: JSON.stringify(result) }
+        const ok =
+          sp.includes("tool actions inject a follow-up prompt into the current PI session only") &&
+          sp.includes("they cannot target other sessions")
+        return ok ? { ok: true } : { ok: false, detail: sp }
       }),
   },
   {

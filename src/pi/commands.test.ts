@@ -310,6 +310,132 @@ const cases: Case[] = [
         return ok ? { ok: true } : { ok: false, detail: JSON.stringify(ctx.notifications) }
       }),
   },
+  {
+    name: "hooks-tail-log --path prints just the log file path",
+    run: async () =>
+      await withSandbox({ trusted: true }, async (projectDir) => {
+        const pi = createFakePi()
+        registerCommands(pi as never)
+        const ctx = createCtx({ cwd: projectDir, hasUI: true })
+        await pi.commands.get("hooks-tail-log")!("--path", ctx as never)
+        const notif = ctx.notifications.find((n) => /\.ndjson|pi-yaml-hooks/.test(n.message))
+        // --path output should be a single-line path, not the multi-line tail hint.
+        const ok = !!notif && !notif.message.includes("tail -F")
+        return ok ? { ok: true } : { ok: false, detail: JSON.stringify(ctx.notifications) }
+      }),
+  },
+  {
+    // P1-12: 16 concurrent hooks-trust handlers must converge on a single
+    // valid JSON file containing exactly one entry. The legacy
+    // writeFileSync path could leave the file truncated or duplicated;
+    // the atomic temp+fsync+rename path makes the file always parse and
+    // always contain the unique trust anchor.
+    name: "hooks-trust writes atomically under concurrent stress",
+    run: async () =>
+      await withSandbox({ trusted: false }, async (projectDir) => {
+        writeProjectHooks(projectDir, `hooks:\n  - event: session.idle\n    actions:\n      - notify: hi\n`)
+        const pi = createFakePi()
+        registerCommands(pi as never)
+        const ctx = createCtx({ cwd: projectDir, hasUI: true })
+
+        const handler = pi.commands.get("hooks-trust")!
+        const tasks: Array<Promise<void>> = []
+        for (let i = 0; i < 16; i++) {
+          tasks.push(handler("", ctx as never))
+        }
+        await Promise.all(tasks)
+
+        const file = trustedFilePath()
+        if (!existsSync(file)) return { ok: false, detail: "trust file not written" }
+
+        // Always parses as JSON.
+        const raw = readFileSync(file, "utf8")
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch (error) {
+          return { ok: false, detail: `unparseable trust file after concurrent writes: ${(error as Error).message}; raw=${raw}` }
+        }
+        if (!Array.isArray(parsed)) {
+          return { ok: false, detail: `expected array, got: ${raw}` }
+        }
+        const expected = realpathSync.native(projectDir)
+        const list = parsed as unknown[]
+        const unique = new Set(list)
+        const ok = list.length === 1 && unique.size === 1 && list[0] === expected
+        return ok
+          ? { ok: true }
+          : { ok: false, detail: `list=${JSON.stringify(list)}; expected=${expected}` }
+      }),
+  },
+  {
+    name: "hooks-trust serializes concurrent updates for different project anchors",
+    run: async () =>
+      await withSandbox({ trusted: false }, async (projectDir) => {
+        const secondProjectDir = mkdtempSync(path.join(os.tmpdir(), "pi-yaml-hooks-cmds-second-"))
+        try {
+          writeProjectHooks(projectDir, `hooks:\n  - event: session.idle\n    actions:\n      - notify: one\n`)
+          writeProjectHooks(secondProjectDir, `hooks:\n  - event: session.idle\n    actions:\n      - notify: two\n`)
+          const pi = createFakePi()
+          registerCommands(pi as never)
+          const handler = pi.commands.get("hooks-trust")!
+
+          await Promise.all([
+            handler("", createCtx({ cwd: projectDir, hasUI: true }) as never),
+            handler("", createCtx({ cwd: secondProjectDir, hasUI: true }) as never),
+          ])
+
+          const list = JSON.parse(readFileSync(trustedFilePath(), "utf8")) as string[]
+          const expectedOne = realpathSync.native(projectDir)
+          const expectedTwo = realpathSync.native(secondProjectDir)
+          const ok = list.includes(expectedOne) && list.includes(expectedTwo)
+          return ok ? { ok: true } : { ok: false, detail: JSON.stringify({ list, expectedOne, expectedTwo }) }
+        } finally {
+          rmSync(secondProjectDir, { recursive: true, force: true })
+        }
+      }),
+  },
+  {
+    // P2-13: hooks-validate should bucket errors per scope. Inject an
+    // intentionally invalid project hook file and assert the diagnostic
+    // labels include the scope grouping.
+    name: "hooks-validate groups errors by scope (project)",
+    run: async () =>
+      await withSandbox({ trusted: true }, async (projectDir) => {
+        // Action with no fields triggers a schema error.
+        writeProjectHooks(projectDir, `hooks:\n  - event: session.idle\n    actions:\n      - notify:\n`)
+        const pi = createFakePi()
+        registerCommands(pi as never)
+        const ctx = createCtx({ cwd: projectDir, hasUI: true })
+        await pi.commands.get("hooks-validate")!("", ctx as never)
+
+        const diag = pi.messages.find((m) => m.customType === PI_YAML_HOOKS_DIAGNOSTICS_MESSAGE_TYPE)
+        const content = String(diag?.content ?? "")
+        const ok =
+          content.includes("Project hook errors:") ||
+          content.includes("Project validation errors")
+        return ok ? { ok: true } : { ok: false, detail: content }
+      }),
+  },
+  {
+    name: "hooks-validate buckets imported project errors separately from project root errors",
+    run: async () =>
+      await withSandbox({ trusted: true }, async (projectDir) => {
+        const importedPath = path.join(projectDir, "shared", "bad.yaml")
+        mkdirSync(path.dirname(importedPath), { recursive: true })
+        writeFileSync(importedPath, `hooks:\n  - event: session.idle\n    actions:\n      - notify:\n`, "utf8")
+        writeProjectHooks(projectDir, `imports:\n  - ../../shared/bad.yaml\nhooks: []\n`)
+        const pi = createFakePi()
+        registerCommands(pi as never)
+        const ctx = createCtx({ cwd: projectDir, hasUI: true })
+        await pi.commands.get("hooks-validate")!("", ctx as never)
+
+        const diag = pi.messages.find((m) => m.customType === PI_YAML_HOOKS_DIAGNOSTICS_MESSAGE_TYPE)
+        const content = String(diag?.content ?? "")
+        const ok = content.includes("Imported file errors:") && !content.includes("Project hook errors:")
+        return ok ? { ok: true } : { ok: false, detail: content }
+      }),
+  },
 ]
 
 export async function main(): Promise<number> {

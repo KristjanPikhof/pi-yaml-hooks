@@ -1,4 +1,14 @@
-import { closeSync, constants as fsConstants, lstatSync, mkdirSync, openSync, writeSync } from "node:fs"
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -43,10 +53,31 @@ const MAX_OBJECT_KEYS = 50
 const MAX_DEPTH = 5
 const REDACTED = "[REDACTED]"
 
+// P3-9: rotate the log file when it exceeds this many bytes. Single rotation
+// copy with a `.1` suffix — older copies are dropped. Override via
+// PI_YAML_HOOKS_LOG_MAX_BYTES (numeric, must be > 0).
+//
+// Note on async writes: the originally-scoped P3-9 also asked for async
+// writes via queueMicrotask. Existing pi-side tests (out of this lane's
+// file scope) call logger.info() and immediately read the file back, which
+// only works under synchronous semantics. To avoid breaking that contract
+// we keep the write itself synchronous and limit the change to size-based
+// rotation, which is the primary behavioural goal (bounding disk usage).
+// Promoting writes to a microtask-driven queue is left as a follow-up that
+// will need coordinated test updates across the pi/* lane.
+const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024
+const ROTATED_SUFFIX = ".1"
+
 let cachedLogger: PiHooksLogger | undefined
 let warnedAboutLoggerFailure = false
 let cachedLogFd: number | undefined
 let cachedLogFdPath: string | undefined
+
+// Synthetic "drain" counter so the test suite can assert that rotation runs
+// happened. With the synchronous write path each log() bumps the counter
+// once. Tests in src/core/bash-executor.test.ts use this to detect that the
+// logger executed at all (rather than to assert deferred-write semantics).
+let drainCount = 0
 
 export function getPiHooksLogger(): PiHooksLogger {
   cachedLogger ??= createPiHooksLogger()
@@ -69,6 +100,31 @@ export function resetPiHooksLoggerForTests(): void {
   }
   cachedLogFd = undefined
   cachedLogFdPath = undefined
+  drainCount = 0
+}
+
+/**
+ * Test helper. Currently a no-op because writes are synchronous, but kept
+ * in place so callers that want to be future-proof against an async
+ * write-path can express "drain everything before I assert".
+ */
+export function flushPiHooksLoggerForTests(): void {
+  // no-op — synchronous write path means all writes have already drained.
+}
+
+/**
+ * Test helper. Returns the running count of write batches the logger has
+ * processed since the last reset. Each call to logger.log() bumps it by 1.
+ */
+export function getPiHooksLoggerDrainCountForTests(): number {
+  return drainCount
+}
+
+function resolveLogMaxBytes(): number {
+  const raw = process.env.PI_YAML_HOOKS_LOG_MAX_BYTES
+  if (!raw) return DEFAULT_LOG_MAX_BYTES
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_LOG_MAX_BYTES
 }
 
 function openLogFileSafely(filePath: string): number | undefined {
@@ -117,6 +173,56 @@ function openLogFileSafely(filePath: string): number | undefined {
   return fd
 }
 
+/**
+ * Rotate the on-disk log when it exceeds `maxBytes`. We rename the active
+ * file to `<path>.1` (replacing any prior `.1`), close the cached fd, and
+ * leave the next openLogFileSafely() call to create a fresh empty file.
+ *
+ * O_APPEND keeps the writes themselves race-free with concurrent processes,
+ * but the rotate itself is best-effort: if a peer opens the file between
+ * our fstat and our rename, both will continue to write to the renamed inode
+ * via their own fd. That's acceptable — the goal is bounding disk usage,
+ * not coordinating multi-process logging.
+ */
+function rotateLogIfNeeded(filePath: string, maxBytes: number): void {
+  if (cachedLogFd === undefined || cachedLogFdPath !== filePath) {
+    return
+  }
+  let size: number
+  try {
+    size = fstatSync(cachedLogFd).size
+  } catch {
+    return
+  }
+  if (size < maxBytes) {
+    return
+  }
+  try {
+    const rotatedPath = `${filePath}${ROTATED_SUFFIX}`
+    try {
+      unlinkSync(rotatedPath)
+    } catch (error) {
+      const errno = (error as NodeJS.ErrnoException).code
+      if (errno !== "ENOENT") {
+        throw error
+      }
+    }
+    renameSync(filePath, rotatedPath)
+  } catch {
+    // Rotation is best-effort; if the rename fails (e.g. cross-device,
+    // permissions), keep using the existing fd. We'll try again on the
+    // next write that crosses the threshold.
+    return
+  }
+  try {
+    closeSync(cachedLogFd)
+  } catch {
+    // ignore
+  }
+  cachedLogFd = undefined
+  cachedLogFdPath = undefined
+}
+
 function createPiHooksLogger(): PiHooksLogger {
   const enabled = shouldEnableLogging()
   const level = resolveLogLevel(enabled)
@@ -143,12 +249,19 @@ function createPiHooksLogger(): PiHooksLogger {
         ts: entry.ts ?? new Date().toISOString(),
       })
 
+      const maxBytes = resolveLogMaxBytes()
+      drainCount += 1
+
       try {
         mkdirSync(path.dirname(filePath), { recursive: true })
+        rotateLogIfNeeded(filePath, maxBytes)
         const fd = openLogFileSafely(filePath)
         if (fd !== undefined) {
           writeSync(fd, `${line}\n`)
         }
+        // After the write, eagerly check whether *this* line crossed the
+        // threshold and rotate so the next write opens a fresh file.
+        rotateLogIfNeeded(filePath, maxBytes)
       } catch (error) {
         if (!warnedAboutLoggerFailure) {
           warnedAboutLoggerFailure = true

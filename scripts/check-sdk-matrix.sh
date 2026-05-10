@@ -63,6 +63,21 @@ if [[ "$INCLUDE_FUTURE" -eq 1 ]]; then
   SDK_SPECS+=("0.75.x")
 fi
 
+# Track every temp dir so a single cleanup_all wipes them on EXIT/INT/TERM.
+# This avoids leaking tmp dirs when the user SIGINTs mid-iteration.
+TMP_DIRS=()
+cleanup_all() {
+  local dir
+  # ${TMP_DIRS[@]+"${TMP_DIRS[@]}"} expands to nothing when the array is empty,
+  # which keeps `set -u` happy on bash 4.x where ${empty[@]} would error.
+  for dir in ${TMP_DIRS[@]+"${TMP_DIRS[@]}"}; do
+    if [[ -n "$dir" && -d "$dir" ]]; then
+      rm -rf "$dir"
+    fi
+  done
+}
+trap cleanup_all EXIT INT TERM
+
 copy_repo() {
   local target="$1"
   if command -v rsync >/dev/null 2>&1; then
@@ -98,6 +113,12 @@ For each SDK spec, the script will:
   6. delete the temporary copy
 
 Future gate: pass --include-future to try 0.75.x without widening package peerDependencies.
+
+P2-9 note: the matrix tests include src/pi/adapter.test.ts, which pins known
+SDK-emitted "stale session-bound" error messages against
+isStaleSessionBoundError. If a future SDK rewrites the wording,
+"isStaleSessionBoundError matches known SDK error messages" will fail and
+the brittle regex must be updated.
 PLAN
 }
 
@@ -117,10 +138,7 @@ fi
 
 for spec in "${SDK_SPECS[@]}"; do
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/pi-yaml-hooks-sdk-${spec//[^A-Za-z0-9._-]/_}.XXXXXX")"
-  cleanup() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup EXIT
+  TMP_DIRS+=("$tmp_dir")
 
   echo
   echo "==> Checking Pi SDK $spec in $tmp_dir"
@@ -136,8 +154,18 @@ for spec in "${SDK_SPECS[@]}"; do
     npm test
   )
 
-  cleanup
-  trap - EXIT
+  # Drop the just-finished dir from the array so cleanup_all does not revisit
+  # an already-removed path on the next signal. Empty slots are tolerated by
+  # cleanup_all's `-n "$dir"` guard.
+  rm -rf "$tmp_dir"
+  local_tmp_dirs=()
+  for d in ${TMP_DIRS[@]+"${TMP_DIRS[@]}"}; do
+    if [[ "$d" != "$tmp_dir" ]]; then
+      local_tmp_dirs+=("$d")
+    fi
+  done
+  TMP_DIRS=(${local_tmp_dirs[@]+"${local_tmp_dirs[@]}"})
+  unset local_tmp_dirs
   echo "==> Pi SDK $spec passed"
 done
 

@@ -1,4 +1,12 @@
-import type { HookAction, HookConfig, HookEvent, HookMap } from "../core/types.js"
+import type {
+  HookAction,
+  HookConfig,
+  HookEvent,
+  HookMap,
+  HookPolicy,
+  HookPolicyDiagnostics,
+} from "../core/types.js"
+import { setActiveHookPolicy } from "../core/load-hooks.js"
 
 /**
  * PI-specific diagnostics for hook configurations loaded from OpenCode-compatible
@@ -7,16 +15,7 @@ import type { HookAction, HookConfig, HookEvent, HookMap } from "../core/types.j
  * advisories (load succeeds, user is informed).
  */
 
-export interface UnsupportedDiagnostics {
-  readonly errors: string[]
-  readonly advisories: string[]
-  /**
-   * Hooks that produced load-blocking errors. The loader must remove these
-   * from the active hook map so unsupported configs do not execute (P1 #2:
-   * "diagnostic-only" was the prior bug).
-   */
-  readonly invalidHooks: ReadonlySet<HookConfig>
-}
+export type UnsupportedDiagnostics = HookPolicyDiagnostics
 
 const COMMAND_ACTION_ERROR =
   "command: actions are not supported on PI. PI exposes no API to invoke slash commands from event handlers. Remove this action or use bash instead."
@@ -33,7 +32,21 @@ const SCOPE_CHILD_ADVISORY =
 const TOOL_NAME_NEVER_MATCH_ADVISORY =
   "PI built-ins are bash, read, edit, write, grep, find, ls. This tool name will never match unless you install a matching custom tool."
 
-const UNSUPPORTED_TOOL_NAMES = new Set<string>(["multiedit", "patch", "apply_patch"])
+// P3-4: switch from a hard-coded deny-list (multiedit, patch, apply_patch)
+// to an allow-list of PI's known built-in tools. Anything outside this set
+// (and outside the wildcard "*") earns the "never match" advisory. The list
+// is intentionally conservative — these are the tool names that pi-yaml-hooks
+// has been observed dispatching against in PI runtime traces. Adding new
+// PI built-ins here is a doc-only change.
+const PI_BUILTIN_TOOLS: ReadonlySet<string> = new Set<string>([
+  "bash",
+  "read",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+])
 
 function prefixWithSource(hook: HookConfig, message: string): string {
   const src = hook.source
@@ -106,8 +119,12 @@ export function diagnoseScopeChild(hook: HookConfig): string[] {
 }
 
 /**
- * tool.before.<name> / tool.after.<name> where <name> is an OpenCode-only
- * tool (multiedit, patch, apply_patch) → advisory; will never match on PI.
+ * tool.before.<name> / tool.after.<name> where <name> is anything outside the
+ * PI_BUILTIN_TOOLS allow-list (and not the "*" wildcard) → advisory; will
+ * never match on PI. P3-4 flipped this from a deny-list of three known
+ * OpenCode tools to a positive allow-list so users see the warning for any
+ * unknown tool name (typos like `tool.before.write_file`, OpenCode-only
+ * names, hypothetical PI extensions that have not landed).
  */
 export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
   const event: HookEvent = hook.event
@@ -122,10 +139,10 @@ export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
   if (toolName === "*") {
     return []
   }
-  if (UNSUPPORTED_TOOL_NAMES.has(toolName)) {
-    return [prefixWithSource(hook, TOOL_NAME_NEVER_MATCH_ADVISORY)]
+  if (PI_BUILTIN_TOOLS.has(toolName)) {
+    return []
   }
-  return []
+  return [prefixWithSource(hook, TOOL_NAME_NEVER_MATCH_ADVISORY)]
 }
 
 /**
@@ -134,6 +151,18 @@ export function diagnoseUnsupportedToolNameEvents(hook: HookConfig): string[] {
  * Advisories are intended to be surfaced via console.info and/or a new
  * `advisories` field on ParsedHooksFile (load succeeds).
  */
+// PI policy registered with the host-agnostic core loader. P2 #22: the loader
+// no longer imports from `src/pi/*`, so callers that want PI's
+// "unsupported on PI" diagnostics must side-effect-import this module. The
+// production entry point (src/index.ts) does so unconditionally; PI test
+// files that load `parseHooksFile` directly should also import this module
+// to install the policy.
+export const piHookPolicy: HookPolicy = {
+  diagnose: (hookMap: HookMap): HookPolicyDiagnostics => collectUnsupportedDiagnostics(hookMap),
+}
+
+setActiveHookPolicy(piHookPolicy)
+
 export function collectUnsupportedDiagnostics(hookMap: HookMap): UnsupportedDiagnostics {
   const errors: string[] = []
   const advisories: string[] = []

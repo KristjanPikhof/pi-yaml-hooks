@@ -1,19 +1,20 @@
 # Snapshot autocommit
 
-This repository includes a full Python example that auto-commits recognized file changes through a snapshot worker.
+This repository ships a full Python example that auto-commits recognized file changes through a snapshot worker.
 
 This is an opt-in example, not a built-in `pi-yaml-hooks` feature.
 
-## Use the bundled example
+## Use the bundled example (repo-only)
 
-- example directory: [`../../examples/atomic-commit-snapshot-worker/`](../../examples/atomic-commit-snapshot-worker/)
-- detailed setup: [`../../examples/atomic-commit-snapshot-worker/README.md`](../../examples/atomic-commit-snapshot-worker/README.md)
-- starter hook file: [`../../examples/atomic-commit-snapshot-worker/hooks.yaml`](../../examples/atomic-commit-snapshot-worker/hooks.yaml)
+The `atomic-commit-snapshot-worker` directory is repo-only; it is not shipped in the npm tarball. Clone the GitHub repository to use it.
+
+- example directory: [`examples/atomic-commit-snapshot-worker/`](https://github.com/KristjanPikhof/pi-yaml-hooks/tree/main/examples/atomic-commit-snapshot-worker/) (repo-only)
+- detailed setup: [`examples/atomic-commit-snapshot-worker/README.md`](https://github.com/KristjanPikhof/pi-yaml-hooks/blob/main/examples/atomic-commit-snapshot-worker/README.md) (repo-only)
+- starter hook file: [`examples/atomic-commit-snapshot-worker/hooks.yaml`](https://github.com/KristjanPikhof/pi-yaml-hooks/blob/main/examples/atomic-commit-snapshot-worker/hooks.yaml) (repo-only)
 
 ## Hook snippet
 
-Use this as a project-local hook. It is a repo-specific workflow, and project
-hooks only load after the repo/worktree anchor is trusted.
+Use this as a project-local hook. It is a repo-specific workflow, and project hooks only load after the repo or worktree anchor is trusted.
 
 ```yaml
 hooks:
@@ -29,10 +30,7 @@ hooks:
       - bash: 'python3 <snapshot-example-dir>/snapshot-worker.py --flush --repo "$PI_PROJECT_DIR"'
 ```
 
-Replace `<snapshot-example-dir>` with the actual path to the checked-out or
-copied `examples/atomic-commit-snapshot-worker/` directory that contains
-`snapshot-hook.py` and `snapshot-worker.py`. `pi install` alone does not give
-you a stable working-tree path for this snippet.
+Replace `<snapshot-example-dir>` with the actual path to the cloned `examples/atomic-commit-snapshot-worker/` directory that contains `snapshot-hook.py`, `snapshot-worker.py`, and `snapshot_shared.py`. `pi install` alone does not give you a stable working-tree path for this snippet.
 
 ## When to use it
 

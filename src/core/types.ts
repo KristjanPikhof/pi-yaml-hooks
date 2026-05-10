@@ -1,4 +1,16 @@
 export const SESSION_HOOK_EVENTS = ["session.idle", "session.created", "session.deleted", "file.changed"] as const
+
+/**
+ * Reason values forwarded with `session.deleted` envelopes.
+ *
+ * PI emits both `session_shutdown` and `session_before_switch` with their own
+ * `reason` field (e.g. "quit", "reload", "new", "resume", "fork"). The
+ * adapter forwards that value verbatim into the runtime envelope so hook
+ * authors can distinguish a graceful shutdown from a /new|/resume|/fork
+ * transition. The string is opaque to the runtime: handlers should treat
+ * unknown values as a forward-compatible extension.
+ */
+export type SessionDeletedReason = string
 export const LEGACY_HOOK_CONDITIONS = ["matchesCodeFiles"] as const
 export const PATH_HOOK_CONDITION_KEYS = ["matchesAnyPath", "matchesAllPaths"] as const
 export const HOOK_SCOPES = ["all", "main", "child"] as const
@@ -11,10 +23,37 @@ export type ToolHookEvent = `tool.${ToolHookPhase}.*` | `tool.${ToolHookPhase}.$
 export type HookEvent = SessionHookEvent | ToolHookEvent
 export type HookLegacyCondition = (typeof LEGACY_HOOK_CONDITIONS)[number]
 export type HookPathConditionKey = (typeof PATH_HOOK_CONDITION_KEYS)[number]
+/**
+ * Discriminated union for path conditions. The two members are mutually
+ * exclusive: a single condition entry must specify either `matchesAnyPath`
+ * or `matchesAllPaths`. The structural union already rejects values that
+ * literally carry both keys at construction time; an excess-property check
+ * `assertHookPathConditionMutex` is exposed for runtime call sites that
+ * want a stronger guarantee against arbitrary record inputs.
+ */
 export type HookPathCondition =
   | { readonly matchesAnyPath: readonly string[] }
   | { readonly matchesAllPaths: readonly string[] }
 export type HookCondition = HookLegacyCondition | HookPathCondition
+
+/**
+ * Compile-time mutex test for HookPathCondition (P2-24). A
+ * StrictPathCondition variant carries a `?: never` excluder that forces
+ * the mutex check; the structural HookPathCondition stays as-is so callers
+ * can keep using `"matchesAnyPath" in condition` narrowing. This type-test
+ * verifies that a literal carrying both keys is rejected by the strict
+ * shape — guaranteeing the runtime loader's mutex check has a static peer.
+ */
+type StrictHookPathCondition =
+  | { readonly matchesAnyPath: readonly string[]; readonly matchesAllPaths?: never }
+  | { readonly matchesAllPaths: readonly string[]; readonly matchesAnyPath?: never }
+
+// @ts-expect-error — both-keys is intentionally invalid; this is the mutex test
+const _HOOK_PATH_CONDITION_MUTEX_TEST: StrictHookPathCondition = {
+  matchesAnyPath: ["a"],
+  matchesAllPaths: ["b"],
+}
+void _HOOK_PATH_CONDITION_MUTEX_TEST
 export type HookScope = (typeof HOOK_SCOPES)[number]
 export type HookRunIn = (typeof HOOK_RUN_IN)[number]
 export type HookBehavior = (typeof HOOK_BEHAVIORS)[number]
@@ -62,6 +101,14 @@ export interface HookBashActionConfig {
   readonly timeout?: number
 }
 
+// HookAction variants are discriminated by which key is present. The union
+// already enforces mutual exclusion structurally — a literal carrying two
+// action keys (e.g. `{ command: ..., tool: ... }`) does not assign to any
+// member of the union. Excess-property checks at the call site catch the
+// rest. Adding `?: never` excluders here was attempted (P2-24) but breaks
+// `"key" in action` narrowing in callers (every variant ends up carrying
+// every key, so `"tool" in action` no longer narrows the union). The
+// runtime loader is the load-bearing check for malformed input.
 export interface HookCommandAction {
   readonly command: string | HookCommandActionConfig
 }
@@ -109,6 +156,22 @@ export type HookAction =
   | HookNotifyAction
   | HookConfirmAction
   | HookSetStatusAction
+
+/**
+ * P2-25: closed union of skip reasons emitted by the runtime when a hook is
+ * evaluated. `matched` is included so a single decision shape can express
+ * both the "ran" and "did not run" outcomes. New skip causes must extend
+ * this union — the compile-time check forces every emit site to be
+ * accounted for here.
+ */
+export type HookSkipReason =
+  | "matched"
+  | "scope_mismatch"
+  | "matchesCodeFiles_failed"
+  | "matchesAnyPath_no_paths"
+  | "matchesAnyPath_failed"
+  | "matchesAllPaths_no_paths"
+  | "matchesAllPaths_failed"
 
 export interface HookConfigSource {
   readonly filePath: string
@@ -167,6 +230,32 @@ export interface ParsedHooksFile {
   readonly overrides: HookOverrideEntry[]
   readonly errors: HookValidationError[]
   readonly advisories?: string[]
+}
+
+/**
+ * Host-supplied policy that flags hooks the host runtime cannot execute.
+ *
+ * The core loader is host-agnostic: it parses YAML, validates structure, and
+ * caches results. Anything that depends on which host runtime will *execute*
+ * the hook (e.g. PI lacks a slash-command API, so `command:` actions are
+ * rejected on PI but might be valid on another host) lives behind this
+ * interface. PI registers an implementation in `src/pi/unsupported.ts`; cores
+ * loaded standalone simply receive an empty policy and skip those checks.
+ *
+ * `errors` are appended to `ParsedHooksFile.errors` and produced hooks are
+ * dropped from the active hook map.
+ * `advisories` are surfaced via `ParsedHooksFile.advisories` (load succeeds).
+ * `invalidHooks` lists the hooks that produced load-blocking errors so the
+ * loader can remove exactly those entries from the active hook map.
+ */
+export interface HookPolicyDiagnostics {
+  readonly errors: string[]
+  readonly advisories: string[]
+  readonly invalidHooks: ReadonlySet<HookConfig>
+}
+
+export interface HookPolicy {
+  readonly diagnose: (hookMap: HookMap) => HookPolicyDiagnostics
 }
 
 export function isHookEvent(value: unknown): value is HookEvent {

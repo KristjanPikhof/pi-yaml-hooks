@@ -3,14 +3,18 @@ import path from "node:path"
 
 import {
   DEFAULT_BASH_TIMEOUT,
+  TIMEOUT_EXIT_CODE,
   type BashExecutionRequest,
   type BashHookContext,
   type BashHookResult,
   type BashProcessResult,
 } from "./bash-types.js"
 
-const TIMEOUT_EXIT_CODE = 1
 const BLOCKING_EXIT_CODE = 2
+// Exit code used when the child process fails to spawn (e.g. ENOENT). Distinct
+// from TIMEOUT_EXIT_CODE so that consumers can tell a spawn error from a
+// timeout. 127 mirrors the POSIX shell convention for "command not found".
+const SPAWN_ERROR_EXIT_CODE = 127
 const KILL_GRACE_PERIOD_MS = 250
 // Prefer the PI-native override, but fall back to the legacy OpenCode env var so
 // existing deployments continue to work during the transition.
@@ -21,6 +25,11 @@ const SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL = process.platform !== "win32"
 // P1 #9: cap captured stdout/stderr per hook invocation. A misbehaving hook
 // (e.g. `find / -type f`) would otherwise buffer arbitrarily large output
 // into the host process. Override via PI_YAML_HOOKS_MAX_OUTPUT_BYTES.
+//
+// P1-7: the cap is measured in UTF-8 bytes, NOT UTF-16 code units. Output is
+// buffered as Node Buffers and sliced on a UTF-8 codepoint boundary so that
+// emoji-heavy or CJK output never produces a U+FFFD replacement character at
+// the truncation seam.
 const MAX_OUTPUT_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_OUTPUT_BYTES) ?? 1_048_576
 const TRUNCATION_MARKER = "\n…[pi-yaml-hooks: output truncated]"
 // P3 #25: cap the JSON-serialized context payload that we feed to the bash
@@ -28,12 +37,26 @@ const TRUNCATION_MARKER = "\n…[pi-yaml-hooks: output truncated]"
 // multi-MB content body) would otherwise be buffered into the child's stdin
 // in one shot. Override via PI_YAML_HOOKS_MAX_STDIN_BYTES.
 const MAX_STDIN_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_STDIN_BYTES) ?? 262_144
-const executionContextCache = new Map<string, ExecutionContext>()
+
+// P3-8: executionContextCache TTL. Without invalidation, a worktree replaced
+// in-place under the same path would keep returning the stale gitCommonDir
+// for the lifetime of the process. A coarse 5-minute TTL since last access
+// keeps the cache useful for hot paths (we often resolve the same projectDir
+// dozens of times per session) while ensuring eventual consistency for
+// long-lived agent processes.
+const EXECUTION_CONTEXT_CACHE_TTL_MS = 5 * 60_000
+let executionContextNowFn: () => number = () => Date.now()
+const executionContextCache = new Map<string, ExecutionContextCacheEntry>()
 
 interface ExecutionContext {
   worktreeDir: string
   gitCommonDir?: string
   resolvedFromGit: boolean
+}
+
+interface ExecutionContextCacheEntry {
+  context: ExecutionContext
+  expiresAt: number
 }
 
 interface ExecutionContextResolver {
@@ -46,10 +69,15 @@ function parseMaxOutputBytes(raw: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined
 }
 
-export function serializeContextForStdin(context: BashHookContext): string {
+interface SerializeContextResult {
+  payload: string
+  truncated: boolean
+}
+
+export function serializeContextForStdinDetailed(context: BashHookContext): SerializeContextResult {
   const json = JSON.stringify(context)
   if (Buffer.byteLength(json, "utf8") <= MAX_STDIN_BYTES) {
-    return json
+    return { payload: json, truncated: false }
   }
   // The payload exceeds the byte cap. We can't safely truncate JSON in the
   // middle (the hook would receive invalid JSON), so emit a synthetic but
@@ -79,24 +107,115 @@ export function serializeContextForStdin(context: BashHookContext): string {
   }
   const reduced = JSON.stringify(truncated)
   if (Buffer.byteLength(reduced, "utf8") <= MAX_STDIN_BYTES) {
-    return reduced
+    return { payload: reduced, truncated: true }
   }
   // Last-resort: drop everything except the bare metadata.
-  return JSON.stringify({
-    session_id: context.session_id,
-    event: context.event,
-    cwd: context.cwd,
-    _pi_hooks_truncated: true,
-    _pi_hooks_original_byte_length: Buffer.byteLength(json, "utf8"),
-    _pi_hooks_max_byte_length: MAX_STDIN_BYTES,
-  })
+  return {
+    payload: JSON.stringify({
+      session_id: context.session_id,
+      event: context.event,
+      cwd: context.cwd,
+      _pi_hooks_truncated: true,
+      _pi_hooks_original_byte_length: Buffer.byteLength(json, "utf8"),
+      _pi_hooks_max_byte_length: MAX_STDIN_BYTES,
+    }),
+    truncated: true,
+  }
 }
 
-function appendCapped(existing: string, chunk: Buffer): string {
-  if (existing.length >= MAX_OUTPUT_BYTES) return existing
-  const remaining = MAX_OUTPUT_BYTES - existing.length
-  if (chunk.length <= remaining) return existing + chunk.toString()
-  return existing + chunk.toString("utf8", 0, remaining) + TRUNCATION_MARKER
+export function serializeContextForStdin(context: BashHookContext): string {
+  return serializeContextForStdinDetailed(context).payload
+}
+
+/**
+ * Accumulates child-process output bytes against MAX_OUTPUT_BYTES.
+ *
+ * Output is captured as raw UTF-8 bytes so that a multi-byte codepoint
+ * straddling the cap is never split mid-sequence. Once the cap is reached we
+ * (1) clamp the buffer to a safe codepoint boundary, (2) append a textual
+ * truncation marker, and (3) refuse further bytes.
+ */
+class CappedOutputBuffer {
+  private chunks: Buffer[] = []
+  private byteLength = 0
+  private _truncated = false
+
+  /**
+   * Returns true if at least one byte was dropped during this lifetime.
+   */
+  get truncated(): boolean {
+    return this._truncated
+  }
+
+  append(chunk: Buffer): void {
+    if (this._truncated) {
+      return
+    }
+    if (this.byteLength + chunk.length <= MAX_OUTPUT_BYTES) {
+      this.chunks.push(chunk)
+      this.byteLength += chunk.length
+      return
+    }
+
+    const remaining = MAX_OUTPUT_BYTES - this.byteLength
+    if (remaining > 0) {
+      const safeEnd = trimToUtf8Boundary(chunk, remaining)
+      if (safeEnd > 0) {
+        this.chunks.push(chunk.subarray(0, safeEnd))
+        this.byteLength += safeEnd
+      }
+    }
+    this._truncated = true
+  }
+
+  toString(): string {
+    const joined = Buffer.concat(this.chunks, this.byteLength).toString("utf8")
+    return this._truncated ? joined + TRUNCATION_MARKER : joined
+  }
+}
+
+/**
+ * Given a Buffer and a desired maximum byte length, return the largest length
+ * `<= maxBytes` that does not split a UTF-8 codepoint sequence. UTF-8
+ * continuation bytes match `0b10xxxxxx`; a starter byte is anything else.
+ *
+ * The marker text we append after truncation is itself ASCII (<= 0x7F), so we
+ * only need to walk back as far as the most recent starter byte and verify
+ * that the codepoint it begins is fully present in the slice.
+ */
+export function trimToUtf8Boundary(chunk: Buffer, maxBytes: number): number {
+  if (maxBytes <= 0) return 0
+  const limit = Math.min(maxBytes, chunk.length)
+  if (limit === 0) return 0
+
+  // Walk backwards from `limit` looking for the start of the last codepoint.
+  // Stop as soon as we hit a byte whose top two bits are not `10`.
+  let i = limit
+  while (i > 0) {
+    const b = chunk[i - 1]
+    if (b === undefined) {
+      return 0
+    }
+    if ((b & 0b1100_0000) !== 0b1000_0000) {
+      // Found the starter byte. Determine codepoint length from the high
+      // bits and check whether the full sequence fits inside `limit`.
+      const expectedLen =
+        (b & 0b1000_0000) === 0 ? 1 :
+        (b & 0b1110_0000) === 0b1100_0000 ? 2 :
+        (b & 0b1111_0000) === 0b1110_0000 ? 3 :
+        (b & 0b1111_1000) === 0b1111_0000 ? 4 :
+        // Invalid starter — drop this byte rather than emit U+FFFD.
+        0
+      const start = i - 1
+      if (expectedLen > 0 && start + expectedLen <= limit) {
+        return start + expectedLen
+      }
+      return start
+    }
+    i -= 1
+  }
+  // The whole prefix was continuation bytes (corrupt stream). Drop them.
+  return 0
 }
 
 export async function executeBashHook(request: BashExecutionRequest): Promise<BashHookResult> {
@@ -136,6 +255,19 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
     // Inject both PI_* (canonical) and OPENCODE_* (legacy alias) env vars so that
     // bash actions migrated from OpenCode — including the Python snapshot-hook.py
     // worker which reads OPENCODE_PROJECT_DIR — keep working unchanged.
+    //
+    // ENV INHERITANCE NOTE (P2-17):
+    //   We intentionally pass `...process.env` unfiltered to the bash process.
+    //   That means hooks see the full host environment, including credential-
+    //   bearing variables like AWS_*, NPM_TOKEN, ANTHROPIC_API_KEY, GITHUB_TOKEN,
+    //   SSH_AUTH_SOCK, etc. Operators should treat any project whose hooks they
+    //   trust (`/hooks-trust`) as having read-access to those secrets. The
+    //   user-facing surface for this caveat lives in:
+    //     - docs/hooks-reference.md (bash environment section)
+    //     - the user_bash one-time warning emitted by registerUserBashInterception
+    //   Filtering is intentionally NOT done here: many migrated OpenCode hooks
+    //   need PATH, HOME, and language-specific credentials to function. A
+    //   future opt-in `PI_YAML_HOOKS_ENV_ALLOWLIST` may invert that default.
     const env = {
       ...process.env,
       PI_PROJECT_DIR: request.projectDir,
@@ -159,8 +291,8 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
       detached: SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL,
     })
 
-    let stdout = ""
-    let stderr = ""
+    const stdout = new CappedOutputBuffer()
+    const stderr = new CappedOutputBuffer()
     let timedOut = false
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
@@ -194,29 +326,35 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
     }, timeout)
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout = appendCapped(stdout, chunk)
+      stdout.append(chunk)
     })
 
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = appendCapped(stderr, chunk)
+      stderr.append(chunk)
     })
 
+    const stdinSerialization = serializeContextForStdinDetailed(request.context)
+    const stdinTruncated = stdinSerialization.truncated
+
     child.stdin.on("error", () => {})
-    child.stdin.end(serializeContextForStdin(request.context))
+    child.stdin.end(stdinSerialization.payload)
 
     child.on("error", (error) => {
+      stderr.append(Buffer.from(`\n${error.message}`, "utf8"))
       finalize({
         command: request.command,
-        stdout,
-        stderr: appendStderr(stderr, error.message),
-        exitCode: TIMEOUT_EXIT_CODE,
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
+        exitCode: SPAWN_ERROR_EXIT_CODE,
         signal: null,
         timedOut: false,
+        outputTruncated: stdout.truncated || stderr.truncated,
+        stdinTruncated,
       })
     })
 
     child.on("close", (code, signal) => {
-      const exitCode = timedOut ? TIMEOUT_EXIT_CODE : (code ?? TIMEOUT_EXIT_CODE)
+      const exitCode = timedOut ? TIMEOUT_EXIT_CODE : (code ?? SPAWN_ERROR_EXIT_CODE)
       const timeoutMessages = timedOut
         ? [
             `Command timed out after ${timeout}ms`,
@@ -225,63 +363,82 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
           ]
         : []
 
+      for (const message of timeoutMessages) {
+        appendStderrLine(stderr, message)
+      }
+
       finalize({
         command: request.command,
-        stdout,
-        stderr: appendStderrLines(stderr, timeoutMessages),
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
         exitCode,
         signal,
         timedOut,
+        outputTruncated: stdout.truncated || stderr.truncated,
+        stdinTruncated,
       })
     })
   })
 }
 
-function appendStderr(stderr: string, message?: string): string {
-  if (!message) {
-    return stderr
-  }
-
-  if (!stderr) {
-    return message
-  }
-
-  return `${stderr}${stderr.endsWith("\n") ? "" : "\n"}${message}`
-}
-
-function appendStderrLines(stderr: string, messages: readonly string[]): string {
-  if (messages.length === 0) {
-    return stderr
-  }
-
-  return messages.reduce((current, message) => appendStderr(current, message), stderr)
+function appendStderrLine(buffer: CappedOutputBuffer, message: string): void {
+  if (!message) return
+  // Always start each cleanup message on its own line so that downstream
+  // log parsing (and humans) can read them.
+  buffer.append(Buffer.from(`\n${message}`, "utf8"))
 }
 
 function signalTimedOutProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): {
   readonly signal: NodeJS.Signals
-  readonly target: "process_group" | "process"
+  readonly target: "process_group" | "process" | "process_group_and_pid"
   readonly targetPid?: number
   readonly error?: string
 } {
   const pid = child.pid ?? undefined
   if (SUPPORTS_PROCESS_GROUP_TIMEOUT_KILL && typeof pid === "number" && pid > 0) {
+    let groupResult: { ok: boolean; error?: string }
     try {
       process.kill(-pid, signal)
-      return { signal, target: "process_group", targetPid: pid }
+      groupResult = { ok: true }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      try {
-        child.kill(signal)
-        return { signal, target: "process", targetPid: pid, error: `process group kill failed: ${message}` }
-      } catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-        return {
-          signal,
-          target: "process",
-          targetPid: pid,
-          error: `process group kill failed: ${message}; fallback process kill failed: ${fallbackMessage}`,
-        }
+      groupResult = { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+
+    // Defence in depth (descendant-kill flake fix): even when the process
+    // group kill above succeeds, we ALSO signal the direct child PID. If the
+    // shell already exited but a backgrounded grandchild lingered, the group
+    // signal targets the pgrp; the direct PID signal makes sure the bash
+    // process itself can never become a leaked zombie that holds resources.
+    let directResult: { ok: boolean; error?: string } = { ok: false }
+    try {
+      child.kill(signal)
+      directResult = { ok: true }
+    } catch (error) {
+      directResult = { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+
+    if (groupResult.ok) {
+      return {
+        signal,
+        target: directResult.ok ? "process_group_and_pid" : "process_group",
+        targetPid: pid,
       }
+    }
+
+    if (directResult.ok) {
+      return {
+        signal,
+        target: "process",
+        targetPid: pid,
+        error: `process group kill failed: ${groupResult.error ?? "unknown"}`,
+      }
+    }
+
+    return {
+      signal,
+      target: "process",
+      targetPid: pid,
+      error: `process group kill failed: ${groupResult.error ?? "unknown"}; fallback process kill failed: ${directResult.error ?? "unknown"}`,
     }
   }
 
@@ -301,7 +458,7 @@ function signalTimedOutProcess(child: ReturnType<typeof spawn>, signal: NodeJS.S
 function formatTimeoutCleanupLines(
   result: {
     readonly signal: NodeJS.Signals
-    readonly target: "process_group" | "process"
+    readonly target: "process_group" | "process" | "process_group_and_pid"
     readonly targetPid?: number
     readonly error?: string
   },
@@ -309,7 +466,10 @@ function formatTimeoutCleanupLines(
   signal: NodeJS.Signals,
 ): string[] {
   const pidText = result.targetPid !== undefined ? ` ${result.targetPid}` : ""
-  const targetText = result.target === "process_group" ? `process group${pidText}` : `process${pidText}`
+  const targetText =
+    result.target === "process_group" ? `process group${pidText}` :
+    result.target === "process_group_and_pid" ? `process group${pidText} and pid${pidText}` :
+    `process${pidText}`
   const action = signal === "SIGKILL" ? `escalated to ${signal}` : `sent ${signal}`
   const lines = [`Timeout cleanup: ${action} to ${targetText} after ${timeout}ms timeout`]
   if (result.error) {
@@ -341,6 +501,14 @@ function logBashOutcome(result: BashHookResult, request: BashExecutionRequest): 
 
   if (result.stdout.trim()) {
     details.push(`stdout=${JSON.stringify(sanitizeLogValue(result.stdout.trim()))}`)
+  }
+
+  if (result.outputTruncated) {
+    details.push(`outputTruncated=true`)
+  }
+
+  if (result.stdinTruncated) {
+    details.push(`stdinTruncated=true`)
   }
 
   console.error(details.join(" | "))
@@ -404,6 +572,16 @@ export function redactSensitiveContent(value: string): string {
 
 export function resetExecutionContextCacheForTests(): void {
   executionContextCache.clear()
+  executionContextNowFn = () => Date.now()
+}
+
+/**
+ * Test-only override for the cache clock. Allows tests to advance virtual
+ * time past the TTL without sleeping. Always paired with
+ * `resetExecutionContextCacheForTests()` afterwards.
+ */
+export function setExecutionContextNowForTests(now: () => number): void {
+  executionContextNowFn = now
 }
 
 export function resolveExecutionContext(
@@ -444,10 +622,35 @@ export function resolveExecutionContext(
 }
 
 function getCachedExecutionContext(projectDir: string): ExecutionContext | undefined {
-  return executionContextCache.get(projectDir)
+  const entry = executionContextCache.get(projectDir)
+  if (!entry) {
+    return undefined
+  }
+
+  const now = executionContextNowFn()
+  if (entry.expiresAt <= now) {
+    // P3-8: TTL expired. Drop both keys (project + worktree alias) so we
+    // re-probe git on the next call. Worktree replacement under the same
+    // path therefore becomes visible within EXECUTION_CONTEXT_CACHE_TTL_MS.
+    executionContextCache.delete(projectDir)
+    if (entry.context.worktreeDir !== projectDir) {
+      executionContextCache.delete(entry.context.worktreeDir)
+    }
+    return undefined
+  }
+
+  // Sliding-window TTL: refresh expiry on hot-path access so a directory we
+  // resolve continuously stays cached.
+  entry.expiresAt = now + EXECUTION_CONTEXT_CACHE_TTL_MS
+  return entry.context
 }
 
 function cacheExecutionContext(projectDir: string, context: ExecutionContext): void {
-  executionContextCache.set(projectDir, context)
-  executionContextCache.set(context.worktreeDir, context)
+  const expiresAt = executionContextNowFn() + EXECUTION_CONTEXT_CACHE_TTL_MS
+  executionContextCache.set(projectDir, { context, expiresAt })
+  executionContextCache.set(context.worktreeDir, { context, expiresAt })
 }
+
+// Re-export TIMEOUT_EXIT_CODE for any consumer that still imports it from
+// the executor module rather than bash-types.
+export { TIMEOUT_EXIT_CODE }

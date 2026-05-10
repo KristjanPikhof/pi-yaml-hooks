@@ -172,12 +172,12 @@ class FakePiHarness {
     await this.emit("session_start", { reason })
   }
 
-  async sessionBeforeSwitch(): Promise<void> {
-    await this.emit("session_before_switch")
+  async sessionBeforeSwitch(reason?: "new" | "resume"): Promise<void> {
+    await this.emit("session_before_switch", reason ? { type: "session_before_switch", reason } : {})
   }
 
-  async sessionShutdown(): Promise<void> {
-    await this.emit("session_shutdown")
+  async sessionShutdown(reason?: "quit" | "reload" | "new" | "resume" | "fork"): Promise<void> {
+    await this.emit("session_shutdown", reason ? { type: "session_shutdown", reason } : {})
   }
 
   async beforeAgentStart(prompt = "hi", systemPrompt = "base system prompt"): Promise<unknown> {
@@ -522,6 +522,38 @@ const cases: Case[] = [
 
         const expected = JSON.stringify(["deleted"])
         return JSON.stringify(harness.notifications) === expected
+          ? { ok: true }
+          : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
+      }),
+  },
+  {
+    // P1-4: PI's session_shutdown/session_before_switch carry a `reason`
+    // field. The adapter must pass it through to hooks intact (we verify
+    // by firing each event with a representative reason and confirming
+    // the cleanup hook still runs exactly once).
+    name: "session.deleted forwards PI's reason for shutdown and before_switch",
+    run: async () =>
+      await withIsolatedProject(true, async (projectDir) => {
+        writeProjectHooks(
+          projectDir,
+          `hooks:
+  - event: session.deleted
+    actions:
+      - notify: "deleted-with-reason"
+`,
+        )
+
+        const harness = new FakePiHarness(projectDir)
+        harness.register()
+        // session_before_switch fires first with reason="new" (PI emits this
+        // when /new replaces the session); session_shutdown follows with
+        // reason="new" — the dedupe in markSessionDeleted means only the
+        // first reaches the runtime.
+        await harness.sessionBeforeSwitch("new")
+        await harness.sessionShutdown("new")
+
+        const ok = harness.notifications.length === 1 && harness.notifications[0] === "deleted-with-reason"
+        return ok
           ? { ok: true }
           : { ok: false, detail: `notifications=${JSON.stringify(harness.notifications)}` }
       }),
@@ -1171,6 +1203,44 @@ hooks: []
       adapterTesting.touchLruEntry(map, "missing")
       const order = Array.from(map.keys()).join(",")
       return order === "a,b" ? { ok: true } : { ok: false, detail: order }
+    },
+  },
+  {
+    // P2-9: regression — pin known SDK-emitted stale-context messages so the
+    // brittle isStaleSessionBoundError regex does not silently drift if the
+    // SDK rewrites the wording. Update this list when widening the peer
+    // range (`npm run compat:sdk-matrix:future`) reveals new shapes.
+    name: "isStaleSessionBoundError matches known SDK error messages",
+    run: async () => {
+      const knownStaleMessages = [
+        // Verbatim from @earendil-works/pi-coding-agent ExtensionRuntime
+        // invalidate() default at 0.74.0 (dist/core/extensions/runner.js).
+        "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+        // Shorter shapes that have appeared historically in the SDK / fakes.
+        "stale session-bound ExtensionAPI after replacement",
+        "stale session-bound ExtensionContext after replacement",
+        "extension runtime invalidated",
+        "replaced session: ctx is stale",
+      ]
+      const knownNonStaleMessages = [
+        "ENOENT: no such file or directory",
+        "RangeError: Maximum call stack size exceeded",
+        "TypeError: Cannot read properties of undefined",
+      ]
+      const failures: string[] = []
+      for (const message of knownStaleMessages) {
+        if (!adapterTesting.isStaleSessionBoundError(new Error(message))) {
+          failures.push(`stale-positive miss: ${message.slice(0, 60)}…`)
+        }
+      }
+      for (const message of knownNonStaleMessages) {
+        if (adapterTesting.isStaleSessionBoundError(new Error(message))) {
+          failures.push(`stale-negative match: ${message}`)
+        }
+      }
+      return failures.length === 0
+        ? { ok: true }
+        : { ok: false, detail: failures.join("; ") }
     },
   },
 ]

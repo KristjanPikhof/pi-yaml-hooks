@@ -1,106 +1,36 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { extname, isAbsolute, matchesGlob, relative } from "node:path"
+import { statSync } from "node:fs"
 
 import { executeBashHook } from "./bash-executor.js"
 import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
+import { discoverHookConfigEntries } from "./config-paths.js"
 import { loadDiscoveredHooksSnapshot } from "./load-hooks.js"
 import { getPiHooksLogger } from "./logger.js"
+import { abortSession, isHostDiedError } from "./runtime/actions.js"
+import type { AsyncQueueState } from "./runtime/async-queue.js"
+import {
+  dispatchHooks,
+  dispatchToolHooks,
+  summarizeChanges,
+  type DispatchState,
+} from "./runtime/dispatch.js"
+import {
+  createGlobMatcherCache,
+  getGlobMatcher,
+  type GlobMatcher,
+  type GlobMatcherCache,
+} from "./runtime/path-filter.js"
 import { SessionStateStore } from "./session-state.js"
-import { getChangedPaths, getMutationToolHookNames, getToolFileChanges } from "./tool-paths.js"
+import { getChangedPaths, getToolFileChanges } from "./tool-paths.js"
 import type {
   FileChange,
-  HookAction,
-  HookConfig,
-  HostDeliveryResult,
   HookEvent,
   HookMap,
-  HookRunIn,
   HookValidationError,
   HostAdapter,
 } from "./types.js"
 
-const CODE_EXTENSIONS = new Set([
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-  ".json",
-  ".jsonc",
-  ".json5",
-  ".yml",
-  ".yaml",
-  ".toml",
-  ".xml",
-  ".ini",
-  ".cfg",
-  ".conf",
-  ".properties",
-  ".css",
-  ".scss",
-  ".sass",
-  ".less",
-  ".html",
-  ".vue",
-  ".svelte",
-  ".astro",
-  ".mdx",
-  ".graphql",
-  ".gql",
-  ".proto",
-  ".sql",
-  ".prisma",
-  ".go",
-  ".rs",
-  ".zig",
-  ".c",
-  ".h",
-  ".cpp",
-  ".cc",
-  ".cxx",
-  ".hpp",
-  ".java",
-  ".groovy",
-  ".gradle",
-  ".py",
-  ".rb",
-  ".php",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".fish",
-  ".ps1",
-  ".psm1",
-  ".psd1",
-  ".bat",
-  ".cmd",
-  ".kt",
-  ".kts",
-  ".swift",
-  ".m",
-  ".mm",
-  ".cs",
-  ".fs",
-  ".scala",
-  ".clj",
-  ".hs",
-  ".lua",
-  ".dart",
-  ".elm",
-  ".ex",
-  ".exs",
-  ".erl",
-  ".hrl",
-  ".nim",
-  ".nix",
-  ".r",
-  ".rkt",
-  ".tf",
-  ".tfvars",
-])
+export { buildPathMatchContext } from "./runtime/path-filter.js"
 
 export interface ToolExecuteBeforeInput {
   readonly tool: string
@@ -126,7 +56,7 @@ export interface RuntimeEventEnvelope {
   }
 }
 
-interface RuntimeActionContext {
+export interface RuntimeActionContext {
   readonly files?: readonly string[]
   readonly changes?: readonly FileChange[]
   readonly toolName?: string
@@ -141,34 +71,17 @@ export interface PathMatchContext {
   readonly hasCodeFiles: boolean
 }
 
-interface HookExecutionResult {
+export interface HookExecutionResult {
   readonly blocked: boolean
   readonly blockReason?: string
   readonly stopSession?: boolean
 }
 
-interface HookMatchDecision {
+export interface HookMatchDecision {
   readonly matched: boolean
   readonly reason: string
   readonly changedPaths: readonly string[]
   readonly details?: Record<string, unknown>
-}
-
-interface DispatchState {
-  active: boolean
-  pending: DispatchRequest[]
-}
-
-interface DispatchRequest {
-  readonly context: RuntimeActionContext
-  readonly options: { canBlock?: boolean }
-  readonly resolve?: (result: HookExecutionResult) => void
-  readonly reject?: (error: unknown) => void
-}
-
-interface AsyncQueueState {
-  activeCount: number
-  pending: Array<() => Promise<void>>
 }
 
 type ExecuteBashHook = (request: BashExecutionRequest) => Promise<BashHookResult>
@@ -223,18 +136,108 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   let hooks = loaded.hooks
   let lastLoadedSignature = loaded.signature
   let lastReportedInvalidSignature = loaded.errors.length > 0 ? loaded.signature : undefined
+  // P1-1 fix: stat-only fingerprint computed from the most recently loaded
+  // file set so refreshHooks can short-circuit without re-entering the
+  // (heavier) load-hooks parsing path on every event. The fingerprint covers
+  // the discovered roots PLUS any imports that the previous load resolved,
+  // so editing an imported file still busts the cache. The first refresh
+  // after construction uses the file set captured by the initial discovery
+  // call above (or, for `options.hooks`, an empty set so the gate below
+  // continues to short-circuit).
+  let lastLoadedFiles: readonly string[] = options.hooks
+    ? []
+    : (loaded as { files?: readonly string[] }).files ?? []
+  let lastStatFingerprint = computeStatFingerprint(lastLoadedFiles)
   const state = new SessionStateStore()
   const runBashHook: ExecuteBashHook = options.executeBash ?? ((request) => host.runBash(request))
   const dispatchStates = new Map<string, DispatchState>()
   const asyncQueues = new Map<string, AsyncQueueState>()
   const actionRecursionGuards = new AsyncLocalStorage<Set<string>>()
+  // Per-runtime dedup set for the async + action: stop one-shot warning so
+  // the warning does not leak across runtime instances or in-process tests.
+  const warnedAsyncStopSources = new Set<string>()
+  // P2-5 fix: per-runtime glob matcher cache. Rebuilt on hooks reload so a
+  // changed pattern set does not retain stale match closures or stale
+  // (path → boolean) entries.
+  let globMatcherCache: GlobMatcherCache = createGlobMatcherCache(lastLoadedSignature)
+  const boundGlobMatcher: GlobMatcher = (filePath, pattern) =>
+    getGlobMatcher(globMatcherCache, pattern)(filePath)
+
+  // Bind the per-runtime mutable state into invokers so the entry-point
+  // handlers below can call dispatch with just the per-event arguments.
+  // This is a pure refactor of the cascade-style call sites in the original
+  // factory — every call still flows through the same exported
+  // `dispatchHooks` / `dispatchToolHooks` functions in `runtime/dispatch.ts`.
+  const invokeDispatchHooks = (
+    activeHooks: HookMap,
+    event: HookEvent,
+    sessionID: string,
+    context: RuntimeActionContext,
+    options: { canBlock?: boolean } = {},
+  ): Promise<HookExecutionResult> =>
+    dispatchHooks(
+      activeHooks,
+      state,
+      host,
+      projectDir,
+      runBashHook,
+      event,
+      sessionID,
+      context,
+      options,
+      dispatchStates,
+      actionRecursionGuards,
+      asyncQueues,
+      warnedAsyncStopSources,
+      boundGlobMatcher,
+    )
+
+  const invokeDispatchToolHooks = (
+    activeHooks: HookMap,
+    phase: "before" | "after",
+    toolName: string,
+    sessionID: string,
+    context: RuntimeActionContext,
+  ): Promise<HookExecutionResult> =>
+    dispatchToolHooks(
+      activeHooks,
+      state,
+      host,
+      projectDir,
+      runBashHook,
+      dispatchStates,
+      actionRecursionGuards,
+      asyncQueues,
+      warnedAsyncStopSources,
+      phase,
+      toolName,
+      sessionID,
+      context,
+      boundGlobMatcher,
+    )
 
   function refreshHooks(): HookMap {
     if (options.hooks && !shouldReloadDiscoveredHooks) {
       return hooks
     }
 
+    // P1-1 fix: compute a cheap stat fingerprint over the previously loaded
+    // file set plus the currently discovered roots. If nothing has changed
+    // we skip the YAML parse + import expansion entirely. Discovered roots
+    // are included so a newly added (or removed) hooks.yaml still triggers
+    // a real reload — `statSync` returns "missing" for absent paths, which
+    // changes the fingerprint as expected.
+    const discoveredEntries = discoverHookConfigEntries({ projectDir })
+    const discoveredFiles = discoveredEntries.map((entry) => entry.filePath)
+    const fingerprintFiles = mergeUnique(lastLoadedFiles, discoveredFiles)
+    const nextStatFingerprint = computeStatFingerprint(fingerprintFiles)
+    if (nextStatFingerprint === lastStatFingerprint && lastLoadedFiles.length > 0) {
+      return hooks
+    }
+
     const nextLoaded = loadDiscoveredHooksSnapshot({ projectDir })
+    lastLoadedFiles = nextLoaded.files
+    lastStatFingerprint = computeStatFingerprint(mergeUnique(nextLoaded.files, discoveredFiles))
     if (nextLoaded.signature === lastLoadedSignature) {
       return hooks
     }
@@ -260,6 +263,11 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
     }
 
     hooks = nextLoaded.hooks
+    // P2-5 fix: rebuild the glob-matcher cache on every successful reload
+    // so newly added/removed conditions do not reuse stale match closures
+    // and so the per-pattern result cache is dropped along with the old
+    // hook set.
+    globMatcherCache = createGlobMatcherCache(nextLoaded.signature)
     // P3 #23: prefer the precomputed loaded.files list over re-flattening the
     // hook map on every reload. The two are equivalent (both are the unique
     // file paths a hook came from), but `loaded.files` is built once during
@@ -297,23 +305,10 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
         details: { callID: eventInput.callID, toolArgs },
       })
 
-      const result = await dispatchToolHooks(
-        activeHooks,
-        state,
-        host,
-        projectDir,
-        runBashHook,
-        dispatchStates,
-        actionRecursionGuards,
-        asyncQueues,
-        "before",
-        eventInput.tool,
-        sessionID,
-        {
-          toolName: eventInput.tool,
-          toolArgs,
-        },
-      )
+      const result = await invokeDispatchToolHooks(activeHooks, "before", eventInput.tool, sessionID, {
+        toolName: eventInput.tool,
+        toolArgs,
+      })
 
       if (result.blocked) {
         state.consumePendingToolCall(eventInput.callID)
@@ -365,46 +360,20 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       state.addFileChanges(sessionID, changes)
 
       if (changes.length > 0) {
-        await dispatchHooks(
-          activeHooks,
-          state,
-          host,
-          projectDir,
-          runBashHook,
-          "file.changed",
-          sessionID,
-          {
-            files,
-            changes,
-            toolName: eventInput.tool,
-            toolArgs,
-          },
-          {},
-          dispatchStates,
-          actionRecursionGuards,
-          asyncQueues,
-        )
-      }
-
-      await dispatchToolHooks(
-        activeHooks,
-        state,
-        host,
-        projectDir,
-        runBashHook,
-        dispatchStates,
-        actionRecursionGuards,
-        asyncQueues,
-        "after",
-        eventInput.tool,
-        sessionID,
-        {
+        await invokeDispatchHooks(activeHooks, "file.changed", sessionID, {
           files,
           changes,
           toolName: eventInput.tool,
           toolArgs,
-        },
-      )
+        })
+      }
+
+      await invokeDispatchToolHooks(activeHooks, "after", eventInput.tool, sessionID, {
+        files,
+        changes,
+        toolName: eventInput.tool,
+        toolArgs,
+      })
 
       logger.debug("dispatch_end", "Finished post-tool dispatch.", {
         cwd: projectDir,
@@ -426,23 +395,10 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
       }
 
       const toolArgs = eventOutput.args ?? {}
-      const result = await dispatchToolHooks(
-        activeHooks,
-        state,
-        host,
-        projectDir,
-        runBashHook,
-        dispatchStates,
-        actionRecursionGuards,
-        asyncQueues,
-        "before",
-        eventInput.tool,
-        sessionID,
-        {
-          toolName: eventInput.tool,
-          toolArgs,
-        },
-      )
+      const result = await invokeDispatchToolHooks(activeHooks, "before", eventInput.tool, sessionID, {
+        toolName: eventInput.tool,
+        toolArgs,
+      })
 
       if (result.blocked) {
         if (result.stopSession) {
@@ -463,27 +419,20 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
           return
         }
 
-        state.rememberSession(sessionID, pickString(info?.parentID) ?? null)
+        // P1-3 fix: when `parentID` is omitted (the PI adapter no longer
+        // forwards `header.parentSession`, which was a file path rather than
+        // a session ID), seed the SessionRecord without a parentID so the
+        // runtime defers lineage resolution to `host.getRootSessionId`. When
+        // a host does provide a parentID, honour it as-is.
+        const parentID = pickString(info?.parentID)
+        state.rememberSession(sessionID, parentID === undefined ? undefined : parentID)
         logger.debug("dispatch_start", "Dispatching session.created hooks.", {
           cwd: projectDir,
           event: "session.created",
           sessionId: sessionID,
-          details: { parentID: pickString(info?.parentID) ?? null },
+          details: { parentID: parentID ?? null },
         })
-        await dispatchHooks(
-          activeHooks,
-          state,
-          host,
-          projectDir,
-          runBashHook,
-          "session.created",
-          sessionID,
-          {},
-          {},
-          dispatchStates,
-          actionRecursionGuards,
-          asyncQueues,
-        )
+        await invokeDispatchHooks(activeHooks, "session.created", sessionID, {})
         return
       }
 
@@ -496,25 +445,20 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
 
         state.rememberSession(sessionID, pickString(info?.parentID) ?? undefined)
         state.deleteSession(sessionID)
+        // P1-4 fix: surface the `reason` PI emits on session_shutdown /
+        // session_before_switch (e.g. "quit", "reload", "new", "resume",
+        // "fork") in dispatch telemetry so operators can tell graceful
+        // shutdowns apart from /new|/resume|/fork transitions. The reason
+        // travels with the envelope but is otherwise advisory; hook
+        // matching is unaffected.
+        const deletedReason = pickString(properties.reason)
         logger.debug("dispatch_start", "Dispatching session.deleted hooks.", {
           cwd: projectDir,
           event: "session.deleted",
           sessionId: sessionID,
+          ...(deletedReason ? { details: { reason: deletedReason } } : {}),
         })
-        await dispatchHooks(
-          activeHooks,
-          state,
-          host,
-          projectDir,
-          runBashHook,
-          "session.deleted",
-          sessionID,
-          {},
-          {},
-          dispatchStates,
-          actionRecursionGuards,
-          asyncQueues,
-        )
+        await invokeDispatchHooks(activeHooks, "session.deleted", sessionID, {})
         return
       }
 
@@ -535,20 +479,7 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
         state.beginIdleDispatch(sessionID, changes)
 
         try {
-          await dispatchHooks(
-            activeHooks,
-            state,
-            host,
-            projectDir,
-            runBashHook,
-            "session.idle",
-            sessionID,
-            { files, changes },
-            {},
-            dispatchStates,
-            actionRecursionGuards,
-            asyncQueues,
-          )
+          await invokeDispatchHooks(activeHooks, "session.idle", sessionID, { files, changes })
           state.consumeFileChanges(sessionID, changes)
           logger.debug("idle_changes_consumed", "Consumed idle changes after dispatch.", {
             cwd: projectDir,
@@ -557,7 +488,44 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
             details: { files, changes: summarizeChanges(changes) },
           })
         } catch (error) {
-          state.cancelIdleDispatch(sessionID)
+          // P2-10 fix: distinguish a hook-returned-failure (the dispatch
+          // ran, a hook threw and was logged elsewhere) from a host-died
+          // failure (the embedding host went down mid-dispatch). The
+          // former is bounded — re-dispatching the same idle changes will
+          // just re-throw the same error and pin the session. The latter
+          // is transient — the operator will restart and we want the
+          // pending changes intact when the next idle fires. Heuristic:
+          // host errors usually surface as connection/abort/EPIPE-style
+          // messages, while in-process hook failures bubble up generic
+          // Error instances (or are already swallowed by executeHook's
+          // try/catch). On host-died, keep the changes for replay; on a
+          // hook failure, consume so the session does not loop.
+          if (isHostDiedError(error)) {
+            state.cancelIdleDispatch(sessionID)
+            logger.warn("idle_dispatch_host_died", "Idle dispatch failed because the host appears to have died; pending changes retained for replay.", {
+              cwd: projectDir,
+              event: "session.idle",
+              sessionId: sessionID,
+              details: {
+                files,
+                changes: summarizeChanges(changes),
+                error: error instanceof Error ? error.message : String(error),
+              },
+            })
+            throw error
+          }
+
+          state.consumeFileChanges(sessionID, changes)
+          logger.error("idle_dispatch_failed", "Idle dispatch failed; consumed pending changes to avoid a re-dispatch loop.", {
+            cwd: projectDir,
+            event: "session.idle",
+            sessionId: sessionID,
+            details: {
+              files,
+              changes: summarizeChanges(changes),
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
           throw error
         }
       }
@@ -565,820 +533,44 @@ export function createHooksRuntime(host: HostAdapter, options: CreateHooksRuntim
   }
 }
 
-async function dispatchToolHooks(
-  hooks: HookMap,
-  state: SessionStateStore,
-  host: HostAdapter,
-  projectDir: string,
-  runBashHook: ExecuteBashHook,
-  dispatchStates: Map<string, DispatchState>,
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, AsyncQueueState>,
-  phase: "before" | "after",
-  toolName: string,
-  sessionID: string,
-  context: RuntimeActionContext,
-): Promise<HookExecutionResult> {
-  const wildcardResult = await dispatchHooks(
-    hooks,
-    state,
-    host,
-    projectDir,
-    runBashHook,
-    `tool.${phase}.*`,
-    sessionID,
-    context,
-    { canBlock: phase === "before" },
-    dispatchStates,
-    actionRecursionGuards,
-    asyncQueues,
-  )
-  if (wildcardResult.blocked) {
-    return wildcardResult
+
+
+// P1-1 helper: cheap stat-based fingerprint shared by the runtime-side
+// refreshHooks short-circuit. Returns a stable string that changes whenever
+// any of the listed files' mtime/size changes, or whenever a file appears
+// or disappears. Mirrors the shape used by load-hooks' own snapshot cache.
+function computeStatFingerprint(files: readonly string[]): string {
+  if (files.length === 0) {
+    return ""
   }
-
-  const mutationNames = getMutationToolHookNames(toolName);
-  const resolvedNames = mutationNames.length > 0 ? mutationNames : [toolName];
-  for (const resolvedToolName of resolvedNames) {
-    const result = await dispatchHooks(
-      hooks,
-      state,
-      host,
-      projectDir,
-      runBashHook,
-      `tool.${phase}.${resolvedToolName}`,
-      sessionID,
-      context,
-      { canBlock: phase === "before" },
-      dispatchStates,
-      actionRecursionGuards,
-      asyncQueues,
-    )
-
-    if (result.blocked) {
-      return result
-    }
-  }
-
-  return { blocked: false }
-}
-
-async function dispatchHooks(
-  hooks: HookMap,
-  state: SessionStateStore,
-  host: HostAdapter,
-  projectDir: string,
-  runBashHook: ExecuteBashHook,
-  event: HookEvent,
-  sessionID: string,
-  context: RuntimeActionContext = {},
-  options: { canBlock?: boolean } = {},
-  dispatchStates: Map<string, DispatchState>,
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, AsyncQueueState>,
-): Promise<HookExecutionResult> {
-  const eventHooks = hooks.get(event)
-  if (!eventHooks || eventHooks.length === 0) {
-    getPiHooksLogger().debug("dispatch_skip", "No hooks registered for event.", {
-      cwd: projectDir,
-      event,
-      sessionId: sessionID,
-      details: { files: context.files, changes: summarizeChanges(context.changes ?? []) },
-    })
-    return { blocked: false }
-  }
-
-  getPiHooksLogger().debug("dispatch_event", "Dispatching hooks for event.", {
-    cwd: projectDir,
-    event,
-    sessionId: sessionID,
-    details: { hookCount: eventHooks.length, files: context.files, changes: summarizeChanges(context.changes ?? []) },
-  })
-
-  const hooksForEvent = eventHooks
-
-  const dispatchKey = `${event}:${sessionID}`
-  const dispatchState = dispatchStates.get(dispatchKey)
-  if (dispatchState?.active) {
-    if (!options.canBlock) {
-      dispatchState.pending.push({ context, options })
-      return { blocked: false }
-    }
-
-    return await new Promise<HookExecutionResult>((resolve, reject) => {
-      dispatchState.pending.push({ context, options, resolve, reject })
-    })
-  }
-
-  const currentState = dispatchState ?? { active: false, pending: [] }
-  currentState.active = true
-  dispatchStates.set(dispatchKey, currentState)
-
-  let currentResult: HookExecutionResult = { blocked: false }
-  let currentError: unknown
-
-  try {
-    currentResult = await executeDispatchRequest({ context, options })
-  } catch (error) {
-    currentError = error
-  }
-
-  if (currentState.pending.length > 0) {
-    // P2 #23 fix: previously the canBlock branch deferred drain via
-    // setTimeout(..., 0) and returned synchronously. That created a window
-    // where a fresh dispatch with the same key could race with the deferred
-    // drain's `dispatchStates.delete(dispatchKey)`. Always await inline so
-    // dispatch state lifetime is well-defined.
-    await drainPendingRequests()
-  } else {
-    currentState.active = false
-    currentState.pending = []
-    dispatchStates.delete(dispatchKey)
-  }
-
-  if (currentError !== undefined) {
-    throw currentError
-  }
-
-  return currentResult
-
-  async function executeDispatchRequest(request: DispatchRequest): Promise<HookExecutionResult> {
-    for (const hook of hooksForEvent) {
-      const result = await executeHook(
-        hook,
-        state,
-        host,
-        projectDir,
-        runBashHook,
-        sessionID,
-        prepareRuntimeActionContext(projectDir, request.context),
-        request.options,
-        actionRecursionGuards,
-        asyncQueues,
-      )
-      if (result.blocked) {
-        return result
-      }
-    }
-
-    return { blocked: false }
-  }
-
-  async function drainPendingRequests(): Promise<void> {
+  const parts: string[] = []
+  for (const filePath of files) {
     try {
-      while (currentState.pending.length > 0) {
-        const request = currentState.pending.shift()!
-
-        try {
-          const result = await executeDispatchRequest(request)
-          request.resolve?.(result)
-        } catch (error) {
-          request.reject?.(error)
-        }
-      }
-    } finally {
-      currentState.active = false
-      currentState.pending = []
-      dispatchStates.delete(dispatchKey)
+      const stat = statSync(filePath)
+      parts.push(`${filePath}|${stat.mtimeMs}|${stat.size}`)
+    } catch {
+      parts.push(`${filePath}|missing`)
     }
   }
+  return parts.join("\n")
 }
 
-async function executeHook(
-  hook: HookConfig,
-  state: SessionStateStore,
-  host: HostAdapter,
-  projectDir: string,
-  runBashHook: ExecuteBashHook,
-  sessionID: string,
-  context: RuntimeActionContext,
-  options: { canBlock?: boolean },
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  asyncQueues: Map<string, AsyncQueueState>,
-): Promise<HookExecutionResult> {
-  const logger = getPiHooksLogger()
-  const hookId = getHookIdentifier(hook)
-  let decision: HookMatchDecision
-
-  logger.debug("hook_consider", "Evaluating hook against event context.", {
-    cwd: projectDir,
-    event: hook.event,
-    sessionId: sessionID,
-    hookId,
-    hookSource: formatHookSource(hook),
-    details: {
-      scope: hook.scope,
-      runIn: hook.runIn,
-      async: hook.async === true,
-      files: context.files,
-      changes: summarizeChanges(context.changes ?? []),
-      toolName: context.toolName,
-    },
-  })
-
-  try {
-    decision = await shouldRunHook(hook, state, host, projectDir, sessionID, context)
-  } catch (error) {
-    logger.error("hook_skip", "Hook evaluation failed.", {
-      cwd: projectDir,
-      event: hook.event,
-      sessionId: sessionID,
-      hookId,
-      hookSource: formatHookSource(hook),
-      details: { error: error instanceof Error ? error.message : String(error) },
-    })
-    logHookFailure(hook.event, hook.source.filePath, error)
-    return { blocked: false }
-  }
-
-  if (!decision.matched) {
-    logger.debug("hook_skip", "Hook did not match the current event context.", {
-      cwd: projectDir,
-      event: hook.event,
-      sessionId: sessionID,
-      hookId,
-      hookSource: formatHookSource(hook),
-      details: {
-        reason: decision.reason,
-        changedPaths: decision.changedPaths,
-        ...decision.details,
-      },
-    })
-    return { blocked: false }
-  }
-
-  logger.info("hook_match", "Hook matched the current event context.", {
-    cwd: projectDir,
-    event: hook.event,
-    sessionId: sessionID,
-    hookId,
-    hookSource: formatHookSource(hook),
-    details: {
-      changedPaths: decision.changedPaths,
-      files: context.files,
-      changes: summarizeChanges(context.changes ?? []),
-      toolName: context.toolName,
-    },
-  })
-
-  if (hook.async) {
-    const asyncConfig = resolveAsyncExecutionConfig(hook, sessionID)
-    enqueueAsyncHook(
-      asyncQueues,
-      asyncConfig,
-      async () => {
-        for (const action of hook.actions) {
-          await executeAction(
-            action,
-            hook.runIn,
-            host,
-            projectDir,
-            state,
-            runBashHook,
-            hook.event,
-            sessionID,
-            context,
-            hook.source.filePath,
-            hookId,
-            actionRecursionGuards,
-          )
-        }
-      },
-      (error) => {
-        logger.error("hook_async", "Async hook execution failed.", {
-          cwd: projectDir,
-          event: hook.event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: formatHookSource(hook),
-          details: { error: error instanceof Error ? error.message : String(error) },
-        })
-        logHookFailure(hook.event, hook.source.filePath, error)
-      },
-    )
-    logger.debug("hook_async", "Queued hook for asynchronous execution.", {
-      cwd: projectDir,
-      event: hook.event,
-      sessionId: sessionID,
-      hookId,
-      hookSource: formatHookSource(hook),
-      details: { queueKey: asyncConfig.queueKey, concurrency: asyncConfig.concurrency },
-    })
-    return { blocked: false }
-  }
-
-  for (const action of hook.actions) {
-    const result = await executeAction(
-      action,
-      hook.runIn,
-      host,
-      projectDir,
-      state,
-      runBashHook,
-      hook.event,
-      sessionID,
-      context,
-      hook.source.filePath,
-      hookId,
-      actionRecursionGuards,
-    )
-    if (result.blocked && options.canBlock) {
-      logger.warn("hook_block", "Hook action blocked event execution.", {
-        cwd: projectDir,
-        event: hook.event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: formatHookSource(hook),
-        details: { blockReason: result.blockReason, stopSession: hook.action === "stop" },
-      })
-      return {
-        ...result,
-        ...(hook.action === "stop" ? { stopSession: true } : {}),
-      }
+function mergeUnique(a: readonly string[], b: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of a) {
+    if (!seen.has(value)) {
+      seen.add(value)
+      out.push(value)
     }
   }
-
-  return { blocked: false }
-}
-
-async function shouldRunHook(
-  hook: HookConfig,
-  state: SessionStateStore,
-  host: HostAdapter,
-  projectDir: string,
-  sessionID: string,
-  context: RuntimeActionContext,
-): Promise<HookMatchDecision> {
-  const pathMatchContext = context.pathMatchContext ?? buildPathMatchContext(projectDir, context)
-  const changedPaths = pathMatchContext.changedPaths
-
-  if (!(await state.evaluateScope(sessionID, hook.scope, (currentSessionID) => resolveParentSessionID(host, currentSessionID)))) {
-    return {
-      matched: false,
-      reason: "scope_mismatch",
-      changedPaths,
-      details: { scope: hook.scope },
+  for (const value of b) {
+    if (!seen.has(value)) {
+      seen.add(value)
+      out.push(value)
     }
   }
-
-  for (const condition of hook.conditions ?? []) {
-    if (condition === "matchesCodeFiles") {
-      if (!pathMatchContext.hasCodeFiles) {
-        return {
-          matched: false,
-          reason: "matchesCodeFiles_failed",
-          changedPaths,
-          details: { files: context.files ?? [] },
-        }
-      }
-
-      continue
-    }
-
-    if ("matchesAnyPath" in condition) {
-      if (changedPaths.length === 0) {
-        return {
-          matched: false,
-          reason: "matchesAnyPath_no_paths",
-          changedPaths,
-          details: { patterns: condition.matchesAnyPath },
-        }
-      }
-
-      if (!changedPaths.some((filePath) => condition.matchesAnyPath.some((pattern) => matchesGlob(filePath, pattern)))) {
-        return {
-          matched: false,
-          reason: "matchesAnyPath_failed",
-          changedPaths,
-          details: { patterns: condition.matchesAnyPath },
-        }
-      }
-
-      continue
-    }
-
-    if (changedPaths.length === 0) {
-      return {
-        matched: false,
-        reason: "matchesAllPaths_no_paths",
-        changedPaths,
-        details: { patterns: condition.matchesAllPaths },
-      }
-    }
-
-    if (!changedPaths.every((filePath) => condition.matchesAllPaths.some((pattern) => matchesGlob(filePath, pattern)))) {
-      return {
-        matched: false,
-        reason: "matchesAllPaths_failed",
-        changedPaths,
-        details: { patterns: condition.matchesAllPaths },
-      }
-    }
-  }
-
-  return { matched: true, reason: "matched", changedPaths }
-}
-
-export function buildPathMatchContext(projectDir: string, context: RuntimeActionContext): PathMatchContext {
-  const changedPaths = getFinalChangedPaths(projectDir, context)
-  return {
-    changedPaths,
-    hasCodeFiles: changedPaths.some(hasCodeExtension),
-  }
-}
-
-function prepareRuntimeActionContext(projectDir: string, context: RuntimeActionContext): RuntimeActionContext {
-  if (context.pathMatchContext) {
-    return context
-  }
-
-  return {
-    ...context,
-    pathMatchContext: buildPathMatchContext(projectDir, context),
-  }
-}
-
-function getFinalChangedPaths(projectDir: string, context: RuntimeActionContext): readonly string[] {
-  if (context.changes && context.changes.length > 0) {
-    return context.changes.map((change) => normalizeConditionPath(projectDir, change.operation === "rename" ? change.toPath : change.path))
-  }
-
-  return (context.files ?? []).map((filePath) => normalizeConditionPath(projectDir, filePath))
-}
-
-function normalizeConditionPath(projectDir: string, filePath: string): string {
-  const normalizedPath = normalizeGlobCandidate(filePath)
-  if (!isAbsolute(filePath)) {
-    return normalizedPath
-  }
-
-  const projectRelativePath = normalizeGlobCandidate(relative(projectDir, filePath))
-  if (projectRelativePath !== "" && projectRelativePath !== "." && !projectRelativePath.startsWith("../")) {
-    return projectRelativePath
-  }
-
-  return normalizedPath
-}
-
-function normalizeGlobCandidate(filePath: string): string {
-  return filePath.replaceAll("\\", "/").replace(/^\.\//, "")
-}
-
-async function executeAction(
-  action: HookAction,
-  runIn: HookRunIn,
-  host: HostAdapter,
-  projectDir: string,
-  state: SessionStateStore,
-  runBashHook: ExecuteBashHook,
-  event: HookEvent,
-  sessionID: string,
-  context: RuntimeActionContext,
-  sourceFilePath: string,
-  hookId: string,
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-): Promise<HookExecutionResult> {
-  const logger = getPiHooksLogger()
-  const executionDirectory = projectDir
-  const actionType = getActionType(action)
-
-  logger.debug("action_start", "Starting hook action.", {
-    cwd: projectDir,
-    event,
-    sessionId: sessionID,
-    hookId,
-    hookSource: sourceFilePath,
-    action: actionType,
-    details: getActionDetails(action),
-  })
-
-  if ("command" in action) {
-    const error = new Error("command: actions are not supported on PI — remove this action or use bash instead")
-    logger.error("action_result", "Unsupported command action encountered.", {
-      cwd: projectDir,
-      event,
-      sessionId: sessionID,
-      hookId,
-      hookSource: sourceFilePath,
-      action: actionType,
-      details: { error: error.message },
-    })
-    logHookFailure(event, sourceFilePath, error)
-    return { blocked: false }
-  }
-
-  if ("tool" in action) {
-    try {
-      const targetSessionID = await resolveActionSessionID(state, host, sessionID, runIn)
-      if (!targetSessionID) {
-        logger.warn("action_result", "Tool action skipped because target session is unavailable.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-        })
-        return { blocked: false }
-      }
-
-      const prompt = `Use the ${action.tool.name} tool with these arguments: ${JSON.stringify(action.tool.args ?? {})}`
-      const actionKey = `${event}:${targetSessionID}:tool:${sourceFilePath}:${JSON.stringify(action.tool)}`
-      let delivery: HostDeliveryResult = { status: "accepted" }
-      await withActionRecursionGuard(actionRecursionGuards, actionKey, async () => {
-        delivery = normalizeHostDeliveryResult(await host.sendPrompt(targetSessionID, prompt))
-      })
-      const deliveryDetails = {
-        targetSessionID,
-        prompt,
-        args: action.tool.args ?? {},
-        ...(delivery.reason ? { reason: delivery.reason } : {}),
-        ...(delivery.details ? delivery.details : {}),
-      }
-      if (delivery.status === "degraded") {
-        logger.warn("action_result", "Tool action degraded before the follow-up prompt was accepted.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          toolName: action.tool.name,
-          details: deliveryDetails,
-        })
-      } else {
-        logger.info("action_result", "Tool action queued a follow-up prompt.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          toolName: action.tool.name,
-          details: deliveryDetails,
-        })
-      }
-    } catch (error) {
-      logger.error("action_result", "Tool action failed.", {
-        cwd: projectDir,
-        event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: sourceFilePath,
-        action: actionType,
-        details: { error: error instanceof Error ? error.message : String(error) },
-      })
-      logHookFailure(event, sourceFilePath, error)
-    }
-
-    return { blocked: false }
-  }
-
-  if ("notify" in action) {
-    try {
-      const config = typeof action.notify === "string" ? { text: action.notify } : action.notify
-      const level = config.level ?? "info"
-      if (typeof host.notify === "function") {
-        const delivery = normalizeHostDeliveryResult(await host.notify(config.text, level))
-        const deliveryDetails = {
-          text: config.text,
-          level,
-          ...(delivery.reason ? { reason: delivery.reason } : {}),
-          ...(delivery.details ? delivery.details : {}),
-        }
-        if (delivery.status === "degraded") {
-          logger.warn("action_result", "Notification action degraded before the host accepted it.", {
-            cwd: projectDir,
-            event,
-            sessionId: sessionID,
-            hookId,
-            hookSource: sourceFilePath,
-            action: actionType,
-            details: deliveryDetails,
-          })
-        } else {
-          logger.info("action_result", "Notification action delivered.", {
-            cwd: projectDir,
-            event,
-            sessionId: sessionID,
-            hookId,
-            hookSource: sourceFilePath,
-            action: actionType,
-            details: deliveryDetails,
-          })
-        }
-      } else {
-        console.warn(`[pi-yaml-hooks] notify action skipped (host.notify not implemented): ${config.text}`)
-        logger.warn("action_result", "Notification action skipped because host.notify is unavailable.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { text: config.text, level },
-        })
-      }
-    } catch (error) {
-      logger.error("action_result", "Notification action failed.", {
-        cwd: projectDir,
-        event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: sourceFilePath,
-        action: actionType,
-        details: { error: error instanceof Error ? error.message : String(error) },
-      })
-      logHookFailure(event, sourceFilePath, error)
-    }
-    return { blocked: false }
-  }
-
-  if ("confirm" in action) {
-    try {
-      if (typeof host.confirm === "function") {
-        const approved = await host.confirm({
-          ...(action.confirm.title !== undefined ? { title: action.confirm.title } : {}),
-          message: action.confirm.message,
-        })
-        logger.info("action_result", "Confirmation action completed.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { title: action.confirm.title, message: action.confirm.message, approved },
-        })
-        if (!approved) {
-          return { blocked: true, blockReason: "Blocked by user via confirm action" }
-        }
-      } else {
-        console.warn(`[pi-yaml-hooks] confirm action skipped (host.confirm not implemented): ${action.confirm.message}`)
-        logger.warn("action_result", "Confirmation action skipped because host.confirm is unavailable.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { title: action.confirm.title, message: action.confirm.message },
-        })
-      }
-    } catch (error) {
-      logger.error("action_result", "Confirmation action failed.", {
-        cwd: projectDir,
-        event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: sourceFilePath,
-        action: actionType,
-        details: { error: error instanceof Error ? error.message : String(error) },
-      })
-      logHookFailure(event, sourceFilePath, error)
-    }
-    return { blocked: false }
-  }
-
-  if ("setStatus" in action) {
-    try {
-      const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
-      if (typeof host.setStatus === "function") {
-        const statusHookId = getStatusSlotKey(hookId, sourceFilePath)
-        const delivery = normalizeHostDeliveryResult(await host.setStatus(statusHookId, config.text))
-        const deliveryDetails = {
-          statusHookId,
-          text: config.text,
-          ...(delivery.reason ? { reason: delivery.reason } : {}),
-          ...(delivery.details ? delivery.details : {}),
-        }
-        if (delivery.status === "degraded") {
-          logger.warn("action_result", "Status action degraded before the host accepted it.", {
-            cwd: projectDir,
-            event,
-            sessionId: sessionID,
-            hookId,
-            hookSource: sourceFilePath,
-            action: actionType,
-            details: deliveryDetails,
-          })
-        } else {
-          logger.info("action_result", "Status action updated the PI status surface.", {
-            cwd: projectDir,
-            event,
-            sessionId: sessionID,
-            hookId,
-            hookSource: sourceFilePath,
-            action: actionType,
-            details: deliveryDetails,
-          })
-        }
-      } else {
-        console.warn(`[pi-yaml-hooks] setStatus action skipped (host.setStatus not implemented): ${config.text}`)
-        logger.warn("action_result", "Status action skipped because host.setStatus is unavailable.", {
-          cwd: projectDir,
-          event,
-          sessionId: sessionID,
-          hookId,
-          hookSource: sourceFilePath,
-          action: actionType,
-          details: { text: config.text },
-        })
-      }
-    } catch (error) {
-      logger.error("action_result", "Status action failed.", {
-        cwd: projectDir,
-        event,
-        sessionId: sessionID,
-        hookId,
-        hookSource: sourceFilePath,
-        action: actionType,
-        details: { error: error instanceof Error ? error.message : String(error) },
-      })
-      logHookFailure(event, sourceFilePath, error)
-    }
-    return { blocked: false }
-  }
-
-  const config = typeof action.bash === "string" ? { command: action.bash } : action.bash
-  const result = await runBashHook({
-    command: config.command,
-    timeout: config.timeout,
-    projectDir: executionDirectory,
-    context: {
-      session_id: sessionID,
-      event,
-      cwd: executionDirectory,
-      files: context.files,
-      changes: context.changes,
-      tool_name: context.toolName,
-      tool_args: context.toolArgs,
-    },
-  })
-
-  logger.info("action_result", "Bash action completed.", {
-    cwd: projectDir,
-    event,
-    sessionId: sessionID,
-    hookId,
-    hookSource: sourceFilePath,
-    action: actionType,
-    details: {
-      command: config.command,
-      timeout: config.timeout,
-      status: result.status,
-      exitCode: result.exitCode,
-      blocking: result.blocking,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    },
-  })
-
-  if (result.blocking) {
-    return { blocked: true, blockReason: result.stderr.trim() || "Blocked by hook" }
-  }
-
-  return { blocked: false }
-}
-
-async function resolveActionSessionID(
-  state: SessionStateStore,
-  host: HostAdapter,
-  sessionID: string,
-  runIn: HookRunIn,
-): Promise<string | undefined> {
-  const targetSessionID =
-    runIn === "main"
-      ? await state.getRootSessionID(sessionID, (currentSessionID) => resolveParentSessionID(host, currentSessionID))
-      : sessionID
-
-  return state.isDeleted(targetSessionID) ? undefined : targetSessionID
-}
-
-async function abortSession(host: HostAdapter, sessionID: string): Promise<void> {
-  try {
-    await host.abort(sessionID)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`[pi-yaml-hooks] Failed to abort session ${sessionID}: ${message}`)
-  }
-}
-
-async function resolveParentSessionID(host: HostAdapter, sessionID: string): Promise<string | null> {
-  // The host only exposes a root-session lookup, so callers that need a parent
-  // fall back to "is this already the root?" as a best-effort parent resolver.
-  try {
-    const rootID = await host.getRootSessionId(sessionID)
-    return rootID && rootID !== sessionID ? rootID : null
-  } catch {
-    return null
-  }
-}
-
-function hasCodeExtension(filePath: string): boolean {
-  const extension = extname(filePath).toLowerCase()
-  return Boolean(extension && CODE_EXTENSIONS.has(extension))
+  return out
 }
 
 function formatHookLoadErrors(errors: Array<{ filePath: string; message: string; path?: string }>): string {
@@ -1410,198 +602,4 @@ function resolveToolArgs(
   return pendingArgs ?? eventArgs ?? {}
 }
 
-function getHookIdentifier(hook: HookConfig): string {
-  return hook.id ?? `${hook.source.filePath}#hooks[${hook.source.index}]`
-}
 
-function getStatusSlotKey(hookId: string, _sourceFilePath: string): string {
-  // P3 #28: previously suffixed with sourceFilePath, which meant a hooks file
-  // move (rename, dir reshuffle) caused the host's status slot to be
-  // orphaned and re-created. Key on the stable hookId only so a renamed
-  // hooks.yaml keeps its slot. Hook IDs are user-supplied via `id:` and
-  // namespaced via `${filePath}#hooks[idx]` when missing — the latter still
-  // changes on file move, in which case the slot is intentionally
-  // drop-and-recreate (the hook has no stable identity to track).
-  return `pi-yaml-hooks:${hookId}`
-}
-
-function resolveAsyncExecutionConfig(
-  hook: HookConfig,
-  sessionID: string,
-): { queueKey: string; concurrency: number } {
-  if (hook.async === true || hook.async === undefined) {
-    return { queueKey: `${hook.event}:${sessionID}`, concurrency: 1 }
-  }
-
-  const group = hook.async.group?.trim()
-  return {
-    queueKey: group ? `${sessionID}:${group}` : `${hook.event}:${sessionID}`,
-    concurrency: hook.async.concurrency ?? 1,
-  }
-}
-
-function enqueueAsyncHook(
-  asyncQueues: Map<string, AsyncQueueState>,
-  config: { queueKey: string; concurrency: number },
-  run: () => Promise<void>,
-  onError: (error: unknown) => void,
-): void {
-  const state = asyncQueues.get(config.queueKey) ?? { activeCount: 0, pending: [] }
-  asyncQueues.set(config.queueKey, state)
-
-  const startNext = (): void => {
-    while (state.activeCount < config.concurrency && state.pending.length > 0) {
-      const next = state.pending.shift()
-      if (!next) {
-        continue
-      }
-
-      state.activeCount += 1
-      // P2 #13: wrap the call in an async IIFE so a synchronous throw from
-      // `next()` (e.g. before the function awaits) is converted into a
-      // rejected promise. Without this wrapper a sync throw would skip
-      // .catch/.finally and leak activeCount, eventually wedging the queue.
-      void (async () => next())()
-        .catch(onError)
-        .finally(() => {
-          state.activeCount -= 1
-          if (state.activeCount === 0 && state.pending.length === 0) {
-            asyncQueues.delete(config.queueKey)
-            return
-          }
-          startNext()
-        })
-    }
-  }
-
-  state.pending.push(run)
-  startNext()
-}
-
-function formatHookSource(hook: HookConfig): string {
-  return `${hook.source.filePath}#hooks[${hook.source.index}]`
-}
-
-function getActionType(action: HookAction): string {
-  if ("command" in action) return "command"
-  if ("tool" in action) return "tool"
-  if ("bash" in action) return "bash"
-  if ("notify" in action) return "notify"
-  if ("confirm" in action) return "confirm"
-  return "setStatus"
-}
-
-function getActionDetails(action: HookAction): Record<string, unknown> {
-  if ("command" in action) {
-    return { command: action.command }
-  }
-
-  if ("tool" in action) {
-    return { name: action.tool.name, args: action.tool.args ?? {} }
-  }
-
-  if ("bash" in action) {
-    const config = typeof action.bash === "string" ? { command: action.bash } : action.bash
-    return { command: config.command, timeout: config.timeout }
-  }
-
-  if ("notify" in action) {
-    const config = typeof action.notify === "string" ? { text: action.notify } : action.notify
-    return { text: config.text, level: config.level ?? "info" }
-  }
-
-  if ("confirm" in action) {
-    return { title: action.confirm.title, message: action.confirm.message }
-  }
-
-  const config = typeof action.setStatus === "string" ? { text: action.setStatus } : action.setStatus
-  return { text: config.text }
-}
-
-function summarizeChanges(changes: readonly FileChange[]): Array<Record<string, unknown>> {
-  return changes.map((change) =>
-    change.operation === "rename"
-      ? { operation: change.operation, fromPath: change.fromPath, toPath: change.toPath }
-      : { operation: change.operation, path: change.path },
-  )
-}
-
-function logHookFailure(event: HookEvent, filePath: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  getPiHooksLogger().error("hook_error", "Hook execution failed.", {
-    event,
-    hookSource: filePath,
-    details: { error: message },
-  })
-  console.error(`[pi-yaml-hooks] ${event} hook from ${filePath} failed: ${message}`)
-}
-
-function normalizeHostDeliveryResult(result: void | HostDeliveryResult | undefined): HostDeliveryResult {
-  if (
-    result &&
-    typeof result === "object" &&
-    (result.status === "accepted" || result.status === "degraded")
-  ) {
-    return result
-  }
-
-  return { status: "accepted" }
-}
-
-// P3 #24: cap the depth of nested action chains so a misconfigured hook that
-// triggers an event whose hook triggers another event (etc.) cannot run
-// unbounded. We keep the existing per-key dedup AND add a numeric counter
-// stored alongside the key set via a WeakMap so the type signature on
-// surrounding handlers stays unchanged.
-const RECURSION_DEPTH_CAP = 32
-const recursionDepthByStore = new WeakMap<Set<string>, { depth: number; loggedExceedance: boolean }>()
-
-async function withActionRecursionGuard<T>(
-  actionRecursionGuards: AsyncLocalStorage<Set<string>>,
-  actionKey: string,
-  execute: () => Promise<T>,
-): Promise<T | undefined> {
-  const activeKeys = actionRecursionGuards.getStore()
-  if (activeKeys?.has(actionKey)) {
-    return undefined
-  }
-
-  if (activeKeys) {
-    const meta = recursionDepthByStore.get(activeKeys) ?? { depth: 0, loggedExceedance: false }
-    if (meta.depth >= RECURSION_DEPTH_CAP) {
-      if (!meta.loggedExceedance) {
-        meta.loggedExceedance = true
-        recursionDepthByStore.set(activeKeys, meta)
-        getPiHooksLogger().warn(
-          "hook_recursion_cap",
-          `Hook action recursion depth exceeded ${RECURSION_DEPTH_CAP}; skipping further nested actions.`,
-          { details: { actionKey, depth: meta.depth, cap: RECURSION_DEPTH_CAP } },
-        )
-      }
-      return undefined
-    }
-    activeKeys.add(actionKey)
-    meta.depth += 1
-    recursionDepthByStore.set(activeKeys, meta)
-    try {
-      return await execute()
-    } finally {
-      activeKeys.delete(actionKey)
-      meta.depth -= 1
-      if (meta.depth === 0) {
-        recursionDepthByStore.delete(activeKeys)
-      }
-    }
-  }
-
-  const rootKeys = new Set<string>([actionKey])
-  recursionDepthByStore.set(rootKeys, { depth: 1, loggedExceedance: false })
-  return await actionRecursionGuards.run(rootKeys, async () => {
-    try {
-      return await execute()
-    } finally {
-      rootKeys.delete(actionKey)
-      recursionDepthByStore.delete(rootKeys)
-    }
-  })
-}

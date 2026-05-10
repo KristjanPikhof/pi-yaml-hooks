@@ -56,8 +56,8 @@ const TOOL_HOOK_EVENTS = [
 ] as const
 
 const LOG_OPTION_ITEMS: AutocompleteItem[] = [
-  { value: "--follow", label: "--follow", description: "Follow the pi-yaml-hooks NDJSON log with tail -F" },
-  { value: "--path", label: "--path", description: "Use the hook log file path" },
+  { value: "--follow", label: "--follow", description: "Spawn scripts/tail-hook-log.sh in follow mode" },
+  { value: "--path", label: "--path", description: "Print only the hook log file path" },
 ]
 
 type HookAutocompleteProvider = PiAutocompleteProvider & {
@@ -79,12 +79,18 @@ export function registerHookAutocomplete(ctx: ExtensionContext): void {
   }
 
   autocompleteRegistered = true
-  const providerState = createHookAutocompleteState(ctx.cwd)
-  addAutocompleteProvider(createHookAutocompleteProviderFactory(providerState))
+  // P1-11 fix: do NOT capture a snapshot at registration time. The provider
+  // factory only captures the cwd; suggestion state is computed lazily inside
+  // `getSuggestions` and memoized by the discovery snapshot's `signature`.
+  // That way newly-edited hook files (e.g. fresh hook ids) appear without a
+  // PI restart while we still avoid re-walking the filesystem on every
+  // keystroke.
+  addAutocompleteProvider(createHookAutocompleteProviderFactory(ctx.cwd))
 }
 
 export function resetHookAutocompleteForTests(): void {
   autocompleteRegistered = false
+  cachedAutocompleteState = null
 }
 
 function getAddAutocompleteProvider(ui: unknown): ((factory: AutocompleteProviderFactory) => void) | undefined {
@@ -104,10 +110,27 @@ interface HookAutocompleteState {
   readonly logItems: readonly AutocompleteItem[]
 }
 
-function createHookAutocompleteState(cwd: string): HookAutocompleteState {
+interface CachedState {
+  readonly projectDir: string
+  readonly signature: string
+  readonly state: HookAutocompleteState
+}
+
+let cachedAutocompleteState: CachedState | null = null
+
+function getOrComputeAutocompleteState(cwd: string): HookAutocompleteState {
   const projectDir = path.resolve(cwd)
-  const paths = resolveHookConfigPaths({ projectDir })
   const snapshot = loadDiscoveredHooksSnapshot({ projectDir })
+  const signature = snapshot.signature
+  if (
+    cachedAutocompleteState &&
+    cachedAutocompleteState.projectDir === projectDir &&
+    cachedAutocompleteState.signature === signature
+  ) {
+    return cachedAutocompleteState.state
+  }
+
+  const paths = resolveHookConfigPaths({ projectDir })
   const hookIds = new Map<string, AutocompleteItem>()
 
   for (const hooks of snapshot.hooks.values()) {
@@ -132,7 +155,7 @@ function createHookAutocompleteState(cwd: string): HookAutocompleteState {
 
   const logFilePath = getPiHooksLogFilePath()
 
-  return {
+  const state: HookAutocompleteState = {
     projectDir,
     commandItems: HOOK_COMMANDS,
     hookIdItems: Array.from(hookIds.values()).sort(compareAutocompleteItems),
@@ -148,12 +171,18 @@ function createHookAutocompleteState(cwd: string): HookAutocompleteState {
       ...LOG_OPTION_ITEMS,
     ],
   }
+
+  cachedAutocompleteState = { projectDir, signature, state }
+  return state
 }
 
-function createHookAutocompleteProviderFactory(state: HookAutocompleteState): AutocompleteProviderFactory {
+function createHookAutocompleteProviderFactory(cwd: string): AutocompleteProviderFactory {
   return (current: HookAutocompleteProvider): HookAutocompleteProvider => ({
     async getSuggestions(lines, cursorLine, cursorCol, options) {
       const currentSuggestions = await current.getSuggestions(lines, cursorLine, cursorCol, options)
+      // P1-11: recompute (or reuse cached) state on every call so freshly
+      // edited hooks.yaml files become visible without a PI restart.
+      const state = getOrComputeAutocompleteState(cwd)
       const hookSuggestions = getHookSuggestions(state, lines, cursorLine, cursorCol)
       if (!hookSuggestions) {
         return currentSuggestions
@@ -191,13 +220,16 @@ function getHookSuggestions(
 
   const commandMatch = beforeCursor.match(/^(\/hooks-[\w-]+)(?:\s+(.*))?$/)
   if (!commandMatch || commandMatch[2] === undefined) {
-    return filterItems(state.commandItems, tokenPrefix)
+    // P3-5: command names use prefix matching so typing "/hooks-st" no longer
+    // surfaces "/hooks-tail-log" via the substring "st" appearing inside
+    // unrelated labels. Argument completions still use substring (see below).
+    return filterCommandItems(state.commandItems, tokenPrefix)
   }
 
   const command = commandMatch[1]
   const argumentPrefix = commandMatch[2].match(/\S*$/)?.[0] ?? ""
   const argumentItems = getArgumentItems(state, command)
-  return filterItems(argumentItems, argumentPrefix)
+  return filterArgumentItems(argumentItems, argumentPrefix)
 }
 
 function getArgumentItems(state: HookAutocompleteState, command: string): readonly AutocompleteItem[] {
@@ -217,7 +249,42 @@ function getArgumentItems(state: HookAutocompleteState, command: string): readon
   }
 }
 
-function filterItems(items: readonly AutocompleteItem[], prefix: string): { items: AutocompleteItem[]; prefix: string } {
+// P3-5: prefix match for command items so "/hooks-st" only suggests
+// "/hooks-status", not commands whose label happens to contain "st"
+// somewhere in the middle. Match against both `value` (e.g. "hooks-status")
+// and `label` (e.g. "/hooks-status") so a leading slash typed by the user is
+// tolerated.
+function filterCommandItems(
+  items: readonly AutocompleteItem[],
+  prefix: string,
+): { items: AutocompleteItem[]; prefix: string } {
+  const normalizedPrefix = prefix.toLowerCase()
+  const slashStripped = normalizedPrefix.startsWith("/") ? normalizedPrefix.slice(1) : normalizedPrefix
+  return {
+    prefix,
+    items: items
+      .filter((item) => {
+        const valueLc = item.value.toLowerCase()
+        const labelLc = item.label.toLowerCase()
+        return (
+          valueLc.startsWith(slashStripped) ||
+          labelLc.startsWith(normalizedPrefix) ||
+          // Tolerate users typing the value form ("hooks-st") even when the
+          // label is the slash form ("/hooks-status").
+          labelLc.startsWith(`/${slashStripped}`)
+        )
+      })
+      .sort(compareAutocompleteItems),
+  }
+}
+
+// Free-form arguments (hook ids, paths, event names) keep substring matching
+// because users frequently search by a fragment like "after.write" or a
+// path basename rather than a leading prefix.
+function filterArgumentItems(
+  items: readonly AutocompleteItem[],
+  prefix: string,
+): { items: AutocompleteItem[]; prefix: string } {
   const normalizedPrefix = prefix.toLowerCase()
   return {
     prefix,

@@ -5,6 +5,7 @@ import path from "node:path"
 
 import type { ExtensionAPI, ExtensionContext, UserBashEvent, UserBashEventResult } from "@earendil-works/pi-coding-agent"
 
+import { getPiHooksLogger } from "../core/logger.js"
 import type { HooksRuntime } from "../core/runtime.js"
 
 const ENABLE_USER_BASH_ENV = "PI_YAML_HOOKS_ENABLE_USER_BASH"
@@ -39,7 +40,7 @@ function emitUserBashWarningOnce(): void {
     `  tool.before.bash hooks before execution. Hooks in trusted projects can:\n` +
     `    - observe the full command text\n` +
     `    - block the command (exit code 2)\n` +
-    `    - read PI_TOOL_ARGS to exfiltrate command content via bash actions\n` +
+    `    - read tool_args from stdin JSON to exfiltrate command content via bash actions\n` +
     `  Trusted projects whose hooks will see your typed commands:\n` +
     `${projectList}\n` +
     `  Only enable this feature if you trust all hooks in the listed projects.\n`,
@@ -77,37 +78,112 @@ export function registerUserBashInterception(
       return
     }
 
-    options.rememberContext(ctx.cwd, ctx)
-    const sessionId = options.getSessionId(ctx)
-    if (!sessionId) {
-      return
-    }
-
-    const runtime = options.getRuntimeFor(ctx.cwd)
+    // P1-9 fix: wrap the ENTIRE handler body in try/catch and fail closed on
+    // any internal error. Previously only the runtime call was guarded, so an
+    // exception from getRuntimeFor / rememberContext / getSessionId escaped
+    // into the SDK's emitUserBash, which swallows handler errors and continues
+    // execution unguarded. With the env-gate on, that meant the typed user
+    // command would run without ever passing through tool.before.bash hooks.
+    //
+    // P1-10 fix: when sessionId is missing we previously bypassed silently;
+    // now we emit a debug breadcrumb so operators can correlate "hook didn't
+    // fire" reports with the cause.
+    const logger = getPiHooksLogger()
     try {
-      await runtime["user.bash.before"](
-        {
-          tool: "bash",
-          sessionID: sessionId,
-          callID: `user-bash:${sessionId}:${generateCallId()}`,
-        },
-        {
-          args: { command: event.command },
-        },
-      )
-      return
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return {
-        result: {
-          output: `[pi-yaml-hooks] user_bash blocked: ${message}`,
-          exitCode: undefined,
-          cancelled: true,
-          truncated: false,
-        },
+      try {
+        options.rememberContext(ctx.cwd, ctx)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.error("user_bash_internal_error", "rememberContext threw inside user_bash handler.", {
+          cwd: ctx.cwd,
+          details: { error: message },
+        })
+        return cancelledInternalErrorResult(message)
       }
+
+      let sessionId: string | undefined
+      try {
+        sessionId = options.getSessionId(ctx)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.error("user_bash_internal_error", "getSessionId threw inside user_bash handler.", {
+          cwd: ctx.cwd,
+          details: { error: message },
+        })
+        return cancelledInternalErrorResult(message)
+      }
+
+      if (!sessionId) {
+        logger.debug("user_bash_bypassed", "user_bash interception bypassed because session id is missing.", {
+          cwd: ctx.cwd,
+          details: { reason: "missing_session_id" },
+        })
+        return
+      }
+
+      let runtime: HooksRuntime
+      try {
+        runtime = options.getRuntimeFor(ctx.cwd)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.error("user_bash_internal_error", "getRuntimeFor threw inside user_bash handler.", {
+          cwd: ctx.cwd,
+          sessionId,
+          details: { error: message },
+        })
+        return cancelledInternalErrorResult(message)
+      }
+
+      try {
+        await runtime["user.bash.before"](
+          {
+            tool: "bash",
+            sessionID: sessionId,
+            callID: `user-bash:${sessionId}:${generateCallId()}`,
+          },
+          {
+            args: { command: event.command },
+          },
+        )
+        return
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          result: {
+            output: `[pi-yaml-hooks] user_bash blocked: ${message}`,
+            exitCode: undefined,
+            cancelled: true,
+            truncated: false,
+          },
+        }
+      }
+    } catch (error) {
+      // Defence-in-depth: any unexpected synchronous throw from the guarded
+      // sections above (e.g. logger failure) must still fail closed instead
+      // of letting the user command run unchecked.
+      const message = error instanceof Error ? error.message : String(error)
+      try {
+        logger.error("user_bash_internal_error", "user_bash handler caught unexpected error.", {
+          cwd: ctx.cwd,
+          details: { error: message },
+        })
+      } catch {
+        // ignore — we already failed closed below.
+      }
+      return cancelledInternalErrorResult(message)
     }
   })
+}
+
+function cancelledInternalErrorResult(message: string): UserBashEventResult {
+  return {
+    result: {
+      output: `[pi-yaml-hooks] internal error during user_bash interception: ${message}`,
+      exitCode: undefined,
+      cancelled: true,
+      truncated: false,
+    },
+  }
 }
 
 // Exported for testing only.

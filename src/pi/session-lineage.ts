@@ -17,16 +17,44 @@
  */
 
 import type { ExtensionContext, SessionHeader } from "@earendil-works/pi-coding-agent";
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
+
+import { getPiHooksLogger } from "../core/logger.js";
 
 // P2 #19: bound the lineage walk + per-file read so a pathological session
 // chain or oversized session header line cannot block the event loop.
 const MAX_LINEAGE_DEPTH = 64;
 const MAX_HEADER_BYTES = 64 * 1024;
 
+// P2-14: cache previously resolved (sessionId → rootId) pairs so subsequent
+// `runIn: main` lookups during the same session can skip the file walk.
+// The map is intentionally tiny — every entry is two short ids — and is
+// bounded by SESSION_ROOT_CACHE_MAX so a long-running PI process that
+// accumulates many session ids does not retain them forever.
+const SESSION_ROOT_CACHE_MAX = 64;
+const sessionRootCache = new Map<string, string>();
+
+function rememberSessionRoot(sessionId: string, rootId: string): void {
+  if (sessionRootCache.has(sessionId)) {
+    sessionRootCache.delete(sessionId);
+  }
+  sessionRootCache.set(sessionId, rootId);
+  while (sessionRootCache.size > SESSION_ROOT_CACHE_MAX) {
+    const oldest = sessionRootCache.keys().next().value;
+    if (oldest === undefined) break;
+    sessionRootCache.delete(oldest);
+  }
+}
+
+/** Test-only: clear the resolution cache so each case starts fresh. */
+export function resetSessionLineageCacheForTests(): void {
+  sessionRootCache.clear();
+}
+
 /**
- * ReadonlySessionManager is exposed via ExtensionContext.sessionManager but
- * is not re-exported as a named type from the package root. Derive it.
+ * P3-2: same justification as in `adapter.ts` — use the SDK's
+ * `ReadonlySessionManager` shape by indexing `ExtensionContext["sessionManager"]`
+ * (its only public surface) rather than a structural mirror.
  */
 type ReadonlySessionManager = ExtensionContext["sessionManager"];
 
@@ -52,9 +80,29 @@ export function getRootSessionId(
   if (!header) return currentSessionId;
 
   // If the caller is asking about a session that isn't the session manager's
-  // current one, we can't resolve lineage without loading arbitrary session
-  // files. Return the input unchanged.
-  if (header.id !== currentSessionId) return currentSessionId;
+  // current one, we cannot resolve lineage without loading arbitrary session
+  // files. Try the in-memory cache first (populated by earlier successful
+  // walks) so /resume and /fork that surface a previously-seen child id can
+  // still hit a known root. P2-14: also emit a debug log so the silent
+  // miss is observable in the structured log.
+  if (header.id !== currentSessionId) {
+    const cached = sessionRootCache.get(currentSessionId);
+    if (cached) return cached;
+    try {
+      getPiHooksLogger().debug("lineage_unresolved", "lineage walker skipped: header.id mismatch", {
+        sessionId: currentSessionId,
+        details: { headerId: header.id, parentSession: header.parentSession ?? null },
+      });
+    } catch {
+      /* logger is best-effort; never let logging break lineage */
+    }
+    return currentSessionId;
+  }
+
+  // Cache hit on the active session id (e.g. when getRootSessionId is called
+  // multiple times within the same hook event).
+  const cachedRoot = sessionRootCache.get(currentSessionId);
+  if (cachedRoot) return cachedRoot;
 
   // Walk up via parentSession file paths. We read just the header prefix of
   // each parent file (capped at MAX_HEADER_BYTES) to pick up the
@@ -71,7 +119,9 @@ export function getRootSessionId(
     cursor = parent;
   }
 
-  return cursor?.id ?? currentSessionId;
+  const rootId = cursor?.id ?? currentSessionId;
+  rememberSessionRoot(currentSessionId, rootId);
+  return rootId;
 }
 
 function readSessionHeaderFromFile(filePath: string): SessionHeader | null {
@@ -80,7 +130,17 @@ function readSessionHeaderFromFile(filePath: string): SessionHeader | null {
   // bounded if a file is unexpectedly huge.
   let fd: number | undefined;
   try {
-    fd = openSync(filePath, "r");
+    // P2-15: open with O_NONBLOCK so a FIFO with no writer doesn't block
+    // openSync forever. We immediately fstat the descriptor and bail on
+    // anything that isn't a regular file (FIFO, socket, char/block device).
+    // For regular files O_NONBLOCK is a no-op, so this is safe to apply
+    // unconditionally — Linux/macOS both ignore the flag when opening
+    // disk files. The flag is dropped before readSync via fstat-only path.
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      return null;
+    }
     const buffer = Buffer.allocUnsafe(MAX_HEADER_BYTES);
     const read = readSync(fd, buffer, 0, MAX_HEADER_BYTES, 0);
     const text = buffer.toString("utf8", 0, read);

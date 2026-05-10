@@ -2,20 +2,6 @@
 
 This document describes the current `pi-yaml-hooks` behavior as implemented in this repository.
 
-## `/hooks` command autocomplete
-
-On PI versions that expose `ctx.ui.addAutocompleteProvider`, `pi-yaml-hooks` registers a guarded autocomplete provider for the built-in `/hooks-*` commands. The provider is capability-detected at runtime, so older supported PI versions continue to load without this UI feature.
-
-Autocomplete suggestions are deterministic and intentionally lightweight: command names are static; event names use the supported event list; config paths and the current log path are resolved once when the provider registers; hook ID suggestions come from the loaded global/project snapshot at registration time.
-
-Useful completions include:
-
-- `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, `/hooks-tail-log`
-- loaded hook IDs such as `audit-write`
-- event names such as `session.idle`, `tool.before.bash`, and `tool.after.write`
-- global/project hook config paths
-- log helpers such as `--follow`, `--path`, and a ready-to-run `tail -F` command
-
 ## Hook file shape
 
 A hook file must parse to an object with a top-level `hooks:` array. It may also define an optional top-level `imports:` array.
@@ -37,6 +23,20 @@ hooks:
 ```
 
 Each action entry must define exactly one action key.
+
+## `/hooks` command autocomplete
+
+On PI versions that expose `ctx.ui.addAutocompleteProvider`, `pi-yaml-hooks` registers a guarded autocomplete provider for the built-in `/hooks-*` commands. The provider is capability-detected at runtime, so older supported PI versions continue to load without this UI feature.
+
+Autocomplete suggestions are deterministic and intentionally lightweight: command names are static; event names use the supported event list; config paths and the current log path are resolved when the provider builds suggestions. Hook ID suggestions are loaded lazily from the current global/project snapshot and memoized by snapshot signature, so edits to root or imported hook files refresh suggestions after the next snapshot change.
+
+Useful completions include:
+
+- `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, `/hooks-tail-log`
+- loaded hook IDs such as `audit-write`
+- event names such as `session.idle`, `tool.before.bash`, and `tool.after.write`
+- global and project hook config paths
+- the resolved log path and a ready-to-run `tail -F` command produced by `/hooks-tail-log`
 
 ## Agent-start awareness
 
@@ -66,18 +66,21 @@ Enabling this feature expands the trust surface: hooks in trusted projects can o
 - directory imports expand files in lexical order, but only `*.yaml` / `*.yml` entries are loaded; dotfiles (e.g. `.DS_Store`) and other extensions are skipped
 - package imports (bare specifiers like `hook-pack`) use Node module resolution from the importing file, but are **disabled by default**; set `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1` to opt in
 - imports declared inside the **global** `hooks.yaml` are **refused by default**; set `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` to opt in
+- imports declared inside a **project** `hooks.yaml` whose target (after symlink resolution) falls outside the project's trust anchor are **refused by default**; set `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` to opt in
 - duplicate imports are skipped by canonical path
 - cycles and missing imports produce load errors
+- import recursion is bounded at depth 32; deeper chains fail with `invalid_imports`
 - imported files inherit the importing root scope (`global` or `project`)
 
 ### Trust expansion
 
-Trust on PI is anchored at the project root, not at every imported file. Once a project root is trusted, all of its `imports:` are loaded transitively under that same trust decision. Two safety rails keep that expansion narrow:
+Trust on PI is anchored at the repo or worktree anchor, not at every imported file. Once that anchor is trusted, all of the project root's `imports:` are loaded transitively under that same trust decision. Three safety rails keep that expansion narrow:
 
 1. The global hooks file (which always loads) cannot pull in additional files unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set, so a global hook cannot silently extend its own footprint.
 2. Bare-specifier imports that resolve through `node_modules` are gated behind `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, so an arbitrary npm dependency cannot register hooks just by being installed.
+3. Project imports cannot escape the project's trust anchor (its repo or worktree anchor, or the discovered project root). The check follows symlinks, so a link that lives inside the project but points outside is still refused. Set `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` to opt in.
 
-Both gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set.
+All three gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set.
 
 ## Load order and precedence
 
@@ -138,7 +141,7 @@ Custom tool names can also match if the host emits them.
 | `file.changed` | After recognized file mutations | Synthesized by `pi-yaml-hooks`; see below for exact sources |
 | `session.created` | On PI startup or a genuinely new session | Does not fire on resume, reload, or fork re-entry |
 | `session.idle` | When the agent loop ends and there are no pending messages | Includes accumulated file changes since the last successful idle dispatch |
-| `session.deleted` | On shutdown and before session switches | Lossy by design; PI does not distinguish closed vs switched sessions such as `/new`, `/resume`, and `/fork` |
+| `session.deleted` | On shutdown and before session switches | Best-effort and lossy by design; PI may provide a `reason` (`quit`, `reload`, `new`, `resume`, or `fork`), which is forwarded on the envelope when available |
 
 ### Exact `file.changed` behavior
 
@@ -155,7 +158,7 @@ On stock PI, `pi-yaml-hooks` can synthesize it from:
   - `touch`
   - `mkdir`
 
-For direct `write` and `edit` tool calls, `pi-yaml-hooks` reports the target path as a `modify` change.
+For direct `write` and `edit` tool calls, `pi-yaml-hooks` reports the target path as a `modify` change. Recognized `touch`, `cp`, and `mkdir` shell commands are reported as `create` changes for their target paths.
 
 If you install custom tools named `multiedit`, `patch`, or `apply_patch`, the runtime can also synthesize `file.changed` from them.
 
@@ -209,7 +212,7 @@ This passes when every changed path matches at least one glob in the list.
 
 Important detail: this is an allowlist over paths, not a per-path intersection of all patterns.
 
-If you want an intersection such as “all changed paths are under `src/` and all are `*.ts`”, write two separate conditions:
+If you want an intersection such as "all changed paths are under `src/` and all are `*.ts`", write two separate conditions:
 
 ```yaml
 conditions:
@@ -252,6 +255,7 @@ Exact behavior:
 - hook context JSON is written to the process stdin
 - stdout and stderr are captured up to `PI_YAML_HOOKS_MAX_OUTPUT_BYTES` bytes total per stream buffer, default `1048576`
 - on `tool.before.*`, exit code `2` blocks the tool call
+- exit code `124` indicates the bash process exceeded its timeout; `127` indicates a spawn error (e.g. `bash` binary missing); both are logged as hook failures but do not block
 - other non-zero exits are logged as hook failures but do not block
 
 ### `tool`
@@ -398,6 +402,7 @@ Exact rules:
 
 - `async: true` is allowed only for non-`tool.before` hooks
 - `async: true` is not allowed on `session.idle`
+- `async: true` combined with `action: stop` is rejected at load time; the async queue runs after the dispatch loop has returned, so a stop directive could not block anything
 - async hooks must contain only `bash` actions; `command`, `tool`, `notify`, `confirm`, and `setStatus` actions are rejected at load time because they either have no timeout, require the live UI session, or block the agent turn, all of which would stall or misroute the async queue
 - `async: true` keeps the legacy serialized `event + session` queue
 - `async: { group: <name> }` makes hooks in the same session share a named queue
@@ -471,6 +476,19 @@ Example shape for a `file.changed` hook:
 
 Fields are omitted when unavailable.
 
+`tool_args` is shallow-cloned with sensitive keys (`password`, `token`, `api_key`, `secret`, `authorization`, `auth`, `private_key`, `bearer`) redacted before serialization, and the JSON encoding is capped at 64 KiB. When the cap is exceeded, `tool_args` collapses to a placeholder of the form:
+
+```json
+{
+  "_pi_hooks_tool_args_truncated": true,
+  "_pi_hooks_tool_args_original_byte_length": 123456,
+  "_pi_hooks_tool_args_max_byte_length": 65536,
+  "note": "<truncated>"
+}
+```
+
+If the entire stdin payload still exceeds `PI_YAML_HOOKS_MAX_STDIN_BYTES` (default 262144, 256 KiB), large fields are dropped or replaced and a `_pi_hooks_truncated: true` marker is added at the top level.
+
 Change objects use one of these shapes:
 
 ```json
@@ -495,7 +513,7 @@ The process working directory is the current project directory.
 
 ## PI compatibility smoke-check checklist
 
-Use the repeatable runtime checklist in [`setup.md#runtime-pi-smoke-checklist`](./setup.md#runtime-pi-smoke-checklist) for real PI verification before widening SDK support or changing session, UI, prompt, command, or tool-event behavior. The local harness lives in [`scripts/smoke/`](../scripts/smoke/) and creates an evidence file for future release updates.
+Use the repeatable runtime checklist in [`maintaining.md`](./maintaining.md) for real PI verification before widening SDK support or changing session, UI, prompt, command, or tool-event behavior. The local harness lives in [`scripts/smoke/`](../scripts/smoke/) and creates an evidence file for future release updates.
 
 For a real PI run in the documented peer range, verify these compatibility-sensitive surfaces:
 
@@ -534,16 +552,7 @@ PI_YAML_HOOKS_DEBUG=1 pi
 ~/.pi/agent/logs/pi-yaml-hooks.ndjson
 ```
 
-Useful environment variables:
-
-| Variable | Meaning |
-|---|---|
-| `PI_YAML_HOOKS_DEBUG=1` | enable debug-level persistent logging |
-| `PI_YAML_HOOKS_LOG_FILE=/path/file.ndjson` | override the log file location |
-| `PI_YAML_HOOKS_LOG_LEVEL=debug|info|warn|error` | explicitly set the log level |
-| `PI_YAML_HOOKS_LOG_STDERR=1` | mirror structured log entries to stderr |
-
-The easiest way to inspect the log is:
+For the full environment-variable reference (debug logging, log level, log file, stderr mirroring, and other knobs), see [`setup.md`](./setup.md#environment-variables). The easiest way to inspect the log is:
 
 ```bash
 ./scripts/tail-hook-log.sh
