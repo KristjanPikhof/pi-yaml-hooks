@@ -21,7 +21,7 @@ import type {
   RuntimeActionContext,
 } from "../runtime.js"
 import { withActionRecursionGuard } from "./recursion-guard.js"
-import type { SessionStateStore } from "../session-state.js"
+import { sanitizeToolArgsForSerialization, type SessionStateStore } from "../session-state.js"
 import type { BashExecutionRequest, BashHookResult } from "../bash-types.js"
 import type {
   HookAction,
@@ -447,7 +447,7 @@ const handleBash: ActionHandler = async ({
       files: context.files,
       changes: context.changes,
       tool_name: context.toolName,
-      tool_args: context.toolArgs,
+      tool_args: sanitizeToolArgsForSerialization(context.toolArgs),
     },
   })
 
