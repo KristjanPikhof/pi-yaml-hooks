@@ -254,7 +254,7 @@ This is the canonical environment-variable reference for `pi-yaml-hooks`. Other 
 | `PI_YAML_HOOKS_DEBUG` | `=1` enables verbose, persistent NDJSON logging |
 | `PI_YAML_HOOKS_LOG_LEVEL` | Set the log level explicitly: `debug`, `info`, `warn`, or `error` |
 | `PI_YAML_HOOKS_LOG_FILE` | Override the log file location (default `~/.pi/agent/logs/pi-yaml-hooks.ndjson`) |
-| `PI_YAML_HOOKS_LOG_MAX_BYTES` | Rotate the structured log file once it exceeds this many bytes (positive integer) |
+| `PI_YAML_HOOKS_LOG_MAX_BYTES` | Rotate the structured log file once it exceeds this many bytes (positive integer). Default `10485760` (10 MiB). On rotation the live file is renamed to `<path>.1`, replacing any prior `.1`. |
 | `PI_YAML_HOOKS_LOG_STDERR` | `=1` mirrors structured log entries to stderr |
 
 ## First troubleshooting steps
