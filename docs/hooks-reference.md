@@ -402,6 +402,7 @@ Exact rules:
 
 - `async: true` is allowed only for non-`tool.before` hooks
 - `async: true` is not allowed on `session.idle`
+- `async: true` combined with `action: stop` is rejected at load time; the async queue runs after the dispatch loop has returned, so a stop directive could not block anything
 - async hooks must contain only `bash` actions; `command`, `tool`, `notify`, `confirm`, and `setStatus` actions are rejected at load time because they either have no timeout, require the live UI session, or block the agent turn, all of which would stall or misroute the async queue
 - `async: true` keeps the legacy serialized `event + session` queue
 - `async: { group: <name> }` makes hooks in the same session share a named queue
