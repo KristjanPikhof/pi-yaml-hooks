@@ -74,6 +74,7 @@ export async function dispatchToolHooks(
   dispatchStates: Map<string, DispatchState>,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, AsyncQueueState>,
+  warnedAsyncStopSources: Set<string>,
   phase: "before" | "after",
   toolName: string,
   sessionID: string,
@@ -93,6 +94,7 @@ export async function dispatchToolHooks(
     dispatchStates,
     actionRecursionGuards,
     asyncQueues,
+    warnedAsyncStopSources,
     globMatcher,
   )
   if (wildcardResult.blocked) {
