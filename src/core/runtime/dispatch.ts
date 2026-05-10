@@ -134,6 +134,7 @@ export async function dispatchToolHooks(
       dispatchStates,
       actionRecursionGuards,
       asyncQueues,
+      warnedAsyncStopSources,
       globMatcher,
     )
   }
@@ -152,6 +153,7 @@ export async function dispatchToolHooks(
       dispatchStates,
       actionRecursionGuards,
       asyncQueues,
+      warnedAsyncStopSources,
       globMatcher,
     )
 
