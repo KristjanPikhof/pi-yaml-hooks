@@ -487,7 +487,7 @@ Fields are omitted when unavailable.
 }
 ```
 
-If the entire stdin payload still exceeds `PI_YAML_HOOKS_BASH_STDIN_MAX_BYTES` (default 256 KiB), large fields are dropped or replaced and a `_pi_hooks_truncated: true` marker is added at the top level.
+If the entire stdin payload still exceeds `PI_YAML_HOOKS_MAX_STDIN_BYTES` (default 262144, 256 KiB), large fields are dropped or replaced and a `_pi_hooks_truncated: true` marker is added at the top level.
 
 Change objects use one of these shapes:
 
