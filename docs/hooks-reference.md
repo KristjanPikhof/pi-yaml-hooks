@@ -255,6 +255,7 @@ Exact behavior:
 - hook context JSON is written to the process stdin
 - stdout and stderr are captured up to `PI_YAML_HOOKS_MAX_OUTPUT_BYTES` bytes total per stream buffer, default `1048576`
 - on `tool.before.*`, exit code `2` blocks the tool call
+- exit code `124` indicates the bash process exceeded its timeout; `127` indicates a spawn error (e.g. `bash` binary missing); both are logged as hook failures but do not block
 - other non-zero exits are logged as hook failures but do not block
 
 ### `tool`
