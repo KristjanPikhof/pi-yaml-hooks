@@ -290,6 +290,7 @@ export async function dispatchHooks(
         request.options,
         actionRecursionGuards,
         asyncQueues,
+        warnedAsyncStopSources,
         globMatcher,
       )
       if (result.blocked) {
