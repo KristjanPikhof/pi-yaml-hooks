@@ -547,19 +547,20 @@ function formatHookSource(hook: HookConfig): string {
 // `async: true` with `action: stop`. The async queue runs after the
 // dispatch loop has already returned, so `action: stop` is silently
 // dropped. Parse-time rejection should land in load-hooks; this warning
-// is the runtime safety net.
-const warnedAsyncStopHookSources = new Set<string>()
-
+// is the runtime safety net. The dedup Set lives on the runtime instance
+// so it does not leak across `createHooksRuntime` calls or in-process
+// test runs.
 function warnAsyncStopOnce(
   logger: ReturnType<typeof getPiHooksLogger>,
   hook: HookConfig,
   projectDir: string,
+  warnedAsyncStopSources: Set<string>,
 ): void {
   const sourceKey = formatHookSource(hook)
-  if (warnedAsyncStopHookSources.has(sourceKey)) {
+  if (warnedAsyncStopSources.has(sourceKey)) {
     return
   }
-  warnedAsyncStopHookSources.add(sourceKey)
+  warnedAsyncStopSources.add(sourceKey)
   const message = `[pi-yaml-hooks] hook ${sourceKey} declares both async and action: stop; the stop directive is ignored because async hooks cannot block dispatch.`
   // eslint-disable-next-line no-console
   console.warn(message)
