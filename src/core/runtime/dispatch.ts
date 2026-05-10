@@ -198,6 +198,7 @@ export async function dispatchHooks(
   dispatchStates: Map<string, DispatchState>,
   actionRecursionGuards: AsyncLocalStorage<Set<string>>,
   asyncQueues: Map<string, AsyncQueueState>,
+  warnedAsyncStopSources: Set<string>,
   globMatcher: GlobMatcher = defaultGlobMatcher,
 ): Promise<HookExecutionResult> {
   const eventHooks = hooks.get(event)
