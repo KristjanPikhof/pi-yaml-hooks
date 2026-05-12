@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 import {
+  buildBashEnvironment,
   executeBashHook,
   redactSensitiveContent,
   resetExecutionContextCacheForTests,
@@ -190,6 +191,50 @@ const cases: Case[] = [
         return { ok: false, detail: `no marker: ${out}` }
       }
       return { ok: true }
+    },
+  },
+  {
+    name: "env allowlist preserves only named inherited variables plus PI context",
+    run: async () => {
+      const env = buildBashEnvironment(
+        {
+          PI_YAML_HOOKS_ENV_ALLOWLIST: "PATH,HOME,SAFE_VAR,PI_SESSION_ID",
+          PATH: "/bin",
+          HOME: "/home/tester",
+          SAFE_VAR: "ok",
+          GITHUB_TOKEN: "secret",
+        },
+        {
+          PI_PROJECT_DIR: "/repo",
+          OPENCODE_PROJECT_DIR: "/repo",
+          PI_WORKTREE_DIR: "/repo",
+          OPENCODE_WORKTREE_DIR: "/repo",
+          PI_SESSION_ID: "s1",
+          OPENCODE_SESSION_ID: "s1",
+        },
+      )
+      return env.PATH === "/bin" && env.HOME === "/home/tester" && env.SAFE_VAR === "ok" && env.GITHUB_TOKEN === undefined && env.PI_SESSION_ID === "s1"
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(env) }
+    },
+  },
+  {
+    name: "env allowlist excludes PATH and HOME unless explicitly listed",
+    run: async () => {
+      const env = buildBashEnvironment(
+        { PI_YAML_HOOKS_ENV_ALLOWLIST: "SAFE_VAR", PATH: "/bin", HOME: "/home/tester", SAFE_VAR: "ok" },
+        {
+          PI_PROJECT_DIR: "/repo",
+          OPENCODE_PROJECT_DIR: "/repo",
+          PI_WORKTREE_DIR: "/repo",
+          OPENCODE_WORKTREE_DIR: "/repo",
+          PI_SESSION_ID: "s1",
+          OPENCODE_SESSION_ID: "s1",
+        },
+      )
+      return env.PATH === undefined && env.HOME === undefined && env.SAFE_VAR === "ok" && env.PI_PROJECT_DIR === "/repo"
+        ? { ok: true }
+        : { ok: false, detail: JSON.stringify(env) }
     },
   },
   {

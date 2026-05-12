@@ -37,6 +37,16 @@ const TRUNCATION_MARKER = "\n…[pi-yaml-hooks: output truncated]"
 // multi-MB content body) would otherwise be buffered into the child's stdin
 // in one shot. Override via PI_YAML_HOOKS_MAX_STDIN_BYTES.
 const MAX_STDIN_BYTES = parseMaxOutputBytes(process.env.PI_YAML_HOOKS_MAX_STDIN_BYTES) ?? 262_144
+const REQUIRED_CONTEXT_ENV_KEYS = new Set([
+  "PI_PROJECT_DIR",
+  "OPENCODE_PROJECT_DIR",
+  "PI_WORKTREE_DIR",
+  "OPENCODE_WORKTREE_DIR",
+  "PI_SESSION_ID",
+  "OPENCODE_SESSION_ID",
+  "PI_GIT_COMMON_DIR",
+  "OPENCODE_GIT_COMMON_DIR",
+])
 
 // P3-8: executionContextCache TTL. Without invalidation, a worktree replaced
 // in-place under the same path would keep returning the stale gitCommonDir
@@ -253,23 +263,13 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
 
   return new Promise((resolve) => {
     // Inject both PI_* (canonical) and OPENCODE_* (legacy alias) env vars so that
-    // bash actions migrated from OpenCode — including the Python snapshot-hook.py
-    // worker which reads OPENCODE_PROJECT_DIR — keep working unchanged.
-    //
-    // ENV INHERITANCE NOTE (P2-17):
-    //   We intentionally pass `...process.env` unfiltered to the bash process.
-    //   That means hooks see the full host environment, including credential-
-    //   bearing variables like AWS_*, NPM_TOKEN, ANTHROPIC_API_KEY, GITHUB_TOKEN,
-    //   SSH_AUTH_SOCK, etc. Operators should treat any project whose hooks they
-    //   trust (`/hooks-trust`) as having read-access to those secrets. The
-    //   user-facing surface for this caveat lives in:
-    //     - docs/hooks-reference.md (bash environment section)
-    //     - the user_bash one-time warning emitted by registerUserBashInterception
-    //   Filtering is intentionally NOT done here: many migrated OpenCode hooks
-    //   need PATH, HOME, and language-specific credentials to function. A
-    //   future opt-in `PI_YAML_HOOKS_ENV_ALLOWLIST` may invert that default.
-    const env = {
-      ...process.env,
+    // bash actions migrated from OpenCode keep working. By default we preserve
+    // historical compatibility and inherit the host environment. Operators can
+    // opt in to a stricter inherited-env allowlist with
+    // PI_YAML_HOOKS_ENV_ALLOWLIST=NAME,NAME. In allowlist mode, PATH/HOME and
+    // credential vars are inherited only when named explicitly; PI/OPENCODE
+    // runtime context vars are always injected below.
+    const contextEnv = {
       PI_PROJECT_DIR: request.projectDir,
       OPENCODE_PROJECT_DIR: request.projectDir,
       PI_WORKTREE_DIR: executionContext.worktreeDir,
@@ -283,6 +283,7 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
           }
         : {}),
     }
+    const env = buildBashEnvironment(process.env, contextEnv)
 
     const child = spawn(BASH_EXECUTABLE, ["-c", request.command], {
       cwd: request.context.cwd,
@@ -379,6 +380,36 @@ async function executeBashProcess(request: BashExecutionRequest): Promise<BashPr
       })
     })
   })
+}
+
+export function buildBashEnvironment(
+  inheritedEnv: NodeJS.ProcessEnv,
+  contextEnv: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const allowlist = parseEnvAllowlist(inheritedEnv.PI_YAML_HOOKS_ENV_ALLOWLIST)
+  if (!allowlist) {
+    return { ...inheritedEnv, ...contextEnv }
+  }
+
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of allowlist) {
+    if (REQUIRED_CONTEXT_ENV_KEYS.has(key)) continue
+    const value = inheritedEnv[key]
+    if (value !== undefined) {
+      env[key] = value
+    }
+  }
+  return { ...env, ...contextEnv }
+}
+
+function parseEnvAllowlist(raw: string | undefined): Set<string> | undefined {
+  if (raw === undefined) return undefined
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry)),
+  )
 }
 
 function appendStderrLine(buffer: CappedOutputBuffer, message: string): void {

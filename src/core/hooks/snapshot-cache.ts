@@ -44,6 +44,7 @@ export interface HookSourceSummary {
 export interface HookDiscoveryResult {
   readonly hooks: HookMap
   readonly errors: HookValidationError[]
+  readonly advisories: string[]
   readonly files: string[]
   readonly sources: HookSourceSummary[]
 }
@@ -183,6 +184,7 @@ function loadDiscoveredHooksFromSnapshots(
 ): HookDiscoveryResult {
   const hooks = new Map<HookConfig["event"], HookConfig[]>()
   const errors: HookValidationError[] = []
+  const advisories: string[] = []
   const sources: HookSourceSummary[] = []
   const files: string[] = []
   const loadedFiles = new Set<string>()
@@ -205,6 +207,7 @@ function loadDiscoveredHooksFromSnapshots(
       mergeHookMapsInto(hooks, result.hooks)
       errors.push(...resolved.errors)
       errors.push(...result.errors)
+      advisories.push(...(result.advisories ?? []))
       sources.push({
         scope: entry.scope,
         filePath: entry.filePath,
@@ -215,7 +218,7 @@ function loadDiscoveredHooksFromSnapshots(
 
   errors.push(...validateAsyncQueueConfigs(hooks))
 
-  return { hooks, errors: dedupeValidationErrors(errors), files, sources }
+  return { hooks, errors: dedupeValidationErrors(errors), advisories, files, sources }
 }
 
 function snapshotDiscoveredHookFiles(
@@ -248,6 +251,7 @@ function loadSnapshotHooksFile(
             hooks: new Map(),
             overrides: [],
             errors: cached.errors,
+            advisories: [],
             files: [snapshot.filePath],
           }
         }
@@ -261,6 +265,7 @@ function loadSnapshotHooksFile(
     hooks: new Map(),
     overrides: [],
     errors: [{ code: "invalid_frontmatter", filePath: snapshot.filePath, message: snapshot.readError }],
+    advisories: [],
     files: [snapshot.filePath],
   }
 }

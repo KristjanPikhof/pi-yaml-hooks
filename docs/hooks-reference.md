@@ -2,6 +2,20 @@
 
 This document describes the current `pi-yaml-hooks` behavior as implemented in this repository.
 
+## Contents
+
+- [Hook file shape](#hook-file-shape)
+- [`/hooks` command autocomplete](#hooks-command-autocomplete)
+- [Optional `user_bash` interception](#optional-user_bash-interception)
+- [`imports`](#imports)
+- [Hook fields](#hook-fields)
+- [Path conditions](#path-conditions)
+- [Actions](#actions)
+- [Bash environment variables](#bash-environment-variables)
+- [PI compatibility smoke-check checklist](#pi-compatibility-smoke-check-checklist)
+- [Unsupported and advisory cases](#unsupported-and-advisory-cases)
+- [Debug logging](#debug-logging)
+
 ## Hook file shape
 
 A hook file must parse to an object with a top-level `hooks:` array. It may also define an optional top-level `imports:` array.
@@ -80,7 +94,7 @@ Trust on PI is anchored at the repo or worktree anchor, not at every imported fi
 2. Bare-specifier imports that resolve through `node_modules` are gated behind `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, so an arbitrary npm dependency cannot register hooks just by being installed.
 3. Project imports cannot escape the project's trust anchor (its repo or worktree anchor, or the discovered project root). The check follows symlinks, so a link that lives inside the project but points outside is still refused. Set `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` to opt in.
 
-All three gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set.
+All three gates fail closed with a `[PIYAMLHOOKS]` error message so operators see exactly which import was refused and which env var to set. When an import bypass env var is enabled, `pi-yaml-hooks` emits a one-time warning naming the affected trust boundary.
 
 ## Load order and precedence
 
@@ -510,6 +524,10 @@ These environment variables are injected into every `bash` hook:
 | `PI_GIT_COMMON_DIR` | `OPENCODE_GIT_COMMON_DIR` | Git common dir for worktrees when resolvable |
 
 The process working directory is the current project directory.
+
+By default, bash hooks inherit the full PI process environment for backwards compatibility. Set `PI_YAML_HOOKS_ENV_ALLOWLIST` to a comma-separated list to opt into filtered inheritance. In allowlist mode, only named inherited variables are passed; `PATH` and `HOME` are not special and must be listed explicitly if a hook needs them. The PI/OPENCODE context variables above are always injected.
+
+Async hook lanes are bounded: each lane keeps at most `PI_YAML_HOOKS_ASYNC_MAX_PENDING` pending runs (default `1000`) and drops additional queued runs with a warning. Set `PI_YAML_HOOKS_ASYNC_WATCHDOG_MS` to a positive millisecond value to release a lane if an async run never settles.
 
 ## PI compatibility smoke-check checklist
 

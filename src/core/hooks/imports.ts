@@ -2,6 +2,7 @@ import { readdirSync, realpathSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 
+import { getPiHooksLogger } from "../logger.js"
 import type { HookValidationError } from "../types.js"
 import type { HookConfigSourceScope, ProjectHookResolution } from "../config-paths.js"
 import {
@@ -178,6 +179,20 @@ export function getOrParseEnvelope(
   return envelope
 }
 
+const warnedImportBypasses = new Set<string>()
+
+function warnImportBypassOnce(env: string, boundary: string, details: Record<string, unknown>): void {
+  const key = `${env}:${boundary}`
+  if (warnedImportBypasses.has(key)) return
+  warnedImportBypasses.add(key)
+  const message = `[pi-yaml-hooks] ${env}=1 bypasses ${boundary}. Imported hooks may execute bash with the importing hook's trust.`
+  // eslint-disable-next-line no-console
+  console.warn(message)
+  getPiHooksLogger().warn("import_trust_bypass", "Hook import trust bypass enabled by environment.", {
+    details: { env, boundary, ...details },
+  })
+}
+
 // Trust-anchor containment helper. Returns a HookValidationError if the
 // resolved import target falls outside the project trust anchor (and the
 // override env is not set); returns undefined if the import is allowed.
@@ -188,6 +203,11 @@ function checkProjectImportContainment(
   specifier: string,
 ): HookValidationError | undefined {
   if (process.env.PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR === "1") {
+    warnImportBypassOnce("PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR", "project import trust anchor", {
+      importerPath,
+      resolvedTargetPath,
+      specifier,
+    })
     return undefined
   }
   const anchor = projectResolution?.canonicalAnchorDir
@@ -226,7 +246,11 @@ function isPathInsideAnchor(target: string, anchor: string): boolean {
 // stray import there is effectively an unsanctioned escalation. Operators who
 // rely on global imports must opt in explicitly.
 function isGlobalImportsAllowed(): boolean {
-  return process.env.PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS === "1"
+  const allowed = process.env.PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS === "1"
+  if (allowed) {
+    warnImportBypassOnce("PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS", "global hooks import boundary", {})
+  }
+  return allowed
 }
 
 // Trust gate: package-specifier (bare) imports resolve through Node's module
@@ -234,7 +258,11 @@ function isGlobalImportsAllowed(): boolean {
 // dependency. That is too much implicit trust for default discovery, so we
 // require an explicit opt-in.
 function isPackageImportsAllowed(): boolean {
-  return process.env.PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS === "1"
+  const allowed = process.env.PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS === "1"
+  if (allowed) {
+    warnImportBypassOnce("PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS", "package import boundary", {})
+  }
+  return allowed
 }
 
 function isBareSpecifier(specifier: string): boolean {

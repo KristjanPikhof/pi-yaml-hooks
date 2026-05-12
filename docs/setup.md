@@ -232,8 +232,8 @@ Once the extension is loaded, PI exposes these helper commands:
 - `/hooks-status`: inspect the active hook summary, paths, trust state, and log file
 - `/hooks-validate`: validate active hooks and explain whether the project file is valid but untrusted
 - `/hooks-trust`: trust the current project without manually editing `trusted-projects.json`
-- `/hooks-reload`: reload extensions and command surfaces on demand
-- `/hooks-tail-log`: show the log file path and a ready-made tail command; pass `--follow` to spawn the bundled tail script as a detached live tail, or `--path` to print only the log file path
+- `/hooks-reload`: asks PI to reload extensions; edited hooks also refresh lazily on the next relevant event, while in-flight hooks finish under the previous config
+- `/hooks-tail-log`: show the log file path and a ready-made tail command; pass `--follow` to start a detached live tail, or `--path` to print only the log file path
 
 ## Environment variables
 
@@ -247,6 +247,9 @@ This is the canonical environment-variable reference for `pi-yaml-hooks`. Other 
 | `PI_YAML_HOOKS_BASH_EXECUTABLE` | Override the bash executable path |
 | `PI_YAML_HOOKS_MAX_OUTPUT_BYTES` | Per-stream stdout/stderr capture cap. Default `1048576` (1 MiB). |
 | `PI_YAML_HOOKS_MAX_STDIN_BYTES` | Stdin payload cap to bash hooks. Default `262144` (256 KiB). |
+| `PI_YAML_HOOKS_ENV_ALLOWLIST` | Optional comma-separated inherited-env allowlist for bash hooks. When set, only listed inherited variables (for example `PATH,HOME,NPM_TOKEN`) are passed, plus required PI/OPENCODE context variables. |
+| `PI_YAML_HOOKS_ASYNC_MAX_PENDING` | Per-lane async hook pending cap. Default `1000`; extra queued runs are dropped with a warning. |
+| `PI_YAML_HOOKS_ASYNC_WATCHDOG_MS` | Optional per-run async hook watchdog. When set to a positive integer, a never-settling run releases its lane after this many milliseconds and logs a warning. |
 | `PI_YAML_HOOKS_CONFIRM_AUTO_APPROVE` | `=1` auto-accepts `confirm:` instead of denying in headless mode (testing only) |
 | `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS` | `=1` allows top-level `imports:` in the global root config |
 | `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS` | `=1` allows bare-specifier imports resolved through `node_modules` |

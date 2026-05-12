@@ -1,3 +1,4 @@
+# Example commands use repo-relative paths; copy this pack into your repo root or adjust paths.
 hooks:
   - id: guard-risky-bash
     event: tool.before.bash

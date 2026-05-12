@@ -101,11 +101,27 @@ export function discoverHookConfigPaths(options: HookConfigDiscoveryOptions = {}
   return discoverHookConfigEntries(options).map((entry) => entry.filePath)
 }
 
-const warnedUntrustedProjects = new Set<string>()
+const MAX_WARNED_UNTRUSTED_PROJECTS = 128
+const warnedUntrustedProjects = new Map<string, true>()
+const warnedTrustBypasses = new Set<string>()
+
+function rememberWarnedUntrustedProject(projectDir: string): boolean {
+  if (warnedUntrustedProjects.has(projectDir)) {
+    warnedUntrustedProjects.delete(projectDir)
+    warnedUntrustedProjects.set(projectDir, true)
+    return false
+  }
+  warnedUntrustedProjects.set(projectDir, true)
+  while (warnedUntrustedProjects.size > MAX_WARNED_UNTRUSTED_PROJECTS) {
+    const oldest = warnedUntrustedProjects.keys().next().value
+    if (oldest === undefined) break
+    warnedUntrustedProjects.delete(oldest)
+  }
+  return true
+}
 
 function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
-  if (warnedUntrustedProjects.has(projectDir)) return
-  warnedUntrustedProjects.add(projectDir)
+  if (!rememberWarnedUntrustedProject(projectDir)) return
   const message =
     `[pi-yaml-hooks] Skipping untrusted project hooks at ${candidate}.\n` +
     `         To trust this project, either:\n` +
@@ -116,6 +132,21 @@ function warnUntrustedProjectOnce(projectDir: string, candidate: string): void {
   getPiHooksLogger().warn("project_untrusted", "Skipping untrusted project hooks.", {
     cwd: projectDir,
     details: { projectDir, candidate },
+  })
+}
+
+function warnTrustBypassOnce(projectDir: string): void {
+  const key = `PI_YAML_HOOKS_TRUST_PROJECT:${projectDir}`
+  if (warnedTrustBypasses.has(key)) return
+  warnedTrustBypasses.add(key)
+  const message =
+    `[pi-yaml-hooks] PI_YAML_HOOKS_TRUST_PROJECT=1 is temporarily bypassing project hook trust for ${projectDir}. ` +
+    `Trusted project hooks can execute bash and inspect hook context for this session.`
+  // eslint-disable-next-line no-console
+  console.warn(message)
+  getPiHooksLogger().warn("project_trust_bypass", "Project hook trust bypass enabled by environment.", {
+    cwd: projectDir,
+    details: { projectDir, env: "PI_YAML_HOOKS_TRUST_PROJECT" },
   })
 }
 
@@ -183,7 +214,10 @@ function isProjectTrusted(
   realpath: (filePath: string) => string,
   exists: (filePath: string) => boolean,
 ): boolean {
-  if (process.env.PI_YAML_HOOKS_TRUST_PROJECT === "1") return true
+  if (process.env.PI_YAML_HOOKS_TRUST_PROJECT === "1") {
+    warnTrustBypassOnce(canonicalAnchorDir)
+    return true
+  }
   const trustFile = path.join(homeDir, ".pi", "agent", "trusted-projects.json")
   // Honour the injected `exists` so tests with virtual filesystems remain
   // deterministic — `existsSync` would leak through to the host filesystem.
@@ -205,7 +239,7 @@ function isProjectTrusted(
       } else {
         canonicalEntries = new Set(
           parsed
-            .filter((entry): entry is string => typeof entry === "string")
+            .filter((entry): entry is string => typeof entry === "string" && path.isAbsolute(entry))
             .map((entry) => canonicalizePath(entry, realpath)),
         )
       }

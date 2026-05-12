@@ -135,8 +135,8 @@ When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configu
 | `/hooks-status` | Active hooks, config paths, trust state, and log path |
 | `/hooks-validate` | Validation results for active hooks and skipped untrusted project hooks |
 | `/hooks-trust` | Adds the current repo/worktree anchor to `~/.pi/agent/trusted-projects.json` |
-| `/hooks-reload` | Reloads the extension and command surface |
-| `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command; `--follow` spawns the bundled tail script detached, and `--path` prints only the path |
+| `/hooks-reload` | Asks PI to reload extensions; edited hooks also refresh lazily on the next relevant event |
+| `/hooks-tail-log` | Log path plus a ready-to-run `tail -F` command; `--follow` starts a detached live tail, and `--path` prints only the path |
 
 `/hooks-status`, `/hooks-validate`, and hook-load validation errors also emit structured in-session diagnostics when PI supports custom messages.
 
@@ -163,7 +163,7 @@ When `PI_YAML_HOOKS_ENABLE_USER_BASH=1` is set, every human `!` / `!!` shell com
 - **Blocking**: a `tool.before.bash` hook that exits with code `2` will prevent the command from running. A misconfigured or malicious hook can silently block commands.
 - **Exfiltration risk**: the same bash hook can forward `tool_args.command` to an external service. Only enable `PI_YAML_HOOKS_ENABLE_USER_BASH=1` if you trust every hook in every trusted project.
 
-`pi-yaml-hooks` emits a one-time stderr warning on startup listing which trusted projects will have access when this env var is set. The warning fires once per process and names the projects currently in `~/.pi/agent/trusted-projects.json`.
+`pi-yaml-hooks` emits a one-time stderr warning on startup listing which trusted projects will have access when this env var is set, and shows a PI UI warning on the first intercepted command when a UI is available. The warning fires once per process and names the projects currently in `~/.pi/agent/trusted-projects.json`.
 
 This mode is disabled by default. Agent-generated `bash` tool calls are always intercepted regardless of this setting.
 
@@ -179,7 +179,7 @@ Project root config paths:
 1. `<project>/.pi/hook/hooks.yaml`
 2. `<project>/.pi/hooks.yaml`
 
-Project hooks are gated by trust because they can run arbitrary `bash` with your user permissions. Trust is evaluated against the repo or worktree anchor, not an arbitrary nested directory string.
+Project hooks are gated by trust because they can run arbitrary `bash` with your user permissions. Trust is evaluated against the repo or worktree anchor, not an arbitrary nested directory string. `trusted-projects.json` entries must be absolute paths; relative entries such as `.` are ignored.
 
 Two ways to trust a project:
 
