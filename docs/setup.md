@@ -144,7 +144,7 @@ Checked in this order:
 
 Within each scope, the first existing path wins.
 
-Each discovered root file may also declare top-level imports:
+A root file may declare top-level imports when the relevant gate allows it:
 
 ```yaml
 imports:
@@ -159,9 +159,13 @@ hooks:
 
 Import rules:
 
+- project-root imports require the repo or worktree trust anchor to be trusted
+- global-root imports require `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1`
+- package imports require `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`
+- project imports outside the trust anchor require `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1`
 - imports load before the importing file's own hooks
 - relative imports resolve from the importing file
-- non-relative imports resolve through Node module resolution
+- non-relative imports resolve through Node module resolution when package imports are enabled
 - directory imports expand files in stable lexical order
 - repeated imports are deduped by canonical path
 - import cycles and missing imports are load errors
@@ -202,12 +206,15 @@ For nested packages, monorepos, and linked worktrees, `pi-yaml-hooks` resolves t
 
 The load order is:
 
-1. global root file imports, then global root hooks
+1. enabled global root file imports, then global root hooks
 2. trusted project root file imports, then project root hooks
 
 That means:
 
-- both roots and their imports can contribute active hooks
+- roots and enabled imports can contribute active hooks
+- global-root imports are skipped unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set
+- package imports are skipped unless `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1` is set
+- project imports outside the trust anchor are skipped unless `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` is set
 - the project root does not automatically replace the global root
 - replacement only happens when the later file uses `override:` against a hook `id`
 

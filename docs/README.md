@@ -23,7 +23,7 @@ Hook bash, follow-up prompts, and PI UI actions onto tool calls and session even
 - Filter hooks by file extension or glob patterns, including post-tool mutation hooks with changed paths
 - Restrict hooks to `all`, `main`, or `child` sessions
 - Queue selected hooks asynchronously so they do not block the agent turn
-- Layer one global root hook file and one trusted project root hook file, each of which can import more hook files, with id-based replacement or disable behavior
+- Layer one global root hook file and one trusted project root hook file, with gated imports and id-based replacement or disable behavior
 
 ## Important PI-specific realities
 
@@ -31,7 +31,7 @@ These are the details that matter most when authoring hooks:
 
 - The documented support range is `@earendil-works/pi-coding-agent ^0.74.0`.
 - Only one global root config and one project root config are discovered.
-- Each root can import more hook files before its own hooks load.
+- Project-root imports require project trust. Global-root imports require `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1`; package imports require `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`.
 - Later files stay compatible with the same explicit `override:` / `disable:` behavior by `id`.
 - Project hook files are ignored until the repo or worktree trust anchor is trusted.
 - `command:` actions are rejected at load time on PI.

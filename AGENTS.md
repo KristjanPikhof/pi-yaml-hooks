@@ -55,9 +55,11 @@ Examples-only (not product): `examples/atomic-commit-snapshot-worker/`, `/snapsh
 
 ## Config + trust
 
-- One global root + one project root; each may `imports:` more
+- One global root + one project root
 - Project discovery repo/worktree-aware, not exact-cwd
-- Trust against repo/worktree anchor; project hooks ignored until trusted
+- Trust against repo/worktree anchor; project hooks and project-root imports ignored until trusted
+- Global-root imports require `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1`
+- Package imports require `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`
 - Project imports must canonicalize inside anchor; bypass via `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1`
 - Shortcuts: `/hooks-trust` or `PI_YAML_HOOKS_TRUST_PROJECT=1`
 

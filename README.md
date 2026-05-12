@@ -9,7 +9,7 @@ This repo is the PI port of [OpenCode-Hooks](https://github.com/KristjanPikhof/O
 - Run hooks on `tool.before.*`, `tool.after.*`, `file.changed`, `session.created`, `session.idle`, and `session.deleted`
 - Use `bash`, `tool`, `notify`, `confirm`, and `setStatus` actions
 - Filter hooks with `matchesCodeFiles`, `matchesAnyPath`, and `matchesAllPaths`
-- Load one global root config and one trusted project root config, each with top-level `imports:`
+- Load one global root config and one trusted project root config; imports are gated by trust and opt-in env vars
 - Show built-in diagnostics with `/hooks-status`, `/hooks-validate`, `/hooks-trust`, `/hooks-reload`, and `/hooks-tail-log`
 - Emit structured in-session diagnostics when PI supports custom messages
 - Inject a short hook-awareness note before agent start (disable with `PI_YAML_HOOKS_PROMPT_AWARENESS=0`)
@@ -101,7 +101,7 @@ Do not widen support until both the future matrix and the runtime smoke pass, in
 
 ## How it works
 
-`pi-yaml-hooks` discovers at most one global root config and one project root config. Each root file can import more hook files with top-level `imports:`. The project root is repo/worktree-aware, not exact-cwd-only, and project hooks load only when that repo or worktree anchor is trusted.
+`pi-yaml-hooks` discovers at most one global root config and one project root config. Project hooks and project-root imports load only when the repo or worktree anchor is trusted. Global-root imports require `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1`, package imports require `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1`, and project imports outside the trust anchor require `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1`. The project root is repo/worktree-aware, not exact-cwd-only.
 
 When an event matches, `pi-yaml-hooks` evaluates conditions and runs the configured actions. `bash` actions receive hook context JSON on stdin plus injected `PI_*` environment variables such as `PI_PROJECT_DIR`, `PI_WORKTREE_DIR`, `PI_SESSION_ID`, and `PI_GIT_COMMON_DIR`. At agent start, the extension also appends a short hook-awareness note to the system prompt so PI has the current hook and trust context while it works.
 
