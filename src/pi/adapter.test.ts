@@ -646,7 +646,9 @@ const cases: Case[] = [
           const first = await harness.userBash("echo one")
           const second = await harness.userBash("echo two")
 
-          return first === undefined && second === undefined && harness.notifications.length === 2
+          const hookNotifications = harness.notifications.filter((message) => message === "checking user bash")
+          const uiWarning = harness.notifications.some((message) => message.includes("PI_YAML_HOOKS_ENABLE_USER_BASH=1"))
+          return first === undefined && second === undefined && hookNotifications.length === 2 && uiWarning
             ? { ok: true }
             : {
                 ok: false,
