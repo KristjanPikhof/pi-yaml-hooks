@@ -53,7 +53,11 @@
     "examples/pre-tool-developer-guards",
     "examples/README.md",
     "scripts/tail-hook-log.sh",
-    "README.md"
+    "README.md",
+    "!**/*.test.ts",
+    "!**/*.test.js",
+    "!**/*.test.d.ts",
+    "!**/*.tsbuildinfo"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
