@@ -46,6 +46,8 @@
   ],
   "files": [
     "dist",
+    "src",
+    "extensions",
     "docs",
     "examples/post-tool-developer-feedback",
     "examples/pre-tool-developer-guards",
