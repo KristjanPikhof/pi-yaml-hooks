@@ -108,6 +108,19 @@ export function createRuntimeRegistry(pi: ExtensionAPI): RuntimeRegistry {
         latestContexts.get(cwd)?.sessionManager;
       const host = createHostAdapter(pi, cwd, getLiveSessionManager, () => latestContexts.get(cwd));
       const loaded = loadDiscoveredHooksSnapshot({ projectDir: cwd });
+      if (loaded.advisories.length > 0) {
+        sendHookDiagnostics(pi, {
+          title: "Hook loader advisories",
+          level: "info",
+          content: `Hook loading found ${loaded.advisories.length} advisory note(s). Hooks still loaded.`,
+          sections: [
+            {
+              label: "Advisories",
+              lines: loaded.advisories,
+            },
+          ],
+        });
+      }
       if (loaded.errors.length > 0) {
         // eslint-disable-next-line no-console
         console.error(
@@ -140,6 +153,9 @@ export function createRuntimeRegistry(pi: ExtensionAPI): RuntimeRegistry {
               label: "Validation errors",
               lines: loaded.errors.map((error) => `${error.filePath}${error.path ? `#${error.path}` : ""}: ${error.message}`),
             },
+            ...(loaded.advisories.length > 0
+              ? [{ label: "Advisories", lines: loaded.advisories }]
+              : []),
           ],
         });
       }

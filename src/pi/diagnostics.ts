@@ -19,7 +19,7 @@ export function registerHookDiagnostics(pi: ExtensionAPI): void {
       const details = message.details
       const level = details?.level ?? "info"
       const title = details?.title ?? "pi-yaml-hooks diagnostics"
-      const badgeColor = level === "error" ? "error" : level === "warning" ? "warning" : "success"
+      const badgeColor = level === "error" ? "error" : level === "warning" ? "warning" : "dim"
       const lines = [`${theme.fg(badgeColor, `[${level.toUpperCase()}]`)} ${title}`, String(message.content)]
 
       if (expanded && details?.sections) {
