@@ -270,6 +270,30 @@ const cases: Case[] = [
     },
   },
   {
+    name: "relative trust-list entries do not trust a project",
+    run: () => {
+      const sandbox = createSandbox("relative-trust")
+      const homeDir = path.join(sandbox, "home")
+      const projectDir = path.join(sandbox, "project")
+      try {
+        __resetTrustListCacheForTests()
+        mkdirSync(projectDir, { recursive: true })
+        writePreferredHooks(projectDir)
+        writeTrustedProjects(homeDir, [".", "project"])
+        const resolution = withEnv("PI_YAML_HOOKS_TRUST_PROJECT", undefined, () =>
+          resolveProjectHookResolution({ homeDir, projectDir }),
+        )
+        const paths = discoverHookConfigPaths({ homeDir, projectDir })
+        return resolution?.trusted === false && paths.length === 0
+          ? { ok: true }
+          : { ok: false, detail: JSON.stringify({ resolution, paths }) }
+      } finally {
+        __resetTrustListCacheForTests()
+        cleanup(sandbox)
+      }
+    },
+  },
+  {
     name: "isProjectTrusted honours injected exists for virtual filesystems",
     run: () => {
       const sandbox = createSandbox("trust-exists")
