@@ -1,3 +1,4 @@
+import { enqueueAsyncHook, type AsyncQueueState } from "./runtime/async-queue.js"
 import { loadDiscoveredHooks, parseHooksFile } from "./load-hooks.js"
 import { createHooksRuntime } from "./runtime.js"
 import type { BashExecutionRequest, BashHookResult } from "./bash-types.js"
@@ -379,6 +380,98 @@ const cases: Case[] = [
       return Math.max(...activeCounts, 0) === 2
         ? { ok: true }
         : { ok: false, detail: `activeCounts=${JSON.stringify(activeCounts)}` }
+    },
+  },
+  {
+    name: "blocking bash stderr is redacted before surfacing as block reason",
+    run: async () => {
+      const hooks = parseHooksFile(
+        "/virtual/hooks.yaml",
+        `hooks:
+  - id: blocker
+    event: tool.before.write
+    actions:
+      - bash: "block"
+`,
+      ).hooks as HookMap
+      const runtime = createHooksRuntime(createFakeHost(), {
+        directory: "/repo",
+        hooks,
+        executeBash: async (request: BashExecutionRequest): Promise<BashHookResult> => ({
+          command: request.command,
+          exitCode: 2,
+          stdout: "",
+          stderr: "GITHUB_TOKEN=supersecretvalue",
+          timedOut: false,
+          blocking: true,
+          status: "blocked",
+          durationMs: 0,
+          signal: null,
+        }),
+      })
+      try {
+        await runtime["tool.execute.before"](
+          { tool: "write", sessionID: "s1", callID: "c1" },
+          { args: { path: "/repo/a.txt", content: "x" } },
+        )
+        return { ok: false, detail: "expected block error" }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return message.includes("[REDACTED]") && !message.includes("supersecretvalue")
+          ? { ok: true }
+          : { ok: false, detail: message }
+      }
+    },
+  },
+  {
+    name: "async queue drops new work deterministically at pending cap",
+    run: async () => {
+      const queues = new Map<string, AsyncQueueState>()
+      const warnings: string[] = []
+      let release: (() => void) | undefined
+      const blocker = new Promise<void>((resolve) => { release = resolve })
+      enqueueAsyncHook(queues, { queueKey: "q", concurrency: 1 }, async () => blocker, () => {}, {
+        maxPending: 1,
+        onWarning: (warning) => warnings.push(`${warning.reason}:${warning.limit}`),
+      })
+      enqueueAsyncHook(queues, { queueKey: "q", concurrency: 1 }, async () => {}, () => {}, {
+        maxPending: 1,
+        onWarning: (warning) => warnings.push(`${warning.reason}:${warning.limit}`),
+      })
+      enqueueAsyncHook(queues, { queueKey: "q", concurrency: 1 }, async () => {}, () => {}, {
+        maxPending: 1,
+        onWarning: (warning) => warnings.push(`${warning.reason}:${warning.limit}`),
+      })
+      release?.()
+      await sleep(20)
+      return warnings.length === 1 && warnings[0] === "pending_limit:1"
+        ? { ok: true }
+        : { ok: false, detail: `warnings=${JSON.stringify(warnings)}` }
+    },
+  },
+  {
+    name: "async queue watchdog frees a lane after a never-settling run",
+    run: async () => {
+      const queues = new Map<string, AsyncQueueState>()
+      const order: string[] = []
+      const warnings: string[] = []
+      enqueueAsyncHook(queues, { queueKey: "q", concurrency: 1 }, async () => {
+        order.push("stuck")
+        await new Promise<void>(() => {})
+      }, () => {}, {
+        watchdogMs: 10,
+        onWarning: (warning) => warnings.push(warning.reason),
+      })
+      enqueueAsyncHook(queues, { queueKey: "q", concurrency: 1 }, async () => {
+        order.push("next")
+      }, () => {}, {
+        watchdogMs: 10,
+        onWarning: (warning) => warnings.push(warning.reason),
+      })
+      await sleep(40)
+      return order.join(",") === "stuck,next" && warnings.includes("watchdog_timeout")
+        ? { ok: true }
+        : { ok: false, detail: `order=${JSON.stringify(order)} warnings=${JSON.stringify(warnings)}` }
     },
   },
   {
