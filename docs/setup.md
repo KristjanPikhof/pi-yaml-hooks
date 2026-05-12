@@ -86,7 +86,9 @@ The package exposes:
 - `.` to `./dist/index.js` (default export: the PI extension, plus public type re-exports)
 - `./types` to the public type surface for type-only imports such as `HookConfig`, `HookEvent`, `SessionDeletedReason`, and `BashHookContext`
 - `./extensions` to `./dist/extensions/index.js` (named re-export for the extensions entry-point)
-- `./extensions/pi-yaml-hooks` to `./dist/extensions/pi-yaml-hooks/index.js` (equivalent subpath; matches the `pi.extensions` entry shipped in `package.json`)
+- `./extensions/pi-yaml-hooks` to `./dist/extensions/pi-yaml-hooks/index.js` (equivalent subpath)
+
+The published `pi.extensions` entry points at `./extensions/index.ts`. PI loads it via [jiti](https://github.com/unjs/jiti), so the TypeScript source loads without compilation. The tarball ships both the compiled `dist/` tree (for `import` consumers) and the `extensions/` and `src/` TypeScript sources (for PI's jiti-backed load). Test files (`*.test.ts`) are excluded.
 
 `npm install pi-yaml-hooks` requires Node.js `>= 22.0.0` and the PI SDK peer dependencies in the consuming project.
 
