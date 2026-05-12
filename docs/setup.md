@@ -212,9 +212,9 @@ The load order is:
 That means:
 
 - roots and enabled imports can contribute active hooks
-- global-root imports are skipped unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set
-- package imports are skipped unless `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1` is set
-- project imports outside the trust anchor are skipped unless `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` is set
+- global-root imports are refused with a validation error unless `PI_YAML_HOOKS_ALLOW_GLOBAL_IMPORTS=1` is set
+- package imports are refused with a validation error unless `PI_YAML_HOOKS_ALLOW_PACKAGE_IMPORTS=1` is set
+- project imports outside the trust anchor are refused with a validation error unless `PI_YAML_HOOKS_ALLOW_PROJECT_IMPORTS_OUTSIDE_TRUST_ANCHOR=1` is set
 - the project root does not automatically replace the global root
 - replacement only happens when the later file uses `override:` against a hook `id`
 
