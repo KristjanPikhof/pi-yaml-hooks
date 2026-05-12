@@ -22,7 +22,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/extensions/pi-yaml-hooks/index.js"
+      "./extensions/index.ts"
     ]
   },
   "keywords": [
