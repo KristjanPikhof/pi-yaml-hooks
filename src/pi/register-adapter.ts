@@ -95,7 +95,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
 
   const { getRuntimeFor, rememberContext } = createRuntimeRegistry(pi);
 
-  const callIdsToSessionIds = new Map<string, string>();
+  const callIdsToSessionIds = new Map<string, { sessionId: string; expiresAt: number }>();
 
   registerUserBashInterception(pi, {
     getRuntimeFor,
@@ -113,7 +113,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     if (!sessionId) return;
 
     const runtime = getRuntimeFor(ctx.cwd);
-    callIdsToSessionIds.set(event.toolCallId, sessionId);
+    rememberToolCallSession(callIdsToSessionIds, event.toolCallId, sessionId);
 
     const input = mapToolCallToBeforeInput(event, sessionId);
     const output = mapToolCallToBeforeOutput(event);
@@ -147,7 +147,7 @@ export function registerAdapter(pi: ExtensionAPI): void {
     // when the call straddled a /new|/resume — and even then routing the
     // after-hook to the *new* session is incorrect, but it is at least a
     // session that exists. Live ctx is the fallback, not the primary.
-    const sessionId = callIdsToSessionIds.get(event.toolCallId) ?? safeGetSessionId(ctx.sessionManager);
+    const sessionId = lookupToolCallSession(callIdsToSessionIds, event.toolCallId) ?? safeGetSessionId(ctx.sessionManager);
 
     if (sessionId) {
       try {
@@ -210,7 +210,47 @@ export const __testing__ = {
   touchLruEntry,
   evictLruEntries,
   isStaleSessionBoundError,
+  rememberToolCallSession,
+  lookupToolCallSession,
 };
+
+const TOOL_CALL_SESSION_TTL_MS = 5 * 60_000;
+const TOOL_CALL_SESSION_MAX_ENTRIES = 1_000;
+
+type ToolCallSessionMap = Map<string, { sessionId: string; expiresAt: number }>;
+
+function rememberToolCallSession(
+  entries: ToolCallSessionMap,
+  toolCallId: string,
+  sessionId: string,
+  now: number = Date.now(),
+): void {
+  pruneToolCallSessions(entries, now);
+  entries.set(toolCallId, { sessionId, expiresAt: now + TOOL_CALL_SESSION_TTL_MS });
+  while (entries.size > TOOL_CALL_SESSION_MAX_ENTRIES) {
+    const oldest = entries.keys().next().value
+    if (oldest === undefined) break
+    entries.delete(oldest)
+  }
+}
+
+function lookupToolCallSession(entries: ToolCallSessionMap, toolCallId: string, now: number = Date.now()): string | undefined {
+  const entry = entries.get(toolCallId)
+  if (!entry) return undefined
+  if (entry.expiresAt <= now) {
+    entries.delete(toolCallId)
+    return undefined
+  }
+  return entry.sessionId
+}
+
+function pruneToolCallSessions(entries: ToolCallSessionMap, now: number): void {
+  for (const [id, entry] of entries) {
+    if (entry.expiresAt <= now) {
+      entries.delete(id)
+    }
+  }
+}
 
 export function reportDispatchFailure(
   logger: ReturnType<typeof getPiHooksLogger>,
